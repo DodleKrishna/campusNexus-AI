@@ -137,6 +137,38 @@ specialist agents, verifies, and (where needed) routes through human approval be
 This stack is intentionally lightweight for a hackathon-paced build; nothing here precludes swapping components
 later (e.g., SQLite → Postgres) as long as the frozen agent boundaries and core principle are preserved.
 
+## Database Implementation (Phase 2)
+
+- SQLite via SQLAlchemy 2.x typed ORM (`app/db/`). No Alembic yet -- schema changes recreate the dev DB by
+  re-running `scripts/seed_data.py`, which is an acceptable hackathon-scope tradeoff for now.
+- `app/db/models/` groups ORM models by domain (identity, academic, career, events, services, communication,
+  mission) mirroring the frozen agent boundaries, but these are **persistence** representations -- they
+  intentionally do not duplicate the Phase 1 Pydantic contracts in `app/schemas/`. Cross-boundary agent
+  messages still use those Pydantic models; ORM models are what gets written to disk.
+- Every table enabling a future deterministic rule (attendance, eligibility, SLA) stores raw source values
+  (e.g. `classes_attended`/`classes_conducted`, not a percentage) so the rule computes the answer, never a
+  cached one.
+- Eligibility-style criteria (opportunity allowed departments/years/required skills) are modeled as join
+  tables, not CSV/JSON blobs, so a later rule module can query them directly.
+- **Datetime strategy**: the campus operates on India Standard Time (UTC+5:30) for wall-clock scheduling
+  (seed data authors instants in IST), but every column is stored as UTC via a `UTCDateTime` TypeDecorator
+  (`app/db/base.py`) that rejects naive input and always returns timezone-aware UTC on read. `TimetableSlot`
+  is the one exception: it's a recurring weekly slot (weekday + wall-clock time, no calendar date), so it has
+  no absolute instant to convert.
+- No module-level global engine/session: `app/db/session.py` exposes factory functions
+  (`create_db_engine`, `create_session_factory`, `init_db`) that every caller (seed script, Context Service,
+  tests) invokes explicitly. Tests always point `CAMPUSNEXUS_DB_PATH` at a temp file, so they never touch the
+  dev database.
+- The **Context Service** (`app/services/context.py`) is the only place that writes mission/step/agent-run/
+  tool-call/approval/audit/memory rows. It has no LLM calls, no planning, no agent routing -- pure typed
+  accessor methods, each its own committed transaction. Read-only domain lookups for future specialist agents
+  live in `app/db/repositories/` instead, kept separate from the Context Service's mission-lifecycle rules.
+- `scripts/seed_data.py` is idempotent: every row is inserted via a `get_or_create` keyed on natural/unique
+  fields, so re-running it is a no-op against already-seeded data. It seeds a fictional campus with a stable
+  demo student (`STU-DEMO-001`) and deliberately includes edge-case scenarios (attendance shortage, CGPA/
+  department/skill-gap/expired opportunities, timetable/exam-conflicting events, an at-capacity event, and an
+  SLA-breached case) for later phases' rule and agent logic to exercise.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

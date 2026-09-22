@@ -114,8 +114,22 @@ across a component boundary. Free text is allowed only in the final user-facing 
 
 ## Important Development Commands
 
-Stack is not yet scaffolded. Once scaffolded, this section will list: `uvicorn` run command, `pytest` invocation,
-dependency install command, and Streamlit launch command. Do not assume any of these exist yet.
+FastAPI/`uvicorn` and the Streamlit UI are not yet scaffolded (Phase 2 is database + Context Service only). What
+exists and works today:
+
+```
+# Install dependencies (editable install, plus pytest)
+pip install -e ".[dev]"
+
+# Initialize the dev database and load idempotent seed data
+python scripts/seed_data.py
+
+# Run the test suite
+pytest
+```
+
+The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see
+`.env.example`). The test suite never touches the dev database -- each test gets its own temp SQLite file.
 
 ## Definition of Done
 
