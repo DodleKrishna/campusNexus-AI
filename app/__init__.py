@@ -1,0 +1,1 @@
+"""CampusNexus AI application package."""
