@@ -1,0 +1,178 @@
+[
+  {
+    "id": "attendance-current",
+    "description": "Current attendance requirement resolves to the active (v2) policy version.",
+    "query": "What is the minimum attendance percentage required to sit for exams?",
+    "as_of": "2026-09-22",
+    "filters": {"document_type": "attendance_policy"},
+    "top_k": 5,
+    "expected_document_ids": ["attendance-policy-v2"],
+    "forbidden_document_ids": ["attendance-policy-v1"],
+    "expect_empty": false
+  },
+  {
+    "id": "attendance-historical",
+    "description": "The same query, as_of a date the v1 (70%) policy was active, resolves to v1.",
+    "query": "What is the minimum attendance percentage required to sit for exams?",
+    "as_of": "2024-01-15",
+    "filters": {"document_type": "attendance_policy"},
+    "top_k": 5,
+    "expected_document_ids": ["attendance-policy-v1"],
+    "forbidden_document_ids": ["attendance-policy-v2"],
+    "expect_empty": false
+  },
+  {
+    "id": "attendance-condonation",
+    "description": "Attendance condonation question under the current policy version.",
+    "query": "Can I get attendance condonation if I am below the minimum requirement?",
+    "as_of": "2026-09-22",
+    "filters": {"document_type": "attendance_policy"},
+    "top_k": 5,
+    "expected_document_ids": ["attendance-policy-v2"],
+    "forbidden_document_ids": ["attendance-policy-v1"],
+    "expect_empty": false
+  },
+  {
+    "id": "exam-eligibility",
+    "description": "Exam eligibility/procedure retrieval.",
+    "query": "What are the eligibility requirements to appear for end semester examinations?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": ["exam-regulations"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "placement-eligibility",
+    "description": "Placement eligibility policy retrieval.",
+    "query": "Who is eligible for campus placement and how many offers can a student accept?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": ["placement-policy"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "internship-rules",
+    "description": "Internship rules, including academic-credit/attendance interaction.",
+    "query": "Can I get academic credit for an internship and how does it affect my attendance?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": ["internship-policy"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "event-registration-general",
+    "description": "General (campus-wide) event registration procedure, explicitly scoped away from the CSE circular.",
+    "query": "How do I register for a campus event and what happens if it is full?",
+    "as_of": null,
+    "filters": {"department": "ALL"},
+    "top_k": 5,
+    "expected_document_ids": ["event-policy"],
+    "forbidden_document_ids": ["cse-event-circular-2025"],
+    "expect_empty": false
+  },
+  {
+    "id": "grievance-sla",
+    "description": "Grievance SLA response/resolution time retrieval.",
+    "query": "What is the SLA response and resolution time for an urgent hostel complaint?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": ["grievance-sla-policy"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "hostel-procedure",
+    "description": "Hostel reallocation/maintenance procedure retrieval.",
+    "query": "How do I request a hostel room reallocation or report a maintenance issue?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": ["hostel-policy"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "scholarship-requirement",
+    "description": "Merit scholarship CGPA requirement retrieval.",
+    "query": "What CGPA is required to be eligible for the merit scholarship?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": ["scholarship-policy"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "library-procedure",
+    "description": "Library borrowing/late-fine procedure retrieval.",
+    "query": "How many books can I borrow from the library and what is the fine for a late return?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": ["library-policy"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "no-evidence-unsupported",
+    "description": "A question no policy document supports must return no evidence, never a fabricated citation.",
+    "query": "What is the weather forecast for this weekend's cricket match?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 5,
+    "expected_document_ids": [],
+    "forbidden_document_ids": [],
+    "expect_empty": true
+  },
+  {
+    "id": "visibility-restricted-student",
+    "description": "A student-visible (public) caller must never receive the admin-only internal escalation SOP.",
+    "query": "What is the internal SOP for escalating a breached SLA case?",
+    "as_of": null,
+    "filters": {"visibility": "public"},
+    "top_k": 5,
+    "expected_document_ids": [],
+    "forbidden_document_ids": ["internal-case-escalation-sop"],
+    "expect_empty": false
+  },
+  {
+    "id": "visibility-admin-can-see",
+    "description": "An admin-scoped caller (visibility=admin_only) can retrieve the internal escalation SOP.",
+    "query": "What is the internal SOP for escalating a breached SLA case?",
+    "as_of": null,
+    "filters": {"visibility": "admin_only"},
+    "top_k": 5,
+    "expected_document_ids": ["internal-case-escalation-sop"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "event-registration-cse-circular",
+    "description": "Department-scoped query surfaces the CSE-specific 48-hour circular.",
+    "query": "How many hours in advance must I register for a CSE department technical event?",
+    "as_of": null,
+    "filters": {"department": "CSE"},
+    "top_k": 5,
+    "expected_document_ids": ["cse-event-circular-2025"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  },
+  {
+    "id": "event-registration-conflict-ambiguity",
+    "description": "Department-unscoped query preserves both the general 24h policy and the CSE 48h circular, rather than silently resolving the conflict -- a future Verifier needs both to detect the discrepancy.",
+    "query": "What is the event registration deadline procedure at Meridian University?",
+    "as_of": null,
+    "filters": {},
+    "top_k": 8,
+    "expected_document_ids": ["event-policy", "cse-event-circular-2025"],
+    "forbidden_document_ids": [],
+    "expect_empty": false
+  }
+]

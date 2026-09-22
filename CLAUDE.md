@@ -114,8 +114,8 @@ across a component boundary. Free text is allowed only in the final user-facing 
 
 ## Important Development Commands
 
-FastAPI/`uvicorn` and the Streamlit UI are not yet scaffolded (Phase 2 is database + Context Service only). What
-exists and works today:
+FastAPI/`uvicorn` and the Streamlit UI are not yet scaffolded (Phase 2 is database + Context Service; Phase 3 adds
+Knowledge/RAG retrieval infrastructure only -- no agents, no orchestration yet). What exists and works today:
 
 ```
 # Install dependencies (editable install, plus pytest)
@@ -124,12 +124,22 @@ pip install -e ".[dev]"
 # Initialize the dev database and load idempotent seed data
 python scripts/seed_data.py
 
+# Ingest the policy document corpus (data/policies/) into the Chroma vector store.
+# Idempotent -- safe to re-run any time the corpus changes.
+python scripts/ingest_policies.py
+
 # Run the test suite
 pytest
+
+# Run the deterministic RAG retrieval evaluation (no LLM judge; exits non-zero on failure)
+python eval/run_rag_eval.py
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see
-`.env.example`). The test suite never touches the dev database -- each test gets its own temp SQLite file.
+`.env.example`). The test suite never touches the dev database -- each test gets its own temp SQLite file. The
+same isolation applies to RAG: the dev vector store defaults to `data/chroma` (`CAMPUSNEXUS_VECTOR_STORE_PATH`),
+and the test suite always ingests into its own temp Chroma collection with the offline deterministic embedding
+provider, never the dev store or a network-backed embedding model. See docs/ARCHITECTURE.md for the RAG design.
 
 ## Definition of Done
 

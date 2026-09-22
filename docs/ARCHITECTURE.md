@@ -169,6 +169,55 @@ later (e.g., SQLite → Postgres) as long as the frozen agent boundaries and cor
   department/skill-gap/expired opportunities, timetable/exam-conflicting events, an at-capacity event, and an
   SLA-breached case) for later phases' rule and agent logic to exercise.
 
+## Knowledge/RAG Retrieval Infrastructure (Phase 3)
+
+Phase 3 implements the deterministic retrieval half of the future Knowledge/RAG Agent (component 6) as a plain
+service -- `KnowledgeService` (`app/services/knowledge.py`) -- backed by the `app/rag/` package. It has no LLM
+calls, does not plan missions, does not generate final answers, and never invents a citation: `query -> retrieve
+-> filter -> rank -> return structured Evidence`, and an unsupported query returns an empty list rather than a
+guess. The future Knowledge/RAG Agent wraps this service with LLM query understanding/summarization in a later
+phase; this phase only builds the infrastructure it will call.
+
+**Pipeline**: `app/rag/documents.py` parses each Markdown file under `data/policies/` (YAML front matter +
+`##`-delimited sections) into a `PolicyDocument`. `app/rag/chunking.py` chunks on section boundaries first, only
+falling back to paragraph-boundary splitting when a section exceeds `MAX_CHUNK_CHARS` -- a short coherent
+section is never chopped. `app/rag/embeddings.py` defines a swappable `EmbeddingProvider`: `DeterministicHashEmbedding`
+(offline hashing-trick bag-of-words, no model download, used by the entire test suite and as a safe fallback) and
+`OnnxMiniLMEmbedding` (chromadb's bundled local ONNX all-MiniLM-L6-v2 -- the production/demo default; real
+semantic embeddings, no external API calls after a one-time model download). `app/rag/vector_store.py` wraps a
+single Chroma collection (`PolicyVectorStore`); `upsert_chunks` is keyed on a deterministic `chunk_id`
+(`{document_id}::chunk::{index}`), so re-running ingestion (`app/rag/ingest.py`, `scripts/ingest_policies.py`)
+never duplicates rows -- it replaces existing chunks in place. `app/rag/retriever.py` (`PolicyRetriever`) ranks
+Chroma's semantic hits with a hybrid score (0.7 semantic + 0.3 keyword-overlap, both computed over the same
+stopword-filtered tokenizer), requires at least one shared content word before a hit is scored at all, and drops
+anything under `DEFAULT_MIN_SCORE` -- together this is what makes an off-topic query resolve to *no evidence*
+instead of padding the top-k with noise. `KnowledgeService` is the only place this converts to the Phase 1
+`Evidence` schema; `evidence.snippet` is always the verbatim retrieved chunk text, never a paraphrase.
+
+**Active vs. historical policy**: every chunk carries `policy_version`, `effective_from`, and `effective_to`.
+`RetrievalQuery.as_of` filters to the version whose window covers that date (`effective_from <= as_of <=
+effective_to`, with `effective_to = None` meaning still active); omitting `as_of` disables date filtering
+entirely, and an explicit `document_id` lookup always bypasses it, so a superseded version stays retrievable for
+audit purposes -- nothing is ever deleted. The attendance policy corpus deliberately ships two versions
+(`attendance-policy-v1`, 70% minimum, effective 2023-08-01 to 2025-06-30; `attendance-policy-v2`, 75% minimum,
+effective 2025-07-01 onward) to exercise this.
+
+**Visibility**: every document declares `visibility` (`public` or `admin_only`) and `audience`; callers pass
+their own `visibility`/`audience` explicitly (no auth/RBAC yet -- that's a later phase), and `PolicyRetriever`
+filters before results ever reach `Evidence`. `data/policies/internal_case_escalation_sop.md` is the seeded
+`admin_only` document exercising this.
+
+**Deliberate conflict scenario**: `data/policies/event_policy.md` (general, 24-hour registration window) and
+`data/policies/cse_department_event_circular.md` (CSE-specific, 48-hour window, `department: CSE`) describe the
+same procedure differently. Retrieval does not resolve this -- a department-unscoped query returns both
+documents' evidence side by side, preserving the metadata (`department`, `policy_version`, `source`) a future
+Deterministic Verifier needs to flag it `NEEDS_REVIEW` rather than silently picking one.
+
+**Evaluation**: `eval/rag_scenarios.json` (16 scenarios: per-domain retrieval, current/historical attendance,
+no-evidence, visibility filtering, conflict preservation) is run by `eval/run_rag_eval.py`, a deterministic
+PASS/FAIL checker with no LLM judge, against document-id membership (`expected_document_ids` /
+`forbidden_document_ids` / `expect_empty`).
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

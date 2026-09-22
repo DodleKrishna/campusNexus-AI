@@ -1,9 +1,12 @@
-"""Shared fixtures for the database/context-service/seed-data test suite.
+"""Shared fixtures for the database/context-service/seed-data/RAG test suite.
 
 Every test gets its own throwaway SQLite file under pytest's ``tmp_path`` and
 its own engine/session, and ``CAMPUSNEXUS_DB_PATH`` is monkeypatched to that
 path -- the development database under data/campusnexus.db is never opened by
-the test suite.
+the test suite. The RAG fixtures below are equally isolated: they build a
+throwaway Chroma collection under pytest's session tmp dir using the
+dependency-free DeterministicHashEmbedding, so the test suite never touches
+the dev vector store at data/chroma and never hits the network.
 """
 from __future__ import annotations
 
@@ -49,3 +52,50 @@ def seeded_session(session_factory: sessionmaker[Session]):
         yield s
     finally:
         s.close()
+
+
+# ---------------------------------------------------------------------------
+# RAG fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def policy_dir():
+    from app.rag.config import DEFAULT_POLICY_DIR
+
+    return DEFAULT_POLICY_DIR
+
+
+@pytest.fixture(scope="session")
+def deterministic_embedding_provider():
+    from app.rag.embeddings import DeterministicHashEmbedding
+
+    return DeterministicHashEmbedding()
+
+
+@pytest.fixture(scope="session")
+def rag_vector_store(tmp_path_factory, deterministic_embedding_provider, policy_dir):
+    """A Chroma collection, freshly ingested once per test session, in a temp dir."""
+    from app.rag.ingest import ingest_policy_directory
+    from app.rag.vector_store import PolicyVectorStore
+
+    chroma_dir = tmp_path_factory.mktemp("chroma_test_store")
+    store = PolicyVectorStore(
+        path=chroma_dir, collection_name="test_policies", embedding_provider=deterministic_embedding_provider
+    )
+    ingest_policy_directory(policy_dir, vector_store=store)
+    return store
+
+
+@pytest.fixture(scope="session")
+def rag_retriever(rag_vector_store, deterministic_embedding_provider):
+    from app.rag.retriever import PolicyRetriever
+
+    return PolicyRetriever(vector_store=rag_vector_store, embedding_provider=deterministic_embedding_provider)
+
+
+@pytest.fixture(scope="session")
+def knowledge_service(rag_retriever):
+    from app.services.knowledge import KnowledgeService
+
+    return KnowledgeService(retriever=rag_retriever)
