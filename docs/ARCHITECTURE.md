@@ -277,6 +277,107 @@ regex-parses free text), and constrains response generation to the verified JSON
   `tests/test_policy_threshold.py::test_ambiguous_threshold_needs_review` against synthetic `Evidence`. See
   `eval/run_academic_eval.py`'s module docstring.
 
+## Mission Orchestrator (Phase 5)
+
+Phase 5 builds the Mission Orchestrator (component 1) as an explicit LangGraph state machine (`app/graph/`)
+that turns a free-form student goal into a validated, dependency-aware `MissionPlan` (Phase 1 schema, unused
+until now) and executes it against a registry of specialist agents -- today, only the Academic Agent
+(component 2), integrated with **zero changes** to its Phase 4 implementation.
+
+**LangGraph state** (`app/graph/state.py`): a plain `TypedDict` (`OrchestratorState`), not LangGraph's
+`Annotated`-reducer machinery -- every node returns the *full* new value for whichever keys it updates (built
+from the current state), which keeps each node's behavior simple to reason about and unit-test in isolation
+from the compiled graph.
+
+**Mission lifecycle / graph shape**: `load_context -> generate_plan -> validate_plan -> schedule_ready_tasks ->
+dispatch_and_collect -> update_mission_state -> (replan | schedule_ready_tasks | finalize)`. Conditional edges
+(plain Python functions returning the next node name) implement: an invalid plan routes straight to
+`finalize(FAILED)`; a task verification of `NEEDS_REVIEW` sets the mission to `NEEDS_APPROVAL` and the run
+ends *paused* -- never auto-approved; a `FAILED` task with replan budget left routes to `replan` (which
+re-invokes the LLM planner and resets only the failed task(s) back to `PENDING`, never silently re-running
+already-`COMPLETED`/`BLOCKED` work) and back through `validate_plan`; budget exhausted routes to
+`finalize(FAILED)`; all tasks terminal (`COMPLETED`/`FAILED`/`SKIPPED`) routes to `finalize(COMPLETED)`;
+otherwise the graph loops back to `schedule_ready_tasks` for the next round (needed whenever a task's
+dependency has only just completed). `TaskStatus`/`MissionStatus`/`VerificationStatus` (all Phase 1, frozen)
+are reused as-is -- no new enum values: `VERIFIED -> COMPLETED`, `NEEDS_REVIEW -> BLOCKED`, `FAILED -> FAILED`.
+
+**Planning** (`app/graph/planner.py`): a thin call-site over the *same* `LLMProvider` abstraction the Academic
+Agent uses (`app/llm/base.py` gained one additive method, `plan_mission`) -- not a second, parallel LLM
+abstraction. `MockLLMProvider.plan_mission` is deterministic: it splits a compound goal on `", and "/", "/"
+and "`, and carries a shared "subject" (a capitalized phrase or acronym mentioned once, e.g. a course name)
+into clauses that omit it, so each resulting task objective is independently resolvable. `AnthropicLLMProvider.plan_mission`
+uses tool-calling against a small index-referenced task schema (dependencies by index, not by
+self-invented string id) and converts it into a real `MissionPlan` with generated task ids.
+
+**DAG validation** (`app/graph/validator.py`): deterministic, no LLM. Checks unique task ids, valid agent
+assignments (against the registry), valid/no-dangling dependency references, no cycles and no unreachable
+tasks (one Kahn's-algorithm pass covers both), a matching mission id, and a minimal objective-quality check.
+Self-dependency is *not* re-checked here -- `MissionTask`'s own Pydantic validator (Phase 1) already makes it
+impossible to construct one, so a second check would be dead code, not defense in depth. An invalid plan is
+never dispatched.
+
+**Agent registry** (`app/graph/registry.py`): maps `AgentName -> Callable[[Session], SpecialistAgent]` --
+factories, not instances. `app/graph/results.py` defines `AgentOutcome`/`SpecialistAgent` as structural
+`typing.Protocol`s (`agent_result`/`verification`/`response_text`; `handle(AgentMessage) -> AgentOutcome`) that
+`AcademicAgent`/`AcademicAgentOutcome` already satisfy without modification. Only `AgentName.ACADEMIC_AGENT` is
+registered in production; Career/Events/Campus Services/Knowledge-RAG/Action are added later by one
+`register()` call each, never by editing orchestration logic. An unregistered assignment raises
+`UnsupportedAgentError` at dispatch (defense in depth -- the validator is the primary gate).
+
+**Task scheduling** (`app/graph/scheduler.py`): pure functions over a `MissionPlan` + the current
+`Dict[task_id, TaskStatus]`, no I/O. `compute_ready_and_blocked` returns every `PENDING` task whose
+dependencies are all `COMPLETED` as "ready" (so independent tasks all become ready together, in one round --
+this is what makes the from-the-real-demo-goal 3-task plan genuinely parallel-eligible, not just a synthetic
+test fixture), and cascades `SKIPPED` to any `PENDING` task with a `FAILED`/`SKIPPED` dependency, repeated to a
+fixed point so the cascade propagates through chains of dependents -- a failed prerequisite can never silently
+let a dependent run. A `BLOCKED` (needs-review) dependency is different: it's a pause, not a failure, so its
+dependents simply wait rather than being skipped. **Dispatch** (`app/graph/dispatcher.py`) then runs every
+ready task *concurrently* via a `ThreadPoolExecutor`, each against its own freshly-opened `Session` (SQLAlchemy's
+`Session` is not thread-safe, so sharing one across concurrent agent calls would be a real bug) -- this is what
+makes "parallel execution" of independent tasks genuinely true rather than nominal.
+
+**Checkpointing vs. persistence** -- the split the spec specifically asks to be documented:
+
+- LangGraph's own checkpointer (`app/graph/checkpoint.py`, `InMemorySaver`, `thread_id = mission_id`) gives the
+  compiled graph *real* LangGraph checkpoint semantics (`get_state`/`update_state`, resuming a paused `invoke`
+  within the same process). It is intentionally **not** the durable source of truth -- it lives in process
+  memory and is lost on restart.
+- The **Context Service** (`app/services/context.py`, SQLAlchemy/SQLite, unchanged Phase 2 tables) remains the
+  single source of truth across process restarts, per its frozen component-10 role. Every orchestrator node
+  writes through it: `Mission`/`MissionStep` status, `AgentRun` (with the agent's free-form `facts` JSON blob
+  additionally carrying a `_response_text` key -- the one piece of per-task data with nowhere else to live in
+  the existing schema, consistent with that column's documented "no fixed relational shape" purpose), and an
+  append-only `AuditLog` (`mission_created`/`mission_resumed`, `plan_generated` -- which snapshots the *entire
+  validated `MissionPlan`* as JSON, since Phase 2 has no dedicated plan table -- `plan_invalid`, `task_verified`,
+  `task_failed`, `task_skipped`, `replan_triggered`, `mission_finalized`).
+- `MissionOrchestrator.resume_mission(mission_id)` reconstructs state **entirely from the Context Service**,
+  never from a prior LangGraph checkpoint: it reads the `Mission` row and its `MissionStep`s (giving
+  `task_status` straight from the already-persisted, already-frozen `TaskStatus` enum), the most recent
+  `plan_generated` audit event (`ContextService.get_latest_plan_snapshot`, additive), and every `AgentRun`
+  (`ContextService.list_agent_runs`, additive) to rebuild best-effort `AgentResult`/`VerificationResult`
+  objects for already-completed tasks. This is what lets a **brand-new** `MissionOrchestrator` instance (a
+  fresh in-memory checkpointer, no shared state with whatever process ran the mission before) resume correctly
+  -- proven in `tests/test_orchestrator_persistence.py` by constructing a genuinely-interrupted mid-DAG state
+  directly via the Context Service and confirming resumption completes the remaining task without re-dispatching
+  the already-completed one or re-invoking the planner. One known limitation: `AgentRun` doesn't persist the
+  original `Evidence` list or the verifier's named checks, so a resumed mission's *pre-interruption* steps show
+  reconstructed (status-only) verification, not the original rich object -- a natural extension for whichever
+  later phase needs it, not required for correct scheduling/resumption behavior.
+
+**Failure handling**: invalid plan / unsupported agent / missing or circular dependency all fail at validation,
+before any task is ever dispatched. An agent-call exception is caught by the dispatcher and turned into that
+task's `FAILED` status rather than crashing the mission run. Verification is never inferred from "the call
+didn't raise" -- the Orchestrator routes purely on `VerificationResult.status`, so a successful-looking
+`AgentResultStatus.SUCCESS` call with a `FAILED` verification still fails the mission
+(`tests/test_orchestrator.py::test_successful_invocation_is_not_treated_as_verified`). Replanning is bounded
+(`max_replans`, default 2) and re-invokes the LLM planner rather than blindly re-running the identical failed
+step; every specialist agent registered in this phase is read-only and deterministic, so retrying the same
+input deterministically fails again -- the bound is exercised honestly with a deterministic always-failing
+**test** agent (`tests/graph_doubles.py`, registered only in tests/eval, never in production) rather than
+faked against the real Academic Agent. Execution states already distinguish `IN_PROGRESS` from `BLOCKED`
+(needs-review, pending future human approval) from `FAILED`, which is deliberate: this is the seam a future
+Approval Gate and Action Agent plug into without another redesign, even though neither exists yet in this phase.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

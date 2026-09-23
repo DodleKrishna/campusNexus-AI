@@ -9,6 +9,15 @@ dependencies = [
     "sqlalchemy>=2.0,<3",
     "chromadb>=0.5,<2",
     "pyyaml>=6.0,<7",
+    "langgraph>=0.2,<2",
+    # Pinned below langgraph's own >=3.5.0 floor: on this dev machine, the
+    # xxhash 3.5+ native DLL (pulled in transitively via langchain-core ->
+    # langsmith) is blocked by a Windows Application Control policy
+    # ("DLL load failed ... blocked"). xxhash 3.4.x provides the same API
+    # langsmith/langgraph actually use, confirmed by a full StateGraph
+    # compile/invoke/checkpoint round-trip. Safe to relax if that policy
+    # isn't present in your environment.
+    "xxhash>=3.0,<3.5",
 ]
 
 [project.optional-dependencies]

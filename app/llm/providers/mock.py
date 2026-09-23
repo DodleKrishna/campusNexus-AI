@@ -24,11 +24,20 @@ from app.schemas.academic import (
     CourseSummary,
     ExamEligibilityStatus,
 )
-from app.schemas.enums import VerificationStatus
+from app.schemas.enums import AgentName, VerificationStatus
+from app.schemas.mission import MissionPlan, MissionTask
 
 _WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _ACRONYM_STOPWORDS = {"of", "and", "the", "for", "in", "to"}
 _COURSE_PHRASE_RE = re.compile(r"(?:in|for)\s+([A-Za-z][A-Za-z0-9 ]{1,40}?)(?:\?|$|,|\s+to\b)")
+
+# Mission-planning heuristics: split a compound goal into independent
+# clauses, and carry forward a shared "subject" (a course name/acronym
+# mentioned once, e.g. "Operating Systems") into clauses that don't repeat
+# it, so each resulting task objective is independently resolvable by
+# whatever specialist agent handles it (see MockLLMProvider.plan_mission).
+_CLAUSE_SPLIT_RE = re.compile(r",\s+and\s+|,\s+|\s+and\s+")
+_SUBJECT_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|[A-Z]{2,6}\d{0,3})\b")
 _EXAM_ELIGIBILITY_KEYWORDS = (
     "eligib",
     "can i write",
@@ -64,6 +73,19 @@ def _extract_course_reference(query: str, enrolled_courses: List[CourseSummary])
     return None
 
 
+def _split_goal_clauses(goal: str) -> List[str]:
+    cleaned = goal.strip()
+    if cleaned.endswith("."):
+        cleaned = cleaned[:-1]
+    parts = [p.strip() for p in _CLAUSE_SPLIT_RE.split(cleaned) if p.strip()]
+    return parts or ([cleaned] if cleaned else [])
+
+
+def _extract_shared_subject(goal: str) -> Optional[str]:
+    match = _SUBJECT_RE.search(goal)
+    return match.group(1) if match else None
+
+
 def _classify(query: str) -> AcademicIntent:
     q = query.lower()
     if "exam" in q and any(keyword in q for keyword in _EXAM_ELIGIBILITY_KEYWORDS):
@@ -85,6 +107,33 @@ class MockLLMProvider(LLMProvider):
     """Deterministic LLM stand-in -- no network, no model, fully reproducible."""
 
     name = "mock"
+
+    def plan_mission(
+        self, mission_id: str, goal: str, *, supported_agents: List[AgentName]
+    ) -> MissionPlan:
+        agent = AgentName.ACADEMIC_AGENT
+        if agent not in supported_agents:
+            agent = supported_agents[0] if supported_agents else AgentName.ACADEMIC_AGENT
+
+        clauses = _split_goal_clauses(goal)
+        subject = _extract_shared_subject(goal)
+
+        tasks: List[MissionTask] = []
+        for index, clause in enumerate(clauses, start=1):
+            objective = clause
+            if subject and subject.lower() not in objective.lower():
+                objective = f"{objective} in {subject}"
+            tasks.append(
+                MissionTask(
+                    task_id=f"{mission_id}-task-{index}",
+                    mission_id=mission_id,
+                    agent=agent,
+                    objective=objective,
+                    dependencies=[],
+                    requires_evidence=True,
+                )
+            )
+        return MissionPlan(mission_id=mission_id, goal=goal, tasks=tasks)
 
     def classify_academic_intent(
         self, query: str, enrolled_courses: List[CourseSummary]

@@ -39,6 +39,7 @@ from app.schemas.enums import (
     ToolExecutionStatus,
     UserRole,
 )
+from app.schemas.mission import MissionPlan
 
 _RESOLVED_APPROVAL_STATUSES = {
     ApprovalStatus.APPROVED,
@@ -335,6 +336,41 @@ class ContextService:
         self._session.commit()
         self._session.refresh(entry)
         return entry
+
+    def list_audit_events(self, mission_id: str) -> List[AuditLog]:
+        """Every audit entry for a mission, in insertion (chronological) order."""
+        stmt = select(AuditLog).where(AuditLog.mission_id == mission_id).order_by(AuditLog.id)
+        return list(self._session.execute(stmt).scalars().all())
+
+    def get_latest_plan_snapshot(self, mission_id: str) -> Optional[MissionPlan]:
+        """The most recently audited MissionPlan for a mission, or None if never planned.
+
+        The plan itself has no dedicated table -- Phase 5's Orchestrator
+        (app/graph/orchestrator.py) snapshots the full validated plan into an
+        audit event (``event_type="plan_generated"``) at planning time, and
+        this reconstructs it from there. This is what makes cross-process
+        mission resumption possible without introducing a second, competing
+        store of truth for the plan alongside the Context Service.
+        """
+        stmt = (
+            select(AuditLog)
+            .where(AuditLog.mission_id == mission_id, AuditLog.event_type == "plan_generated")
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+        entry = self._session.execute(stmt).scalar_one_or_none()
+        if entry is None or "plan" not in entry.event_metadata:
+            return None
+        return MissionPlan.model_validate(entry.event_metadata["plan"])
+
+    # ------------------------------------------------------------------
+    # Agent runs
+    # ------------------------------------------------------------------
+
+    def list_agent_runs(self, mission_id: str) -> List[AgentRun]:
+        """Every recorded agent execution for a mission, in execution order."""
+        stmt = select(AgentRun).where(AgentRun.mission_id == mission_id).order_by(AgentRun.id)
+        return list(self._session.execute(stmt).scalars().all())
 
     # ------------------------------------------------------------------
     # Memory

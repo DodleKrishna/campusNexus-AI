@@ -114,8 +114,7 @@ across a component boundary. Free text is allowed only in the final user-facing 
 
 ## Important Development Commands
 
-FastAPI/`uvicorn` and the Streamlit UI are not yet scaffolded (Phase 2 is database + Context Service; Phase 3 adds
-Knowledge/RAG retrieval infrastructure only -- no agents, no orchestration yet). What exists and works today:
+FastAPI/`uvicorn` and the Streamlit UI are not yet scaffolded. What exists and works today:
 
 ```
 # Install dependencies (editable install, plus pytest)
@@ -141,6 +140,15 @@ python eval/run_academic_eval.py
 # (offline mock LLM by default; add --provider anthropic with ANTHROPIC_API_KEY set for
 # the real LLM, after `pip install -e ".[dev,llm]"`)
 python scripts/demo_academic.py --student STU-DEMO-001 --query "Can I write my OS exam?"
+
+# Run the deterministic Mission Orchestrator evaluation (no live LLM; exits non-zero on failure)
+python eval/orchestration_scenarios.py
+
+# Run the Mission Orchestrator demo end-to-end (LangGraph planning + validation + DAG
+# execution + the real Academic Agent + Context Service persistence). Add --resume
+# <mission_id> to resume a mission from a brand-new process, reading only the Context
+# Service (never the in-memory LangGraph checkpoint -- see docs/ARCHITECTURE.md).
+python scripts/demo_mission.py --student STU-DEMO-001 --goal "Check my Operating Systems attendance, determine whether I currently meet the attendance requirement, and explain how many classes I need to attend to reach the required attendance."
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see
