@@ -218,6 +218,65 @@ no-evidence, visibility filtering, conflict preservation) is run by `eval/run_ra
 PASS/FAIL checker with no LLM judge, against document-id membership (`expected_document_ids` /
 `forbidden_document_ids` / `expect_empty`).
 
+## Academic Agent Vertical Slice (Phase 4)
+
+Phase 4 builds the first complete specialist-agent path end-to-end -- natural-language request -> structured
+intent -> DB facts -> RAG evidence -> deterministic rule -> verified `AgentResult` -> grounded response -- for
+the Academic Agent (component 2) only, against the seeded demo student. No Orchestrator, no LangGraph, no
+other specialist agent, no write tools: those stay deferred to later phases.
+
+**Responsibility split** (the concrete instance of CLAUDE.md's Core Principle for this slice):
+
+- **LLM** (`app/llm/`): classifies the query into an `AcademicIntent`, proposes a raw course-reference
+  substring, and -- only after everything else below has run -- renders the final natural-language response
+  from an already-verified `AcademicResponseContext`. It never computes a percentage, a threshold, or an
+  eligibility decision, and it never asserts a course exists on its own say-so.
+- **Deterministic rules** (`app/rules/`): `attendance.py` computes attendance percentage/eligibility/recovery
+  math from raw `classes_attended`/`classes_conducted` counters using `Decimal` closed-form algebra (no
+  iteration, no float); `policy_threshold.py` extracts the official numeric threshold from retrieved policy
+  `Evidence`; `eligibility.py` derives attendance-only exam eligibility from an `AttendanceCalculation`.
+- **AcademicVerifier** (`app/verification/academic.py`): does not recompute the rules independently (that
+  would just be a second implementation to go stale); it checks that the right inputs were used (student
+  exists, course resolved, evidence present, threshold unambiguous) and re-derives only the core eligibility
+  inequality directly from the raw counters as a genuine internal-consistency check.
+
+**Course resolution** (`app/agents/academic/course_resolution.py`) is entirely deterministic: exact course
+code/title/title-acronym match first, then a substring-on-title match (only for references of 4+ characters,
+to avoid over-matching), and an LLM-proposed reference matching more than one enrolled course's title (e.g.
+"Systems" against both "Operating Systems" and "Database Management Systems") resolves to `AMBIGUOUS`, never a
+guess.
+
+**Threshold extraction** (`app/rules/policy_threshold.py`) is a validated parser tied to the corpus's known
+structure, not an LLM interpreting prose: it looks only inside the `"Minimum Attendance Requirement"` section
+of retrieved `Evidence` and regex-extracts the `NN%` figure, traceable to `document_id`/`policy_version`/
+`section`/`effective_from`. No matching section, or active evidence disagreeing on the number, yields
+`NOT_FOUND`/`AMBIGUOUS` -- the agent then skips the attendance calculation entirely rather than falling back to
+a hardcoded percentage.
+
+**LLM abstraction** (`app/llm/`): `LLMProvider` is a two-method ABC (`classify_academic_intent`,
+`generate_academic_response`) the Academic Agent depends on, never a provider SDK directly. `MockLLMProvider`
+(`providers/mock.py`) is deterministic keyword/regex logic with no network or model -- used by the entire test
+suite, `eval/run_academic_eval.py`, and the demo runner's default mode, per CLAUDE.md's requirement that tests
+never call a live LLM. `AnthropicLLMProvider` (`providers/anthropic_provider.py`) is the one real integration,
+chosen because `.env.example` already reserved `ANTHROPIC_API_KEY`; it lazily imports the `anthropic` package
+(an optional `llm` dependency extra) so nothing else in the app ever requires it installed, uses tool-calling
+with a JSON schema built from `AcademicIntentResult.model_json_schema()` for structured intent output (never
+regex-parses free text), and constrains response generation to the verified JSON context it's given.
+
+**Known gaps, called out rather than hidden:**
+
+- Exam eligibility is attendance-only. `exam_regulations.md` also conditions eligibility on cleared fee dues,
+  but fee data belongs to the (not-yet-built) Campus Services Agent; `ExamEligibilityResult.caveat` says this
+  explicitly rather than the result silently overclaiming full eligibility.
+- Two of the Phase 4 spec's sixteen required test scenarios have no live path through the current seeded data
+  without touching the already-approved Phase 2/3 baseline, so they're unit-test-only instead of live eval
+  scenarios: "exactly at threshold" (no seeded course sits at exactly 75%) is covered by
+  `tests/test_attendance_rule.py::test_exactly_at_threshold_is_eligible`; "conflicting/ambiguous policy
+  evidence" (the seeded attendance corpus's two versions have contiguous, non-overlapping effective windows, so
+  there's no live conflict) is covered by
+  `tests/test_policy_threshold.py::test_ambiguous_threshold_needs_review` against synthetic `Evidence`. See
+  `eval/run_academic_eval.py`'s module docstring.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

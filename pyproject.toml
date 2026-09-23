@@ -15,6 +15,13 @@ dependencies = [
 dev = [
     "pytest>=8.0",
 ]
+# Only required to run the Academic Agent against the real Anthropic API
+# (CAMPUSNEXUS_LLM_PROVIDER=anthropic). The default offline/mock LLM mode --
+# used by the entire test suite, the demo runner, and eval -- never imports
+# this package (see app/llm/providers/anthropic_provider.py's lazy import).
+llm = [
+    "anthropic>=0.40,<1",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -133,6 +133,14 @@ pytest
 
 # Run the deterministic RAG retrieval evaluation (no LLM judge; exits non-zero on failure)
 python eval/run_rag_eval.py
+
+# Run the deterministic Academic Agent evaluation (no live LLM; exits non-zero on failure)
+python eval/run_academic_eval.py
+
+# Run the Academic Agent demo end-to-end against the real seeded DB + real Chroma store
+# (offline mock LLM by default; add --provider anthropic with ANTHROPIC_API_KEY set for
+# the real LLM, after `pip install -e ".[dev,llm]"`)
+python scripts/demo_academic.py --student STU-DEMO-001 --query "Can I write my OS exam?"
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see

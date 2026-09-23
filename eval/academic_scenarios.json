@@ -1,0 +1,164 @@
+[
+  {
+    "id": "attendance-status-full-title",
+    "description": "Attendance status referenced by the course's full title.",
+    "student_id": "STU-DEMO-001",
+    "query": "What's my attendance in Operating Systems?",
+    "expected": {
+      "intent": "attendance_status",
+      "verification_status": "verified",
+      "course_code": "CS301",
+      "eligible_now": false,
+      "current_percentage": "68.0"
+    }
+  },
+  {
+    "id": "attendance-status-acronym",
+    "description": "Same course, referenced by its acronym.",
+    "student_id": "STU-DEMO-001",
+    "query": "What's my attendance in OS?",
+    "expected": {
+      "intent": "attendance_status",
+      "verification_status": "verified",
+      "course_code": "CS301",
+      "eligible_now": false,
+      "current_percentage": "68.0"
+    }
+  },
+  {
+    "id": "attendance-status-course-code",
+    "description": "Same course, referenced by its course code.",
+    "student_id": "STU-DEMO-001",
+    "query": "What's my attendance in CS301?",
+    "expected": {
+      "intent": "attendance_status",
+      "verification_status": "verified",
+      "course_code": "CS301",
+      "eligible_now": false,
+      "current_percentage": "68.0"
+    }
+  },
+  {
+    "id": "exam-eligibility-not-eligible",
+    "description": "Exam eligibility for a course currently below the attendance threshold.",
+    "student_id": "STU-DEMO-001",
+    "query": "Can I write my OS exam?",
+    "expected": {
+      "intent": "exam_eligibility",
+      "verification_status": "verified",
+      "course_code": "CS301",
+      "eligible_now": false
+    }
+  },
+  {
+    "id": "attendance-recovery-current-policy",
+    "description": "Classes needed to reach the currently active (v2, 75%) threshold.",
+    "student_id": "STU-DEMO-001",
+    "query": "How many classes do I need to attend in OS to reach the required attendance?",
+    "expected": {
+      "intent": "attendance_recovery",
+      "verification_status": "verified",
+      "course_code": "CS301",
+      "classes_needed_to_reach_threshold": 14,
+      "threshold_document_id": "attendance-policy-v2"
+    }
+  },
+  {
+    "id": "attendance-status-already-eligible",
+    "description": "A course where the student is already above the attendance threshold.",
+    "student_id": "STU-DEMO-001",
+    "query": "What's my attendance in Database Management Systems?",
+    "expected": {
+      "intent": "attendance_status",
+      "verification_status": "verified",
+      "course_code": "CS302",
+      "eligible_now": true,
+      "current_percentage": "94.0"
+    }
+  },
+  {
+    "id": "attendance-status-unknown-course",
+    "description": "A course name that does not match any enrolled course.",
+    "student_id": "STU-DEMO-001",
+    "query": "What's my attendance in Blockchain?",
+    "expected": {
+      "intent": "attendance_status",
+      "verification_status": "failed"
+    }
+  },
+  {
+    "id": "attendance-status-ambiguous-course",
+    "description": "A course reference that matches more than one enrolled course's title.",
+    "student_id": "STU-DEMO-001",
+    "query": "What's my attendance in Systems?",
+    "expected": {
+      "intent": "attendance_status",
+      "verification_status": "needs_review"
+    }
+  },
+  {
+    "id": "attendance-status-unknown-student",
+    "description": "A student_id that does not exist.",
+    "student_id": "STU-NOPE-999",
+    "query": "What's my attendance in OS?",
+    "expected": {
+      "intent": "attendance_status",
+      "verification_status": "failed"
+    }
+  },
+  {
+    "id": "policy-question-no-evidence",
+    "description": "A policy question with no relevant evidence in the corpus -- must not fabricate an answer.",
+    "student_id": "STU-DEMO-001",
+    "query": "What is the weather forecast for this weekend cricket match policy?",
+    "expected": {
+      "intent": "policy_question",
+      "verification_status": "needs_review",
+      "expect_empty_evidence": true
+    }
+  },
+  {
+    "id": "attendance-recovery-historical-policy",
+    "description": "The same recovery question, but as_of a date the v1 (70%) policy was active.",
+    "student_id": "STU-DEMO-001",
+    "query": "How many classes do I need to attend in OS to reach the required attendance?",
+    "as_of": "2024-06-01",
+    "expected": {
+      "intent": "attendance_recovery",
+      "verification_status": "verified",
+      "course_code": "CS301",
+      "classes_needed_to_reach_threshold": 4,
+      "threshold_document_id": "attendance-policy-v1"
+    }
+  },
+  {
+    "id": "timetable-request",
+    "description": "A full timetable request (no specific course).",
+    "student_id": "STU-DEMO-001",
+    "query": "What is my timetable?",
+    "expected": {
+      "intent": "timetable",
+      "verification_status": "verified"
+    }
+  },
+  {
+    "id": "exam-schedule-request",
+    "description": "A full exam schedule request (no specific course).",
+    "student_id": "STU-DEMO-001",
+    "query": "When are my exams?",
+    "expected": {
+      "intent": "exam_schedule",
+      "verification_status": "verified"
+    }
+  },
+  {
+    "id": "unsupported-request",
+    "description": "A request outside the Academic Agent's supported operations.",
+    "student_id": "STU-DEMO-001",
+    "query": "Can you order me a pizza?",
+    "expected": {
+      "intent": "unknown",
+      "verification_status": "failed"
+    }
+  }
+]
