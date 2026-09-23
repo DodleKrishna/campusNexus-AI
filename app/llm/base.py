@@ -1,17 +1,20 @@
-"""Provider-neutral LLM abstraction, shared by the Academic Agent and the
-Mission Orchestrator (Phase 5 adds ``plan_mission`` to the same interface
-rather than introducing a second, parallel LLM abstraction).
+"""Provider-neutral LLM abstraction, shared by every specialist agent and the
+Mission Orchestrator (Phase 5 added ``plan_mission``; Phase 6 adds one
+classify/respond method pair per new specialist agent, to the same
+interface, rather than introducing a second, parallel LLM abstraction).
 
 No provider is ever called directly by application code (CLAUDE.md: LLMs
 choose *what to do*, never compute official-rule results). All methods are
-structured except the final academic response, which is the one place
+structured except each agent's final response, which is the one place
 CLAUDE.md allows free text:
 
-- ``classify_academic_intent``: structured intent + a proposed (unverified)
-  course reference.
-- ``generate_academic_response``: free-text explanation, but generated only
-  from an already-verified ``AcademicResponseContext`` -- never used for
-  arithmetic, threshold interpretation, or policy truth.
+- ``classify_academic_intent`` / ``classify_career_intent`` /
+  ``classify_events_intent`` / ``classify_services_intent``: structured
+  intent (+ a proposed, unverified course reference for Academic).
+- ``generate_academic_response`` / ``generate_career_response`` /
+  ``generate_events_response`` / ``generate_services_response``: free-text
+  explanation, but generated only from an already-verified response context
+  -- never used for arithmetic, eligibility, conflict, SLA, or policy truth.
 - ``plan_mission``: decomposes a free-form goal into a structured
   ``MissionPlan`` (task decomposition/agent assignment/dependencies only --
   never executes anything itself; the Orchestrator's deterministic validator
@@ -23,8 +26,11 @@ from abc import ABC, abstractmethod
 from typing import List
 
 from app.schemas.academic import AcademicIntentResult, AcademicResponseContext, CourseSummary
+from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
+from app.schemas.events import EventsIntentResult, EventsResponseContext
 from app.schemas.mission import MissionPlan
+from app.schemas.services import ServicesIntentResult, ServicesResponseContext
 
 
 class LLMProvider(ABC):
@@ -66,4 +72,34 @@ class LLMProvider(ABC):
         it (unique task ids, valid agent assignments, a real DAG, etc.)
         before the Orchestrator ever dispatches a task from it.
         """
+        raise NotImplementedError
+
+    @abstractmethod
+    def classify_career_intent(self, query: str) -> CareerIntentResult:
+        """Classify a natural-language career query into a structured intent."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def generate_career_response(self, context: CareerResponseContext) -> str:
+        """Render a final, user-facing explanation from already-verified career facts."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def classify_events_intent(self, query: str) -> EventsIntentResult:
+        """Classify a natural-language events/opportunity query into a structured intent."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def generate_events_response(self, context: EventsResponseContext) -> str:
+        """Render a final, user-facing explanation from already-verified events facts."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def classify_services_intent(self, query: str) -> ServicesIntentResult:
+        """Classify a natural-language campus-services query into a structured intent."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def generate_services_response(self, context: ServicesResponseContext) -> str:
+        """Render a final, user-facing explanation from already-verified campus-services facts."""
         raise NotImplementedError

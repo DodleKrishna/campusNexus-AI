@@ -115,7 +115,7 @@ class AcademicAgent:
                 )
 
             if requires_attendance and course_resolution.status == CourseResolutionStatus.RESOLVED:
-                evidence = self._knowledge.get_active_policy("attendance_policy", as_of=as_of)
+                evidence = self._knowledge.get_active_policy("attendance_policy", as_of=as_of, visibility="public")
                 threshold = extract_attendance_threshold(evidence)
                 if threshold.status == ThresholdExtractionStatus.OK:
                     snapshots = academic_service.get_attendance(
@@ -132,7 +132,7 @@ class AcademicAgent:
                         errors.append("No attendance record found for the resolved course.")
 
             elif intent == AcademicIntent.POLICY_QUESTION:
-                evidence = self._knowledge.search(query, as_of=as_of, top_k=5)
+                evidence = self._knowledge.search(query, as_of=as_of, top_k=5, visibility="public")
 
             elif intent == AcademicIntent.TIMETABLE:
                 timetable = academic_service.get_timetable(self._session, student_id)

@@ -144,3 +144,21 @@ class FixedPlanLLMProvider(LLMProvider):
     def plan_mission(self, mission_id: str, goal: str, *, supported_agents: List[AgentName]) -> MissionPlan:
         assert self.plan_factory is not None, "FixedPlanLLMProvider requires plan_factory"
         return self.plan_factory(mission_id, goal)
+
+    def classify_career_intent(self, query: str):
+        raise NotImplementedError("FixedPlanLLMProvider is planning-only; not expected to classify intent")
+
+    def generate_career_response(self, context) -> str:
+        raise NotImplementedError("FixedPlanLLMProvider is planning-only; not expected to render a response")
+
+    def classify_events_intent(self, query: str):
+        raise NotImplementedError("FixedPlanLLMProvider is planning-only; not expected to classify intent")
+
+    def generate_events_response(self, context) -> str:
+        raise NotImplementedError("FixedPlanLLMProvider is planning-only; not expected to render a response")
+
+    def classify_services_intent(self, query: str):
+        raise NotImplementedError("FixedPlanLLMProvider is planning-only; not expected to classify intent")
+
+    def generate_services_response(self, context) -> str:
+        raise NotImplementedError("FixedPlanLLMProvider is planning-only; not expected to render a response")

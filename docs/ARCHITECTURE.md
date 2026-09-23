@@ -378,6 +378,204 @@ faked against the real Academic Agent. Execution states already distinguish `IN_
 (needs-review, pending future human approval) from `FAILED`, which is deliberate: this is the seam a future
 Approval Gate and Action Agent plug into without another redesign, even though neither exists yet in this phase.
 
+## Multi-Agent Collaboration (Phase 6)
+
+Phase 6 adds three more read-only specialists -- Career (component 3), Events & Opportunity (component 4),
+Campus Services (component 5) -- and the one genuinely new Orchestrator capability needed to make them
+collaborate: a downstream task can see an upstream task's structured output when the plan declares a
+dependency between them.
+
+**Each new agent follows the Academic Agent's template exactly** (`app/agents/{career,events,services}/agent.py`):
+LLM classifies intent (`app/llm/base.py` gained one `classify_*_intent`/`generate_*_response` method pair per
+agent, on the same `LLMProvider` interface -- not a second abstraction) → deterministic service/rule calls →
+the agent's own `*Verifier` → a local `*AgentOutcome` dataclass that structurally satisfies
+`app.graph.results.AgentOutcome`, exactly like `AcademicAgentOutcome`, so registering them
+(`app/graph/registry.py`) required no Orchestrator changes.
+
+- **Career Agent** (`app/rules/opportunity_eligibility.py`, `app/services/career.py`): deterministic eligibility
+  against status/deadline/year/department/CGPA and every *mandatory* required skill. "Mandatory vs.
+  recommended" reuses `OpportunitySkill.minimum_proficiency`'s existing `Optional[int]` as-is -- non-`None` is
+  mandatory, `None` is recommended and never blocks eligibility, so no schema or seed-data change was needed;
+  every already-seeded skill requirement specifies a number and stays mandatory, preserving every documented
+  Phase 2 eligibility outcome unchanged. `skill_gaps` (surfaced to a dependent task, see below) is deliberately
+  scoped to opportunities *within reach* -- eligible ones, or ones blocked by nothing except a missing skill --
+  so a department-blocked opportunity's skill requirements never pollute the "what should I learn" list.
+- **Events & Opportunity Agent** (`app/rules/event_availability.py`, `app/services/events.py`): availability
+  (open/full/deadline-closed) is a separate, never-conflated dimension from schedule conflicts -- an event can
+  be available to register *and* conflict with a class. Timetable conflicts convert the event's absolute UTC
+  instant to IST wall-clock (the existing `IST = UTC+5:30` convention) and compare against the recurring
+  `TimetableSlot`; exam conflicts compare two absolute UTC ranges directly. Relevance matching (which upcoming
+  events are even worth assessing) is deterministic keyword overlap between the task's own query text and any
+  upstream `skill_gaps` against each event's title/description/category -- never an LLM judgment call, so an
+  event is never claimed relevant without a traceable shared keyword.
+- **Campus Services Agent** (`app/rules/sla.py`, `app/services/services.py`): `CaseSLA.response_due_at`/
+  `resolution_due_at` are already pre-computed absolute timestamps at seed time from the Grievance SLA Policy's
+  numeric windows, so the rule is a direct comparison, no policy-prose parsing needed. A breach is checked
+  against the actual response/resolution timestamp when one exists (so a case resolved *late* still counts as
+  breached) or against "now" when it doesn't.
+
+**Dependency-aware information sharing** (`app/graph/dispatcher.py`, `app/graph/orchestrator.py`) is the one
+concrete Orchestrator modification this phase makes: `_build_message` now merges each dependency's already-
+`COMPLETED` `AgentResult.facts` into a dispatched task's `AgentMessage.facts`, in addition to the existing
+`student_id`/`as_of` base facts. This is safe by construction, not by a new runtime check -- a task only
+becomes dispatchable once every dependency has reached `COMPLETED` (the Phase 5 scheduler's existing
+invariant), so `agent_results` is guaranteed to already hold each dependency's real result; nothing is ever
+guessed. A second, small fix made while touching this code: `_summarize` now orders a synthesized multi-task
+response by the plan's declared task sequence instead of a lexical sort of task ids (which could misorder past
+task 9), covered by `tests/test_multiagent_orchestration.py`.
+
+**The flagship mission** ("Find internships I'm eligible for, identify my skill gaps, find relevant workshops
+that don't conflict with my classes...") is planned as four tasks: two independent Academic Agent reads
+(timetable, exam schedule), one independent Career Agent opportunity/skill-gap discovery, and one Events Agent
+workshop search that depends on all three -- so round 1 dispatches three tasks in genuine parallel
+(`ThreadPoolExecutor`, one `Session` each) and round 2 dispatches the Events task only once all three are
+verified `COMPLETED`. Its relevance matching keys off the *union* of its own query keywords ("AI") and the
+upstream `skill_gaps` -- both signals matter: "AI" alone finds the AI/ML workshop the skill gaps (Docker/
+Kubernetes/AWS, from the demo student's actual gap) wouldn't lexically match, and the skill gaps separately
+surface a "Cloud Native Systems" talk the query text alone wouldn't. `MockLLMProvider.plan_mission` recognizes
+this goal shape (and the campus-services goal shape) via keyword pattern-matching and returns this exact DAG
+directly -- a second planning path added *alongside*, never replacing, the existing generic clause-splitting
+path, so plain academic-only goals are unaffected
+(`tests/test_multiagent_orchestration.py::test_existing_academic_only_mission_is_unaffected_by_new_agents`).
+
+**A real bug found and fixed while building this phase**: none of the agents' `KnowledgeService.search()`/
+`get_active_policy()` calls -- including the already-approved Phase 4 Academic Agent's -- passed
+`visibility="public"`, so an `admin_only` document (the internal case-escalation SOP) could leak into a
+student-facing response if a query happened to be semantically close to it (confirmed happening for a Campus
+Services case-status query before the fix). Fixed at all eight call sites across all four agents; every agent
+test now explicitly asserts the admin-only document never appears in a student-facing result.
+
+**Missing upstream results are never fabricated**: if the Career task fails (e.g. an unknown student), the
+scheduler's existing failure-cascade (Phase 5) marks the dependent Events task `SKIPPED` -- it is never
+dispatched, so it never has the chance to guess at `skill_gaps` it didn't receive
+(`tests/test_multiagent_orchestration.py::test_missing_upstream_result_blocks_the_dependent_task`).
+
+## Action Agent, Approval Gate & Verified Execution (Phase 7)
+
+Phase 7 turns CampusNexus from a read-only recommendation system into a controlled action-execution platform:
+the Action Agent (component 7), a real Tool Gateway, the Approval Gate (component 9), and independent
+post-condition verification, wired onto persistence (`ApprovalRecord`/`ToolCallRecord`/`CalendarEvent`) that
+Phase 1/2 had already reserved but never used. Three write tools are implemented: `register_event`,
+`create_calendar_event`, `create_campus_case`.
+
+**Every write action requires approval in this phase** -- there is no "trusted agent" bypass and no
+sensitivity classification to opt out of it; CLAUDE.md's Approval Gate rule (irreversible/financial/
+third-party/on-behalf-of-student actions) is satisfied by simply requiring it unconditionally for all three
+tools, kept deliberately simple for this phase.
+
+### Execution lifecycle: proposal -> pre-check -> approval -> execution -> post-check
+
+1. **Action proposal** (`app/agents/action/agent.py`, `app/schemas/action.py::ActionProposal`): the Action
+   Agent reads its plan `constraints` (tool name + target resource, e.g. an event title) and any verified
+   upstream facts a dependency already gathered (e.g. an Events Agent's schedule-conflict assessment), and
+   drafts a proposal: tool, target, validated parameters, supporting facts, policy evidence, and a
+   deterministic user-visible description (never LLM-generated -- see "Design choices" below).
+2. **Pre-action verification** (`app/rules/action_preconditions.py` + `app/verification/action.py::ActionVerifier`):
+   deterministic checks (student exists, event exists/open/not-full/deadline-not-passed/not-already-registered;
+   calendar duplicate/overlap/referenced-event-exists; case category/priority/department validity). A hard
+   failure (e.g. already registered, at capacity) stops here -- **no approval is ever created for a proposal
+   that fails outright**, per CLAUDE.md's "never accept an unverified recommendation as authorization to
+   execute". A few checks are "soft" (couldn't confirm a schedule-conflict check ran, or a conflict/overlap
+   was found) and downgrade the result to NEEDS_REVIEW instead, which still proceeds to approval -- the human
+   approver sees the concern in the proposal, since every action requires approval anyway.
+3. **Human approval** (`app/services/approval_gate.py::ApprovalGate`): a `PENDING` `ApprovalRecord` is
+   persisted, referencing the exact validated `ToolCallRecord` (also `PENDING`). `ApprovalGate.decide(...)` is
+   the one and only way to resolve it -- a **separate, explicit operation**, never invoked automatically by
+   mission execution. Deciding an already-resolved approval raises rather than silently re-applying. Editing an
+   approved-but-not-yet-executed action never mutates it in place: `ApprovalGate.mark_superseded` flips the old
+   record to `EDIT_REQUIRED` and `ActionAgent.propose_edit` builds a brand-new proposal/approval pair (a new,
+   versioned idempotency key) from the edited parameters, which itself goes through pre-action verification
+   again before a human can approve it.
+4. **Execution** (`app/tools/registry.py::ToolGateway` + `app/tools/{event,calendar,case}_tools.py`): only once
+   an `ApprovalRecord` is `APPROVED` does the Action Agent recheck preconditions against *current* DB state
+   (capacity/duplicate can have changed since the first check) and call `ToolGateway.execute`, which itself
+   re-validates role/ownership/argument-schema before ever touching a handler.
+5. **Post-condition verification** (`ActionVerifier.verify_post_action`, the first real use of
+   `VerificationPhase.POST_ACTION`): independently re-reads the DB (a fresh `EventRegistration`/
+   `CalendarEvent`/`CampusCase` query) rather than trusting the tool's own return value. A tool call that
+   "returned success" but didn't actually persist the expected row is never marked verified --
+   `ActionAgent.verify_claimed_result` is the reusable entry point for this check, exercised directly in
+   `scripts/demo_actions.py`'s Demo D7 against a fabricated result.
+
+### Reusing existing statuses -- no new enum values
+
+The spec's lifecycle names (`WAITING_FOR_APPROVAL`/`APPROVED`/`REJECTED`/`EXECUTING`/`VERIFIED COMPLETION`/
+`NEEDS_REVIEW`/`FAILED`) all map onto enum values that already existed before this phase:
+
+| Lifecycle concept | Mechanism |
+|---|---|
+| WAITING_FOR_APPROVAL | `TaskStatus.BLOCKED` + `MissionStatus.NEEDS_APPROVAL` + `ApprovalStatus.PENDING` -- the *same* pause the Orchestrator already uses for any specialist's NEEDS_REVIEW result (Phase 5/6) |
+| APPROVED / REJECTED | `ApprovalStatus.APPROVED` / `REJECTED` |
+| EXECUTING | `TaskStatus.IN_PROGRESS`, already set by `_dispatch_and_collect` before every agent call |
+| VERIFIED COMPLETION | `TaskStatus.COMPLETED` + `VerificationStatus.VERIFIED` |
+| FAILED | `TaskStatus.FAILED` / `VerificationStatus.FAILED` / `MissionStatus.FAILED` |
+
+Concretely, `ActionAgent.handle()` is **dispatched twice** per approved action -- exactly like any other
+`SpecialistAgent.handle(AgentMessage) -> AgentOutcome`, no new orchestrator concept needed. First dispatch:
+propose + pre-check; if it doesn't fail outright, persist `PENDING` records and return `NEEDS_REVIEW`, which
+the existing (unmodified) scheduler turns into `BLOCKED`/`NEEDS_APPROVAL` and the mission run ends paused.
+`ApprovalGate.decide(APPROVED)` flips the `MissionStep` back to `PENDING`; `ApprovalGate.decide(REJECTED)`
+flips it to `FAILED` (the scheduler's pre-existing SKIPPED-cascade guarantees a `FAILED` step is never
+re-dispatched -- a rejected action structurally can never execute). Calling the **existing, unmodified**
+`MissionOrchestrator.resume_mission(mission_id)` re-enters the graph; the now-`PENDING` step becomes ready
+again and gets re-dispatched -- second dispatch: recheck, execute, post-check, return VERIFIED/FAILED, which
+the existing `_VERIFICATION_TO_TASK_STATUS` map turns into `COMPLETED`/`FAILED`.
+
+**This is why `app/graph/orchestrator.py`, `scheduler.py`, `validator.py`, `state.py`, `checkpoint.py`,
+`results.py`, and `registry.py` needed zero changes.** `resume_mission` already reconstructs state purely from
+the Context Service, so cross-process approval + resumption (a brand-new `MissionOrchestrator` instance, no
+shared state with whatever ran the mission before -- `tests/test_action_orchestration.py::test_cross_process_approval_and_resumption`)
+works for free, the same way Phase 5 already proved for a plain interrupted mission. The one necessary,
+purely-additive change is a single line in `app/graph/dispatcher.py::_build_message`, which now forwards
+`MissionTask.constraints` into `AgentMessage.constraints` (a Phase 1 field no agent had ever read until now)
+-- the Action Agent's structured tool-target input.
+
+### Idempotency and transactions
+
+- Every write `ToolCall` carries `idempotency_key = "{mission_id}:{task_id}:{tool_name}:v{n}"` (`n` increments
+  on `propose_edit`, so an edited proposal's key never collides with the superseded one's).
+- `ToolGateway.execute` short-circuits on a prior `SUCCESS` `ToolCallRecord` with the same key -- a retried
+  execute call is replayed, never re-executed.
+- `register_event`/`create_calendar_event` additionally dedup on a natural key (an existing
+  `EventRegistration`/matching `CalendarEvent` row) independent of the idempotency key, so even a *different*
+  mission step somehow re-registering the same (event, student) pair hits `EventRegistration`'s own
+  `UniqueConstraint` and returns the existing row rather than erroring or duplicating.
+- `create_campus_case` has no natural dedup key (two similar-looking complaints are still two distinct
+  real-world events) -- its idempotency rests entirely on the Tool Gateway's key check.
+- Every handler recommits inside its own transaction and catches its table's `IntegrityError` race (rollback
+  + re-query the now-existing row) rather than letting a concurrent duplicate attempt crash.
+
+### Security -- current prototype trust boundary
+
+There is no real authentication in this phase. `ToolGateway.execute(..., caller_role, caller_student_id)`
+enforces role authorization and an ownership check (`arguments.student_id == caller_student_id`) **in the
+gateway itself**, not only via an LLM prompt -- but `caller_role`/`caller_student_id` are supplied by whatever
+calls `run_mission`/`ActionAgent` directly, and are trusted only as far as that caller is trusted. A real
+deployment needs an authentication layer upstream of the Orchestrator that derives these from a verified
+session, not a caller-supplied argument. The "simulated admin identity" used to approve/reject in
+`scripts/demo_actions.py` (a plain string, e.g. `"admin-demo"`) is explicitly a stand-in, not a role-checked
+principal -- `ApprovalGate.decide` records *who claimed to* decide, not a verified identity. The Phase 6
+Knowledge/RAG visibility fix (agents always pass `visibility="public"` themselves, never take it from
+caller-supplied data) is unchanged and still applies to the Action Agent's own policy-evidence lookups.
+
+### Known limitations
+
+- `create_campus_case` generates a non-sequential `case_code` (`CASE-{uuid4 hex}`), unlike the seeded
+  `CASE-000N` demo data -- deliberate, to stay race-free without a shared counter; not a scheme new cases are
+  expected to match.
+- A newly-created `CampusCase` has no `CaseSLA` row (SLA tracking setup is out of this phase's scope), which
+  the existing, unmodified `ServicesVerifier` correctly flags `NEEDS_REVIEW` if a *later* Campus Services read
+  mission looks at that student's cases. This is why the case-creation mock-planner mission
+  (`app/llm/providers/mock.py::_build_case_creation_plan`) is a standalone Action Agent task rather than
+  chained after a Campus Services gather task -- chaining would make one action's approval-pause depend on how
+  many *other* cases the student happens to already have, which is real but orthogonal.
+- Schedule-conflict data for a registration proposal is read from the upstream Events Agent's already-computed
+  assessment (reused, not re-derived) rather than the Action Agent independently re-running conflict detection
+  against raw timetable/exam data; capacity and duplicate-registration are what get independently rechecked
+  immediately before commit, since those are what can realistically change between propose and execute.
+- No FastAPI/Streamlit UI exists yet for reviewing/approving pending actions -- `ApprovalGate.decide` is a
+  plain Python call, demonstrated via `scripts/demo_actions.py` and tests only.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

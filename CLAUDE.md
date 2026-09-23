@@ -78,6 +78,20 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - Read-only / informational actions (answering questions, showing plans, summarizing) do not require approval.
 - An approval decision (approve/reject/edit) is recorded in the Context Service audit trail with who, what,
   and when — pending human approvals must never silently expire into an auto-approve.
+- **Implemented in Phase 7** (`app/services/approval_gate.py`): all three write tools (`register_event`,
+  `create_calendar_event`, `create_campus_case`) require approval unconditionally — no per-tool sensitivity
+  opt-out exists yet. `ApprovalGate.decide` is the only way to resolve a pending approval, and deciding an
+  already-resolved one raises rather than silently re-applying. Editing an approved-but-unexecuted action never
+  mutates it in place — it is marked `EDIT_REQUIRED` and a brand-new proposal/approval pair is created and
+  re-verified from the edited parameters (`ActionAgent.propose_edit`).
+- The Action Agent's approve/execute lifecycle reuses existing `TaskStatus`/`MissionStatus`/`ApprovalStatus`/
+  `VerificationStatus` values (see the mapping table in `docs/ARCHITECTURE.md`'s Phase 7 section) — do not add
+  new enum members for a future action-lifecycle state without first checking whether an existing value already
+  covers it.
+- All write-tool execution goes through `app/tools/registry.py::ToolGateway` — it is the sole place that
+  enforces role authorization, ownership (caller identity vs. the resource the arguments target), and argument
+  schema validation. A new write tool must be registered there with a full `ToolDefinition`; an agent must never
+  perform a DB write directly.
 
 ## Post-Condition Verification
 
@@ -149,6 +163,30 @@ python eval/orchestration_scenarios.py
 # <mission_id> to resume a mission from a brand-new process, reading only the Context
 # Service (never the in-memory LangGraph checkpoint -- see docs/ARCHITECTURE.md).
 python scripts/demo_mission.py --student STU-DEMO-001 --goal "Check my Operating Systems attendance, determine whether I currently meet the attendance requirement, and explain how many classes I need to attend to reach the required attendance."
+
+# Run the deterministic multi-agent evaluation (Career/Events/Campus Services agents +
+# cross-agent dependency propagation; no live LLM; exits non-zero on failure)
+python eval/multiagent_scenarios.py
+
+# Run both Phase 6 flagship missions end-to-end: the cross-agent career-preparation
+# mission (Academic + Career + Events, with real dependency-fact propagation) and the
+# single-agent campus-services mission (case/SLA status).
+python scripts/demo_multiagent.py --student STU-DEMO-001
+
+# Run the deterministic Phase 7 action evaluation (Action Agent + Tool Gateway +
+# Approval Gate against a throwaway seeded DB/Chroma store, never the shared dev
+# DB, since -- unlike the read-only Phase 3-6 evals -- this one writes real rows;
+# no live LLM; exits non-zero on failure)
+python eval/action_scenarios.py
+
+# Run the Phase 7 action demo end-to-end against the real seeded dev DB: workshop
+# registration, calendar creation, and a campus complaint, each through the full
+# propose -> pre-check -> pause for approval -> explicit approve/reject -> resume
+# -> execute -> independent post-check lifecycle, plus the required failure
+# demonstrations (rejection, duplicate registration, full event, invalid student,
+# unauthorized access, action modification after approval, fabricated-result
+# postcondition catch).
+python scripts/demo_actions.py --student STU-DEMO-001
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see

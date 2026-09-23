@@ -1,0 +1,691 @@
+"""The Action Agent (CLAUDE.md component 7) -- Phase 7.
+
+The only specialist agent permitted to call the Tool Gateway
+(``app/tools/registry.py``). Conceptually mirrors the read-only agents'
+template (``AgentMessage -> ... -> AgentResult`` + verifier), but its
+``handle()`` is dispatched **twice** per approved action, exactly like any
+other ``SpecialistAgent`` -- no new orchestrator concept is needed:
+
+1. **First dispatch** (no approval exists yet for this mission step): build
+   an ``ActionProposal`` from the plan's ``constraints`` + verified upstream
+   facts, run the pre-action ``ActionVerifier`` check, and -- if it doesn't
+   fail outright -- persist a PENDING ``ToolCallRecord``/``ApprovalRecord``
+   and return ``VerificationStatus.NEEDS_REVIEW``. The existing scheduler
+   turns that into ``TaskStatus.BLOCKED``/``MissionStatus.NEEDS_APPROVAL``
+   and the mission run ends paused, unchanged from how a NEEDS_REVIEW
+   specialist result already pauses a mission (Phase 5/6).
+2. **Second dispatch** (an ``ApprovalRecord`` now exists with
+   ``status=APPROVED``, via ``app/services/approval_gate.py`` + a fresh
+   ``MissionOrchestrator.resume_mission`` call): rechecks preconditions
+   against current DB state, executes via the Tool Gateway inside a
+   transaction, independently re-reads the DB for the post-action check, and
+   returns VERIFIED/FAILED.
+
+A precheck that fails outright never creates an approval -- CLAUDE.md:
+"never accept an unverified specialist recommendation as authorization to
+execute." A REJECTED approval is handled defensively here too (the
+scheduler should never re-dispatch a FAILED step, but this never executes
+regardless).
+"""
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from typing import Dict, List, Optional
+
+from sqlalchemy.orm import Session
+
+from app.db.base import utc_now
+from app.db.repositories.calendar import get_calendar_entry, get_student_calendar
+from app.db.repositories.cases import get_case
+from app.db.repositories.events import get_registration
+from app.db.repositories.missions import (
+    count_approvals_for_step,
+    get_latest_approval_for_step,
+    get_tool_call_by_id,
+)
+from app.db.repositories.students import get_student_by_id
+from app.rules.action_preconditions import (
+    CATEGORY_DEPARTMENTS,
+    check_calendar_creation,
+    check_case_creation,
+    check_event_registration,
+)
+from app.schemas.action import ActionProposal
+from app.schemas.agent import AgentMessage, AgentResult
+from app.schemas.enums import (
+    AgentName,
+    AgentResultStatus,
+    ApprovalStatus,
+    ToolAccessType,
+    ToolExecutionStatus,
+    UserRole,
+    VerificationPhase,
+    VerificationStatus,
+)
+from app.schemas.events import ExamConflict, TimetableConflict
+from app.schemas.tools import ToolCall
+from app.schemas.verification import VerificationCheck, VerificationResult
+from app.services import events as events_service
+from app.services.approval_gate import ApprovalGate
+from app.services.context import ContextService
+from app.services.knowledge import KnowledgeService
+from app.tools.registry import ToolGateway
+from app.verification.action import ActionVerifier
+
+_ACTION_POLICY_QUERY = "registration cancellation calendar complaint grievance procedure policy"
+
+
+def _resolve_now(as_of_raw: object) -> datetime:
+    if as_of_raw:
+        d = date.fromisoformat(str(as_of_raw))
+        return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def _intervals_overlap(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datetime) -> bool:
+    return a_start < b_end and b_start < a_end
+
+
+def _new_verification(mission_id: str, task_id: str, phase: VerificationPhase, status: VerificationStatus, issues: List[str]) -> VerificationResult:
+    return VerificationResult(
+        verification_id=f"ver-{uuid.uuid4().hex[:12]}",
+        mission_id=mission_id,
+        task_id=task_id,
+        phase=phase,
+        status=status,
+        issues=issues,
+    )
+
+
+@dataclass
+class ActionAgentOutcome:
+    """Local convenience bundle -- structurally satisfies app.graph.results.AgentOutcome."""
+
+    agent_result: AgentResult
+    verification: VerificationResult
+    response_text: str
+
+
+class ActionAgent:
+    def __init__(
+        self,
+        *,
+        session: Session,
+        knowledge_service: KnowledgeService,
+        tool_gateway: ToolGateway,
+        verifier: Optional[ActionVerifier] = None,
+        approval_gate: Optional[ApprovalGate] = None,
+        requested_by: str = "mission_orchestrator",
+    ) -> None:
+        self._session = session
+        self._knowledge = knowledge_service
+        self._tool_gateway = tool_gateway
+        self._verifier = verifier or ActionVerifier()
+        self._context = ContextService(session)
+        self._approval_gate = approval_gate or ApprovalGate(session)
+        self._requested_by = requested_by
+
+    # ------------------------------------------------------------------
+    # Dispatch entry point
+    # ------------------------------------------------------------------
+
+    def handle(self, message: AgentMessage) -> ActionAgentOutcome:
+        approval = get_latest_approval_for_step(self._session, message.task_id)
+        if approval is not None and approval.status == ApprovalStatus.APPROVED:
+            return self._execute(message, approval)
+        if approval is not None and approval.status == ApprovalStatus.PENDING:
+            return self._still_pending_outcome(message, approval)
+        if approval is not None and approval.status == ApprovalStatus.REJECTED:
+            return self._rejected_outcome(message, approval)
+        # None, or the latest is EDIT_REQUIRED (superseded) -> propose fresh.
+        return self._propose(message)
+
+    def verify_claimed_result(self, tool_name: str, arguments: Dict[str, object], result_data: Dict[str, object]) -> VerificationResult:
+        """Independently re-read the DB to check whether a claimed tool result
+        actually persisted -- the public entry point for the same post-action
+        re-check ``_execute`` always runs, usable standalone (e.g. auditing an
+        externally-reported result) without touching approval/dispatch state."""
+        checks = self._post_checks(tool_name, arguments, result_data)
+        return self._verifier.verify_post_action(mission_id="n/a", task_id="n/a", checks=checks)
+
+    def propose_edit(
+        self,
+        mission_id: str,
+        task_id: str,
+        *,
+        student_id: str,
+        new_constraints: Dict[str, object],
+        requested_by: str,
+        reason: Optional[str] = None,
+        as_of: Optional[str] = None,
+    ) -> ActionAgentOutcome:
+        """Explicit, out-of-band operation: an approved-but-not-yet-executed action's
+        payload is being changed. Marks the current approval EDIT_REQUIRED and builds
+        a *new* proposal from ``new_constraints`` -- never mutates the old one in place."""
+        current = get_latest_approval_for_step(self._session, task_id)
+        if current is None:
+            raise ValueError(f"no existing approval for step_id={task_id!r} to edit")
+        tool_call_record = get_tool_call_by_id(self._session, current.tool_call_id)
+        if tool_call_record is not None and tool_call_record.status == ToolExecutionStatus.SUCCESS:
+            raise ValueError("cannot edit an action that has already been executed")
+
+        self._approval_gate.mark_superseded(current.approval_id, requested_by=requested_by, reason=reason)
+
+        facts: Dict[str, object] = {"student_id": student_id}
+        if as_of:
+            facts["as_of"] = as_of
+        message = AgentMessage(
+            message_id=f"msg-{uuid.uuid4().hex[:12]}",
+            mission_id=mission_id,
+            task_id=task_id,
+            source=AgentName.MISSION_ORCHESTRATOR,
+            target=AgentName.ACTION_AGENT,
+            objective="edited action proposal",
+            facts=facts,
+            constraints=new_constraints,
+        )
+        return self._propose(message)
+
+    # ------------------------------------------------------------------
+    # Propose (first dispatch)
+    # ------------------------------------------------------------------
+
+    def _propose(self, message: AgentMessage) -> ActionAgentOutcome:
+        tool_name = str(message.constraints.get("tool_name") or "").strip()
+        student_id = str(message.facts.get("student_id") or "").strip()
+        now = _resolve_now(message.facts.get("as_of"))
+
+        if tool_name == "register_event":
+            return self._propose_register_event(message, student_id, now)
+        if tool_name == "create_calendar_event":
+            return self._propose_calendar(message, student_id, now)
+        if tool_name == "create_campus_case":
+            return self._propose_case(message, student_id, now)
+
+        verification = _new_verification(
+            message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
+            [f"Unknown or missing tool_name in plan constraints: {tool_name!r}."],
+        )
+        return self._failed_outcome(message, verification, facts={"tool_name": tool_name})
+
+    def _propose_register_event(self, message: AgentMessage, student_id: str, now: datetime) -> ActionAgentOutcome:
+        constraints = message.constraints
+        student = get_student_by_id(self._session, student_id) if student_id else None
+        student_exists = student is not None
+
+        event = None
+        if student_exists:
+            event_id = constraints.get("event_id")
+            event_title = constraints.get("event_title")
+            if event_id is not None:
+                event = events_service.get_event_summary(self._session, int(event_id))
+            elif event_title:
+                event = events_service.get_event_summary_by_title(self._session, str(event_title))
+
+        already_registered = False
+        confirmed_registrations = 0
+        conflict_performed = False
+        timetable_conflicts: List[TimetableConflict] = []
+        exam_conflicts: List[ExamConflict] = []
+        if student_exists and event is not None:
+            already_registered = (
+                events_service.get_student_registration_status(self._session, student_id, event.event_id) is not None
+            )
+            confirmed_registrations = events_service.get_registration_count(self._session, event.event_id)
+            for raw in message.facts.get("assessments") or []:
+                if raw.get("event", {}).get("event_id") == event.event_id:
+                    conflict_performed = bool(raw.get("conflict_check_performed"))
+                    timetable_conflicts = [TimetableConflict.model_validate(c) for c in raw.get("timetable_conflicts", [])]
+                    exam_conflicts = [ExamConflict.model_validate(c) for c in raw.get("exam_conflicts", [])]
+                    break
+
+        checks = check_event_registration(
+            student_exists=student_exists,
+            event=event,
+            confirmed_registrations=confirmed_registrations,
+            already_registered=already_registered,
+            now=now,
+            timetable_conflicts=timetable_conflicts,
+            exam_conflicts=exam_conflicts,
+            conflict_check_performed=conflict_performed,
+        )
+        evidence = (
+            self._knowledge.search(_ACTION_POLICY_QUERY, as_of=now.date(), top_k=3, visibility="public")
+            if student_exists
+            else []
+        )
+        precheck = self._verifier.verify_pre_action(
+            mission_id=message.mission_id, task_id=message.task_id, checks=checks, evidence=evidence
+        )
+        if precheck.status == VerificationStatus.FAILED:
+            return self._failed_outcome(message, precheck, facts={"tool_name": "register_event"})
+
+        assert event is not None and student is not None  # guaranteed by precheck not FAILED
+        parameters = {"student_id": student_id, "event_id": event.event_id}
+        description = (
+            f"Register {student.user.full_name} (student_id={student_id}) for "
+            f"'{event.title}' on {event.start_at.isoformat()} at {event.location}."
+        )
+        return self._create_proposal_and_pause(
+            message,
+            tool_name="register_event",
+            target_resource=f"event:{event.event_id}",
+            parameters=parameters,
+            description=description,
+            precheck=precheck,
+            evidence=evidence,
+            supporting_facts={"confirmed_registrations": confirmed_registrations, "capacity": event.capacity},
+        )
+
+    def _propose_calendar(self, message: AgentMessage, student_id: str, now: datetime) -> ActionAgentOutcome:
+        constraints = message.constraints
+        student = get_student_by_id(self._session, student_id) if student_id else None
+        student_exists = student is not None
+
+        title = str(constraints.get("title") or "").strip()
+        source_event_title = constraints.get("source_event_title")
+        explicit_source_type = constraints.get("source_type")
+        source_type = str(explicit_source_type) if explicit_source_type else ("event" if source_event_title else "personal")
+        lead_time_hours = float(constraints.get("lead_time_hours", 0) or 0)
+        duration_hours = float(constraints.get("duration_hours", 1) or 1)
+
+        referenced_event_exists: Optional[bool] = None
+        start_at: Optional[datetime] = None
+        end_at: Optional[datetime] = None
+        source_id: Optional[int] = None
+
+        if student_exists:
+            if source_event_title:
+                source_event = events_service.get_event_summary_by_title(self._session, str(source_event_title))
+                referenced_event_exists = source_event is not None
+                if source_event is not None:
+                    start_at = source_event.start_at - timedelta(hours=lead_time_hours)
+                    end_at = start_at + timedelta(hours=duration_hours)
+                    source_id = source_event.event_id
+            else:
+                raw_start, raw_end = constraints.get("start_at"), constraints.get("end_at")
+                if raw_start and raw_end:
+                    start_at = datetime.fromisoformat(str(raw_start))
+                    end_at = datetime.fromisoformat(str(raw_end))
+
+        duplicate_entry_exists = False
+        overlapping_entry_count = 0
+        if student_exists and start_at is not None and end_at is not None:
+            duplicate_entry_exists = get_calendar_entry(self._session, student_id, title, start_at) is not None
+            for entry in get_student_calendar(self._session, student_id):
+                if _intervals_overlap(start_at, end_at, entry.start_at, entry.end_at):
+                    overlapping_entry_count += 1
+
+        checks = check_calendar_creation(
+            student_exists=student_exists,
+            referenced_event_exists=referenced_event_exists,
+            duplicate_entry_exists=duplicate_entry_exists,
+            overlapping_entry_count=overlapping_entry_count,
+        )
+        if student_exists and (start_at is None or end_at is None):
+            checks.append(
+                VerificationCheck(name="valid_times", passed=False, detail="Could not determine start_at/end_at for this calendar entry.")
+            )
+
+        precheck = self._verifier.verify_pre_action(mission_id=message.mission_id, task_id=message.task_id, checks=checks, evidence=[])
+        if precheck.status == VerificationStatus.FAILED:
+            return self._failed_outcome(message, precheck, facts={"tool_name": "create_calendar_event"})
+
+        assert student is not None and start_at is not None and end_at is not None
+        parameters = {
+            "student_id": student_id,
+            "title": title,
+            "start_at": start_at.isoformat(),
+            "end_at": end_at.isoformat(),
+            "source_type": source_type,
+            "source_id": source_id,
+        }
+        description = (
+            f"Create a personal calendar entry '{title}' for {student.user.full_name} "
+            f"from {start_at.isoformat()} to {end_at.isoformat()}."
+        )
+        return self._create_proposal_and_pause(
+            message,
+            tool_name="create_calendar_event",
+            target_resource=f"calendar:{student_id}:{title}",
+            parameters=parameters,
+            description=description,
+            precheck=precheck,
+            evidence=[],
+            supporting_facts={"overlapping_entry_count": overlapping_entry_count},
+        )
+
+    def _propose_case(self, message: AgentMessage, student_id: str, now: datetime) -> ActionAgentOutcome:
+        constraints = message.constraints
+        student = get_student_by_id(self._session, student_id) if student_id else None
+        student_exists = student is not None
+
+        category = str(constraints.get("category") or "").strip()
+        description_text = str(constraints.get("description") or "").strip()
+        priority = str(constraints.get("priority") or "normal").strip()
+        department = CATEGORY_DEPARTMENTS.get(category, "")
+
+        checks = check_case_creation(
+            student_exists=student_exists,
+            category=category,
+            priority=priority,
+            department=department,
+            description_present=bool(description_text),
+        )
+        evidence = (
+            self._knowledge.search(_ACTION_POLICY_QUERY, as_of=now.date(), top_k=3, visibility="public")
+            if student_exists
+            else []
+        )
+        precheck = self._verifier.verify_pre_action(
+            mission_id=message.mission_id, task_id=message.task_id, checks=checks, evidence=evidence
+        )
+        if precheck.status == VerificationStatus.FAILED:
+            return self._failed_outcome(message, precheck, facts={"tool_name": "create_campus_case"})
+
+        assert student is not None
+        parameters = {
+            "student_id": student_id,
+            "category": category,
+            "description": description_text,
+            "priority": priority,
+            "department": department,
+        }
+        description = f"File a {priority}-priority {category} complaint for {student.user.full_name}: {description_text[:120]}"
+        return self._create_proposal_and_pause(
+            message,
+            tool_name="create_campus_case",
+            target_resource=f"case:{student_id}:{category}",
+            parameters=parameters,
+            description=description,
+            precheck=precheck,
+            evidence=evidence,
+            supporting_facts={},
+        )
+
+    def _create_proposal_and_pause(
+        self,
+        message: AgentMessage,
+        *,
+        tool_name: str,
+        target_resource: str,
+        parameters: Dict[str, object],
+        description: str,
+        precheck: VerificationResult,
+        evidence: list,
+        supporting_facts: Dict[str, object],
+    ) -> ActionAgentOutcome:
+        mission_id, task_id = message.mission_id, message.task_id
+        proposal_id = f"prop-{uuid.uuid4().hex[:12]}"
+        tool_call_id = f"tc-{uuid.uuid4().hex[:12]}"
+        # Versioned so ActionAgent.propose_edit's fresh proposal never collides
+        # with (or silently dedups against) the superseded one's key.
+        version = count_approvals_for_step(self._session, task_id) + 1
+        idempotency_key = f"{mission_id}:{task_id}:{tool_name}:v{version}"
+        student_id = str(parameters.get("student_id"))
+
+        proposal = ActionProposal(
+            proposal_id=proposal_id,
+            mission_id=mission_id,
+            task_id=task_id,
+            tool_name=tool_name,
+            target_resource=target_resource,
+            student_id=student_id,
+            parameters=parameters,
+            supporting_facts=supporting_facts,
+            evidence_refs=[e.evidence_id for e in evidence],
+            description=description,
+        )
+        self._context.record_tool_call(
+            tool_call_id=tool_call_id,
+            mission_id=mission_id,
+            step_id=task_id,
+            tool_name=tool_name,
+            read_or_write=ToolAccessType.WRITE,
+            arguments=parameters,
+            idempotency_key=idempotency_key,
+            status=ToolExecutionStatus.PENDING,
+        )
+        self._approval_gate.request_approval(
+            mission_id=mission_id, step_id=task_id, tool_call_id=tool_call_id, action_summary=description, requested_by=self._requested_by
+        )
+
+        verification = VerificationResult(
+            verification_id=precheck.verification_id,
+            mission_id=mission_id,
+            task_id=task_id,
+            phase=VerificationPhase.PRE_ACTION,
+            status=VerificationStatus.NEEDS_REVIEW,
+            checks=precheck.checks,
+            issues=precheck.issues + ["Awaiting human approval before execution."],
+            evidence_refs=precheck.evidence_refs,
+        )
+        facts = {
+            "tool_name": tool_name,
+            "proposal_id": proposal_id,
+            "tool_call_id": tool_call_id,
+            "proposal": proposal.model_dump(mode="json"),
+            "awaiting_approval": True,
+        }
+        agent_result = AgentResult(
+            mission_id=mission_id, task_id=task_id, agent=AgentName.ACTION_AGENT, status=AgentResultStatus.PARTIAL,
+            facts=facts, evidence=evidence, errors=precheck.issues,
+        )
+        return ActionAgentOutcome(
+            agent_result=agent_result,
+            verification=verification,
+            response_text=description + " This action is awaiting human approval before it will be executed.",
+        )
+
+    # ------------------------------------------------------------------
+    # Pending / rejected (defensive re-dispatch guards)
+    # ------------------------------------------------------------------
+
+    def _still_pending_outcome(self, message: AgentMessage, approval) -> ActionAgentOutcome:
+        tool_call_record = get_tool_call_by_id(self._session, approval.tool_call_id)
+        tool_name = tool_call_record.tool_name if tool_call_record else "unknown"
+        verification = _new_verification(
+            message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.NEEDS_REVIEW,
+            ["Still awaiting human approval; a pending action never executes automatically."],
+        )
+        agent_result = AgentResult(
+            mission_id=message.mission_id, task_id=message.task_id, agent=AgentName.ACTION_AGENT,
+            status=AgentResultStatus.PARTIAL, facts={"tool_name": tool_name, "awaiting_approval": True},
+        )
+        return ActionAgentOutcome(agent_result=agent_result, verification=verification, response_text="This action is still awaiting human approval.")
+
+    def _rejected_outcome(self, message: AgentMessage, approval) -> ActionAgentOutcome:
+        verification = _new_verification(
+            message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
+            [f"Action was rejected: {approval.decision_reason or 'no reason given'}."],
+        )
+        agent_result = AgentResult(
+            mission_id=message.mission_id, task_id=message.task_id, agent=AgentName.ACTION_AGENT,
+            status=AgentResultStatus.FAILED, facts={"awaiting_approval": False, "rejected": True}, errors=list(verification.issues),
+        )
+        return ActionAgentOutcome(agent_result=agent_result, verification=verification, response_text="This action was rejected and will not be executed.")
+
+    def _failed_outcome(self, message: AgentMessage, verification: VerificationResult, *, facts: Optional[Dict] = None) -> ActionAgentOutcome:
+        agent_result = AgentResult(
+            mission_id=message.mission_id, task_id=message.task_id, agent=AgentName.ACTION_AGENT,
+            status=AgentResultStatus.FAILED, facts=facts or {}, errors=list(verification.issues),
+        )
+        text = "This action could not be completed: " + ("; ".join(verification.issues) if verification.issues else "a precondition check failed.")
+        return ActionAgentOutcome(agent_result=agent_result, verification=verification, response_text=text)
+
+    # ------------------------------------------------------------------
+    # Execute (second dispatch, after approval)
+    # ------------------------------------------------------------------
+
+    def _execute(self, message: AgentMessage, approval) -> ActionAgentOutcome:
+        tool_call_record = get_tool_call_by_id(self._session, approval.tool_call_id)
+        if tool_call_record is None:
+            verification = _new_verification(
+                message.mission_id, message.task_id, VerificationPhase.POST_ACTION, VerificationStatus.FAILED,
+                ["Approved action has no associated tool call record (data inconsistency)."],
+            )
+            return self._failed_outcome(message, verification)
+
+        arguments = dict(tool_call_record.arguments)
+        student_id = str(arguments.get("student_id") or "")
+        now = _resolve_now(message.facts.get("as_of"))
+
+        if tool_call_record.status == ToolExecutionStatus.SUCCESS:
+            # Idempotent re-dispatch (e.g. resume_mission invoked twice) -- never
+            # re-execute; just independently re-verify the persisted state.
+            post_checks = self._post_checks(tool_call_record.tool_name, arguments, tool_call_record.result_data or {})
+            post = self._verifier.verify_post_action(mission_id=message.mission_id, task_id=message.task_id, checks=post_checks)
+            return self._executed_outcome(message, tool_call_record, post, already_executed=True)
+
+        precheck_checks = self._recheck(tool_call_record.tool_name, arguments, now)
+        precheck = self._verifier.verify_pre_action(mission_id=message.mission_id, task_id=message.task_id, checks=precheck_checks)
+        if precheck.status == VerificationStatus.FAILED:
+            self._context.update_tool_call_record(
+                tool_call_record.tool_call_id,
+                status=ToolExecutionStatus.FAILED,
+                error="precondition recheck failed: " + "; ".join(precheck.issues),
+            )
+            return self._failed_outcome(message, precheck, facts={"tool_name": tool_call_record.tool_name})
+
+        tool_call = ToolCall(
+            tool_call_id=tool_call_record.tool_call_id,
+            mission_id=message.mission_id,
+            task_id=message.task_id,
+            tool_name=tool_call_record.tool_name,
+            arguments=arguments,
+            read_or_write=ToolAccessType.WRITE,
+            requires_approval=True,
+            idempotency_key=tool_call_record.idempotency_key,
+        )
+        result = self._tool_gateway.execute(self._session, tool_call, caller_role=UserRole.STUDENT, caller_student_id=student_id)
+        self._context.update_tool_call_record(
+            tool_call_record.tool_call_id, status=result.status, result_data=result.data, error=result.error, executed_at=utc_now()
+        )
+
+        if result.status != ToolExecutionStatus.SUCCESS:
+            verification = _new_verification(
+                message.mission_id, message.task_id, VerificationPhase.POST_ACTION, VerificationStatus.FAILED,
+                [result.error or "tool execution failed"],
+            )
+            return self._failed_outcome(message, verification, facts={"tool_name": tool_call_record.tool_name})
+
+        post_checks = self._post_checks(tool_call_record.tool_name, arguments, result.data or {})
+        post = self._verifier.verify_post_action(mission_id=message.mission_id, task_id=message.task_id, checks=post_checks)
+        self._context.update_tool_call_record(
+            tool_call_record.tool_call_id, status=result.status, postcondition_verified=(post.status == VerificationStatus.VERIFIED)
+        )
+        return self._executed_outcome(message, tool_call_record, post, already_executed=False, result_data=result.data)
+
+    def _executed_outcome(
+        self,
+        message: AgentMessage,
+        tool_call_record,
+        post: VerificationResult,
+        *,
+        already_executed: bool,
+        result_data: Optional[Dict] = None,
+    ) -> ActionAgentOutcome:
+        status_map = {
+            VerificationStatus.VERIFIED: AgentResultStatus.SUCCESS,
+            VerificationStatus.NEEDS_REVIEW: AgentResultStatus.PARTIAL,
+            VerificationStatus.FAILED: AgentResultStatus.FAILED,
+        }
+        facts = {
+            "tool_name": tool_call_record.tool_name,
+            "tool_result": result_data if result_data is not None else tool_call_record.result_data,
+            "already_executed": already_executed,
+            "postcondition_verified": post.status == VerificationStatus.VERIFIED,
+        }
+        agent_result = AgentResult(
+            mission_id=message.mission_id, task_id=message.task_id, agent=AgentName.ACTION_AGENT,
+            status=status_map[post.status], facts=facts, errors=list(post.issues),
+        )
+        if post.status == VerificationStatus.VERIFIED:
+            response = f"Action '{tool_call_record.tool_name}' executed and verified successfully."
+        else:
+            response = f"Action '{tool_call_record.tool_name}' executed, but postcondition verification did not fully pass: " + "; ".join(post.issues)
+        return ActionAgentOutcome(agent_result=agent_result, verification=post, response_text=response)
+
+    # ------------------------------------------------------------------
+    # Recheck (immediately before commit) / postcheck (independent re-read)
+    # ------------------------------------------------------------------
+
+    def _recheck(self, tool_name: str, arguments: Dict, now: datetime) -> List[VerificationCheck]:
+        if tool_name == "register_event":
+            student = get_student_by_id(self._session, str(arguments["student_id"]))
+            student_exists = student is not None
+            event = events_service.get_event_summary(self._session, int(arguments["event_id"])) if student_exists else None
+            already_registered = False
+            confirmed = 0
+            if student_exists and event is not None:
+                already_registered = (
+                    events_service.get_student_registration_status(self._session, str(arguments["student_id"]), event.event_id)
+                    is not None
+                )
+                confirmed = events_service.get_registration_count(self._session, event.event_id)
+            # Schedule-conflict data was already established at propose time
+            # (a genuine EventsAgent read); capacity/duplicate are what can
+            # realistically have changed since then, so those are what this
+            # recheck focuses on independently re-confirming.
+            return check_event_registration(
+                student_exists=student_exists, event=event, confirmed_registrations=confirmed,
+                already_registered=already_registered, now=now, conflict_check_performed=True,
+            )
+        if tool_name == "create_calendar_event":
+            student = get_student_by_id(self._session, str(arguments["student_id"]))
+            student_exists = student is not None
+            start_at = datetime.fromisoformat(str(arguments["start_at"]))
+            duplicate_entry_exists = (
+                get_calendar_entry(self._session, str(arguments["student_id"]), str(arguments["title"]), start_at) is not None
+                if student_exists
+                else False
+            )
+            referenced_event_exists: Optional[bool] = None
+            if arguments.get("source_id") is not None:
+                referenced_event_exists = events_service.get_event_summary(self._session, int(arguments["source_id"])) is not None
+            return check_calendar_creation(
+                student_exists=student_exists, referenced_event_exists=referenced_event_exists,
+                duplicate_entry_exists=duplicate_entry_exists, overlapping_entry_count=0,
+            )
+        if tool_name == "create_campus_case":
+            student = get_student_by_id(self._session, str(arguments["student_id"]))
+            student_exists = student is not None
+            return check_case_creation(
+                student_exists=student_exists, category=str(arguments["category"]), priority=str(arguments["priority"]),
+                department=str(arguments["department"]), description_present=bool(arguments.get("description")),
+            )
+        return [VerificationCheck(name="tool_name_supported", passed=False, detail=f"Unknown tool_name {tool_name!r}.")]
+
+    def _post_checks(self, tool_name: str, arguments: Dict, result_data: Dict) -> List[VerificationCheck]:
+        if tool_name == "register_event":
+            reg = get_registration(self._session, int(arguments["event_id"]), str(arguments["student_id"]))
+            passed = reg is not None and reg.status.value == "confirmed"
+            return [
+                VerificationCheck(
+                    name="registration_persisted", passed=passed,
+                    detail=None if passed else "No confirmed EventRegistration row found for this student/event after execution.",
+                )
+            ]
+        if tool_name == "create_calendar_event":
+            start_at = datetime.fromisoformat(str(arguments["start_at"]))
+            entry = get_calendar_entry(self._session, str(arguments["student_id"]), str(arguments["title"]), start_at)
+            passed = entry is not None
+            return [
+                VerificationCheck(
+                    name="calendar_entry_persisted", passed=passed,
+                    detail=None if passed else "No matching CalendarEvent row found after execution.",
+                )
+            ]
+        if tool_name == "create_campus_case":
+            case_code = result_data.get("case_code")
+            case = get_case(self._session, str(case_code)) if case_code else None
+            passed = case is not None and case.student.student_code == arguments["student_id"] and case.status.value == "open"
+            return [
+                VerificationCheck(
+                    name="case_persisted", passed=passed,
+                    detail=None if passed else "No open CampusCase row found for this student/case_code after execution.",
+                )
+            ]
+        return [VerificationCheck(name="tool_name_supported", passed=False, detail=f"Unknown tool_name {tool_name!r}.")]

@@ -6,6 +6,21 @@ SQLAlchemy's ``Session`` is not thread-safe, so sharing one across
 concurrently-running agent calls would be a real correctness bug, not a
 style choice. This is what makes "independent tasks eligible for parallel
 execution" (CLAUDE.md DAG Execution) genuinely true rather than nominal.
+
+Phase 6 addition -- dependency-aware information sharing: a task's message
+is built from ``base_facts`` (student_id/as_of) *plus* the merged
+``AgentResult.facts`` of every one of its dependencies (e.g. the Career
+Agent's ``skill_gaps`` reaching a dependent Events Agent task). This is safe
+because a task only ever becomes dispatchable once every dependency has
+reached ``COMPLETED`` (app/graph/scheduler.py) -- so by the time this runs,
+``agent_results`` is guaranteed to already hold a real entry for each
+dependency id; nothing here is ever guessed or fabricated.
+
+Phase 7 addition -- ``MissionTask.constraints`` (a Phase 1 field, unused
+until now) is now forwarded into ``AgentMessage.constraints`` too. The
+Action Agent uses it as its structured tool-target input (tool name +
+resource parameters); every other agent still ignores it, so this is purely
+additive.
 """
 from __future__ import annotations
 
@@ -18,7 +33,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.graph.registry import AgentRegistry, UnsupportedAgentError
 from app.graph.results import AgentOutcome
-from app.schemas.agent import AgentMessage
+from app.schemas.agent import AgentMessage, AgentResult
 from app.schemas.common import JsonValue
 from app.schemas.enums import AgentName
 from app.schemas.mission import MissionPlan, MissionTask
@@ -39,8 +54,17 @@ class DispatchOutcome:
     error: Optional[str] = None
 
 
-def _build_message(mission_id: str, task: MissionTask, base_facts: Dict[str, JsonValue]) -> AgentMessage:
+def _build_message(
+    mission_id: str,
+    task: MissionTask,
+    base_facts: Dict[str, JsonValue],
+    agent_results: Dict[str, AgentResult],
+) -> AgentMessage:
     facts = dict(base_facts)
+    for dependency_id in task.dependencies:
+        upstream = agent_results.get(dependency_id)
+        if upstream is not None:
+            facts.update(upstream.facts)
     facts["query"] = task.objective
     return AgentMessage(
         message_id=f"msg-{uuid.uuid4().hex[:12]}",
@@ -50,6 +74,7 @@ def _build_message(mission_id: str, task: MissionTask, base_facts: Dict[str, Jso
         target=task.agent,
         objective=task.objective,
         facts=facts,
+        constraints=dict(task.constraints),
     )
 
 
@@ -57,13 +82,14 @@ def _run_one(
     task: MissionTask,
     mission_id: str,
     base_facts: Dict[str, JsonValue],
+    agent_results: Dict[str, AgentResult],
     registry: AgentRegistry,
     session_factory: sessionmaker[Session],
 ) -> DispatchOutcome:
     session = session_factory()
     try:
         agent = registry.build(task.agent, session)
-        message = _build_message(mission_id, task, base_facts)
+        message = _build_message(mission_id, task, base_facts, agent_results)
         outcome = agent.handle(message)
         return DispatchOutcome(task_id=task.task_id, outcome=outcome)
     except UnsupportedAgentError as exc:
@@ -79,11 +105,17 @@ def dispatch_ready_tasks(
     ready_task_ids: List[str],
     *,
     base_facts: Dict[str, JsonValue],
+    agent_results: Dict[str, AgentResult],
     registry: AgentRegistry,
     session_factory: sessionmaker[Session],
     max_workers: int = 4,
 ) -> Dict[str, DispatchOutcome]:
-    """Dispatch every ready task concurrently, each against its own DB session."""
+    """Dispatch every ready task concurrently, each against its own DB session.
+
+    ``agent_results`` is the mission's already-collected results so far --
+    used to forward each dispatched task's dependencies' facts (see module
+    docstring); tasks with no dependencies are unaffected.
+    """
     tasks_by_id = {task.task_id: task for task in plan.tasks}
     ready_tasks = [tasks_by_id[task_id] for task_id in ready_task_ids]
     if not ready_tasks:
@@ -92,7 +124,9 @@ def dispatch_ready_tasks(
     results: Dict[str, DispatchOutcome] = {}
     with ThreadPoolExecutor(max_workers=min(max_workers, len(ready_tasks))) as executor:
         futures = {
-            executor.submit(_run_one, task, plan.mission_id, base_facts, registry, session_factory): task.task_id
+            executor.submit(
+                _run_one, task, plan.mission_id, base_facts, agent_results, registry, session_factory
+            ): task.task_id
             for task in ready_tasks
         }
         for future in futures:

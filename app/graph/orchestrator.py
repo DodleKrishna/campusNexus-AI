@@ -350,6 +350,7 @@ class MissionOrchestrator:
             plan,
             ready,
             base_facts=base_facts,
+            agent_results=state.get("agent_results", {}),
             registry=self._registry,
             session_factory=self._session_factory,
         )
@@ -550,7 +551,13 @@ class MissionOrchestrator:
         responses = state.get("responses", {})
         if not responses:
             return f"Mission ended with status {state['mission_status'].value}."
-        return " ".join(responses[task_id] for task_id in sorted(responses))
+        plan = state.get("plan")
+        # Iterate the plan's declared task order (not a lexical sort of task
+        # ids) so a synthesized multi-agent result reads in the mission's
+        # actual sequence -- matters once task ids exceed one digit, and is
+        # the more correct ordering either way.
+        ordered_task_ids = [task.task_id for task in plan.tasks] if plan is not None else sorted(responses)
+        return " ".join(responses[task_id] for task_id in ordered_task_ids if task_id in responses)
 
     # ------------------------------------------------------------------
     # Conditional routing

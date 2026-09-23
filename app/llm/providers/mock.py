@@ -24,8 +24,11 @@ from app.schemas.academic import (
     CourseSummary,
     ExamEligibilityStatus,
 )
+from app.schemas.career import CareerIntent, CareerIntentResult, CareerResponseContext, OpportunityEligibilityStatus
 from app.schemas.enums import AgentName, VerificationStatus
+from app.schemas.events import EventsIntent, EventsIntentResult, EventsResponseContext
 from app.schemas.mission import MissionPlan, MissionTask
+from app.schemas.services import ServicesIntent, ServicesIntentResult, ServicesResponseContext
 
 _WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _ACRONYM_STOPWORDS = {"of", "and", "the", "for", "in", "to"}
@@ -103,6 +106,198 @@ def _classify(query: str) -> AcademicIntent:
     return AcademicIntent.UNKNOWN
 
 
+_CAREER_PREP_AGENTS = frozenset(
+    {AgentName.ACADEMIC_AGENT, AgentName.CAREER_AGENT, AgentName.EVENTS_OPPORTUNITY_AGENT}
+)
+
+
+def _is_career_prep_goal(goal: str) -> bool:
+    q = goal.lower()
+    return "internship" in q and "skill gap" in q and ("workshop" in q or "event" in q)
+
+
+def _is_campus_services_goal(goal: str) -> bool:
+    q = goal.lower()
+    return ("complaint" in q or "grievance" in q) and ("case" in q or "overdue" in q or "sla" in q or "procedure" in q)
+
+
+# Phase 7 action-mission heuristics: the demo/tests embed the structured
+# values a real LLM would extract (an event title, a calendar entry title, a
+# complaint description) as single-quoted segments in the goal text -- this
+# mock only needs to be a deterministic stand-in, not a real NL parser, and
+# quoting keeps extraction unambiguous rather than guessing at free text.
+_QUOTED_RE = re.compile(r"'([^']+)'")
+_CASE_CATEGORY_KEYWORDS = [
+    ("hostel", "hostel"),
+    ("wifi", "it_helpdesk"),
+    ("internet", "it_helpdesk"),
+    ("laptop", "it_helpdesk"),
+    ("portal", "it_helpdesk"),
+    ("fee", "fees"),
+    ("facilit", "facilities"),
+    ("projector", "facilities"),
+    ("transcript", "administrative"),
+    ("certificate", "administrative"),
+    ("bonafide", "administrative"),
+]
+
+
+def _is_event_registration_goal(goal: str) -> bool:
+    q = goal.lower()
+    return "register" in q and any(k in q for k in ("workshop", "event", "talk")) and bool(_QUOTED_RE.search(goal))
+
+
+def _is_calendar_creation_goal(goal: str) -> bool:
+    q = goal.lower()
+    return "calendar" in q and len(_QUOTED_RE.findall(goal)) >= 2
+
+
+def _is_case_creation_goal(goal: str) -> bool:
+    q = goal.lower()
+    has_intent = any(k in q for k in ("file", "submit", "raise")) and ("complaint" in q or "case" in q)
+    return has_intent and bool(_QUOTED_RE.search(goal)) and _infer_case_category(q) is not None
+
+
+def _infer_case_category(goal_lower: str) -> Optional[str]:
+    for keyword, category in _CASE_CATEGORY_KEYWORDS:
+        if keyword in goal_lower:
+            return category
+    return None
+
+
+def _infer_case_priority(goal_lower: str) -> str:
+    if "urgent" in goal_lower:
+        return "urgent"
+    if "high priority" in goal_lower or "high-priority" in goal_lower:
+        return "high"
+    return "normal"
+
+
+def _build_event_registration_plan(mission_id: str, goal: str) -> MissionPlan:
+    event_title = _QUOTED_RE.search(goal).group(1)
+    discovery_task = MissionTask(
+        task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.EVENTS_OPPORTUNITY_AGENT,
+        objective=f"Find the '{event_title}' workshop and check for schedule conflicts with my classes and exams",
+        dependencies=[], requires_evidence=True,
+    )
+    action_task = MissionTask(
+        task_id=f"{mission_id}-task-2", mission_id=mission_id, agent=AgentName.ACTION_AGENT,
+        objective=f"Register for '{event_title}'", dependencies=[discovery_task.task_id],
+        constraints={"tool_name": "register_event", "event_title": event_title},
+    )
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=[discovery_task, action_task])
+
+
+def _build_calendar_creation_plan(mission_id: str, goal: str) -> MissionPlan:
+    titles = _QUOTED_RE.findall(goal)
+    entry_title, source_event_title = titles[0], titles[1]
+    action_task = MissionTask(
+        task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.ACTION_AGENT,
+        objective=f"Create a personal calendar entry '{entry_title}'", dependencies=[],
+        constraints={
+            "tool_name": "create_calendar_event",
+            "title": entry_title,
+            "source_event_title": source_event_title,
+            "lead_time_hours": 24,
+            "duration_hours": 1,
+        },
+    )
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=[action_task])
+
+
+def _build_case_creation_plan(mission_id: str, goal: str) -> MissionPlan:
+    # Deliberately a standalone Action Agent task, not chained after a
+    # CampusServicesAgent read task: a newly-filed case has no CaseSLA row
+    # yet (that's set up by whatever downstream process assigns/tracks it,
+    # out of scope here), which ServicesVerifier -- correctly, per its own
+    # existing Phase 6 rule -- flags NEEDS_REVIEW ("SLA data missing for
+    # case(s)"). Chaining would make an unrelated case-creation mission's
+    # pause depend on how many *other* cases the student already has, which
+    # is real but orthogonal to this action. The "use Campus Services to
+    # prepare the submission" collaboration is instead demonstrated by
+    # scripts/demo_actions.py calling the read path directly beforehand.
+    q = goal.lower()
+    description_text = _QUOTED_RE.search(goal).group(1)
+    category = _infer_case_category(q) or "administrative"
+    priority = _infer_case_priority(q)
+    action_task = MissionTask(
+        task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.ACTION_AGENT,
+        objective=f"File a {category} complaint: {description_text}", dependencies=[],
+        constraints={
+            "tool_name": "create_campus_case",
+            "category": category,
+            "description": description_text,
+            "priority": priority,
+        },
+    )
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=[action_task])
+
+
+def _build_career_prep_plan(mission_id: str, goal: str) -> MissionPlan:
+    """The Phase 6 flagship mission: Academic timetable/exams (independent) +
+    Career opportunity/skill-gap discovery (independent), both feeding into
+    an Events Agent task that can only run once all three complete (see
+    app/graph/dispatcher.py's dependency-fact propagation)."""
+    timetable_task = MissionTask(
+        task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.ACADEMIC_AGENT,
+        objective="What is my timetable?", dependencies=[], requires_evidence=False,
+    )
+    exam_task = MissionTask(
+        task_id=f"{mission_id}-task-2", mission_id=mission_id, agent=AgentName.ACADEMIC_AGENT,
+        objective="When are my exams?", dependencies=[], requires_evidence=False,
+    )
+    career_task = MissionTask(
+        task_id=f"{mission_id}-task-3", mission_id=mission_id, agent=AgentName.CAREER_AGENT,
+        objective="Find internships I'm eligible for related to AI and identify my skill gaps",
+        dependencies=[], requires_evidence=True,
+    )
+    events_task = MissionTask(
+        task_id=f"{mission_id}-task-4", mission_id=mission_id, agent=AgentName.EVENTS_OPPORTUNITY_AGENT,
+        objective="Find workshops related to AI and my skill gaps that don't conflict with my classes or exams",
+        dependencies=[timetable_task.task_id, exam_task.task_id, career_task.task_id], requires_evidence=True,
+    )
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=[timetable_task, exam_task, career_task, events_task])
+
+
+def _build_campus_services_plan(mission_id: str, goal: str) -> MissionPlan:
+    task = MissionTask(
+        task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.CAMPUS_SERVICES_AGENT,
+        objective=goal, dependencies=[], requires_evidence=True,
+    )
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=[task])
+
+
+def _classify_career(query: str) -> CareerIntent:
+    q = query.lower()
+    if any(k in q for k in ("status of my application", "application status", "my application")):
+        return CareerIntent.APPLICATION_STATUS
+    if any(k in q for k in ("internship", "job", "opportunit", "eligib", "skill gap", "skill-gap")):
+        return CareerIntent.OPPORTUNITY_DISCOVERY
+    if "polic" in q:
+        return CareerIntent.POLICY_QUESTION
+    return CareerIntent.UNKNOWN
+
+
+def _classify_events(query: str) -> EventsIntent:
+    q = query.lower()
+    if any(k in q for k in ("am i registered", "my registration", "registration status")):
+        return EventsIntent.REGISTRATION_STATUS
+    if any(k in q for k in ("workshop", "event", "conflict")):
+        return EventsIntent.EVENT_DISCOVERY
+    if "polic" in q:
+        return EventsIntent.POLICY_QUESTION
+    return EventsIntent.UNKNOWN
+
+
+def _classify_services(query: str) -> ServicesIntent:
+    q = query.lower()
+    if any(k in q for k in ("complaint", "grievance", "case", "overdue", "sla")):
+        return ServicesIntent.CASE_STATUS
+    if "polic" in q or "procedure" in q:
+        return ServicesIntent.POLICY_QUESTION
+    return ServicesIntent.UNKNOWN
+
+
 class MockLLMProvider(LLMProvider):
     """Deterministic LLM stand-in -- no network, no model, fully reproducible."""
 
@@ -111,6 +306,30 @@ class MockLLMProvider(LLMProvider):
     def plan_mission(
         self, mission_id: str, goal: str, *, supported_agents: List[AgentName]
     ) -> MissionPlan:
+        # Pattern-matched multi-agent planning paths for the two Phase 6
+        # flagship goal shapes, tried first (and only used if every agent
+        # they need is actually registered) -- kept *alongside*, never
+        # replacing, the generic single-agent clause-splitting fallback
+        # below, so existing academic-only missions are unaffected. A real
+        # LLM provider would instead reason about this directly from the
+        # tool schema already built in Phase 5; this mock only needs to be
+        # a good enough deterministic stand-in for tests/demo.
+        supported = set(supported_agents)
+        # More specific action-mission patterns are tried before the more
+        # general read-only campus-services pattern -- a "file a complaint"
+        # goal would otherwise also satisfy _is_campus_services_goal's looser
+        # keyword check and get silently routed to the wrong (read-only) plan.
+        if _is_event_registration_goal(goal) and {AgentName.EVENTS_OPPORTUNITY_AGENT, AgentName.ACTION_AGENT}.issubset(supported):
+            return _build_event_registration_plan(mission_id, goal)
+        if _is_calendar_creation_goal(goal) and AgentName.ACTION_AGENT in supported:
+            return _build_calendar_creation_plan(mission_id, goal)
+        if _is_case_creation_goal(goal) and AgentName.ACTION_AGENT in supported:
+            return _build_case_creation_plan(mission_id, goal)
+        if _is_career_prep_goal(goal) and _CAREER_PREP_AGENTS.issubset(supported):
+            return _build_career_prep_plan(mission_id, goal)
+        if _is_campus_services_goal(goal) and AgentName.CAMPUS_SERVICES_AGENT in supported:
+            return _build_campus_services_plan(mission_id, goal)
+
         agent = AgentName.ACADEMIC_AGENT
         if agent not in supported_agents:
             agent = supported_agents[0] if supported_agents else AgentName.ACADEMIC_AGENT
@@ -279,6 +498,209 @@ class MockLLMProvider(LLMProvider):
         return "\n".join(lines)
 
     def _render_policy(self, context: AcademicResponseContext) -> str:
+        if not context.evidence:
+            return "I couldn't find any policy evidence covering that question, so I can't answer it reliably."
+        lines = ["Here's what the policy documents say:"]
+        for ev in context.evidence[:3]:
+            lines.append(f"- ({ev.document_id}, {ev.section}): {ev.snippet}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Career Agent
+    # ------------------------------------------------------------------
+
+    def classify_career_intent(self, query: str) -> CareerIntentResult:
+        return CareerIntentResult(intent=_classify_career(query))
+
+    def generate_career_response(self, context: CareerResponseContext) -> str:
+        if context.verification_status == VerificationStatus.FAILED:
+            if context.student_name is None:
+                return "I couldn't find a student record matching that request, so I can't answer this."
+            if context.intent == CareerIntent.UNKNOWN:
+                return (
+                    "I can help with internship/job eligibility, application status, or career policy "
+                    "questions -- I couldn't tell what you're asking for here."
+                )
+            return "I couldn't complete this request: " + "; ".join(context.errors or ["a data problem occurred"])
+
+        hedge = "Note: I couldn't fully confirm this, so treat it as provisional. " if context.verification_status == VerificationStatus.NEEDS_REVIEW else ""
+        if context.intent == CareerIntent.OPPORTUNITY_DISCOVERY:
+            return hedge + self._render_opportunities(context)
+        if context.intent == CareerIntent.APPLICATION_STATUS:
+            return hedge + self._render_applications(context)
+        if context.intent == CareerIntent.POLICY_QUESTION:
+            return hedge + self._render_career_policy(context)
+        return (
+            "I can help with internship/job eligibility, application status, or career policy "
+            "questions -- I couldn't tell what you're asking for here."
+        )
+
+    def _render_opportunities(self, context: CareerResponseContext) -> str:
+        eligible = [e for e in context.eligibilities if e.status == OpportunityEligibilityStatus.ELIGIBLE]
+        ineligible = [e for e in context.eligibilities if e.status != OpportunityEligibilityStatus.ELIGIBLE]
+        lines: List[str] = []
+
+        if eligible:
+            lines.append(f"You are eligible for {len(eligible)} opportunit{'y' if len(eligible) == 1 else 'ies'}:")
+            for e in eligible:
+                applied_note = (
+                    f" (you already applied -- status: {e.application_status})" if e.already_applied else ""
+                )
+                lines.append(
+                    f"- {e.opportunity.title} at {e.opportunity.company} "
+                    f"(min CGPA {e.opportunity.minimum_cgpa}){applied_note}"
+                )
+        else:
+            lines.append("No open opportunities matched your eligibility criteria right now.")
+
+        if ineligible:
+            lines.append(
+                f"{len(ineligible)} opportunit{'y' if len(ineligible) == 1 else 'ies'} you're not currently "
+                "eligible for, for example:"
+            )
+            for e in ineligible[:3]:
+                lines.append(f"- {e.opportunity.title}: {'; '.join(e.blocking_reasons)}")
+
+        if context.skill_gaps:
+            lines.append(f"Skill gaps worth developing: {', '.join(context.skill_gaps)}.")
+
+        return "\n".join(lines)
+
+    def _render_applications(self, context: CareerResponseContext) -> str:
+        if not context.applications:
+            return "You have no recorded applications."
+        lines = ["Your application status:"]
+        for app in context.applications:
+            lines.append(f"- {app.opportunity_title}: {app.status}")
+        return "\n".join(lines)
+
+    def _render_career_policy(self, context: CareerResponseContext) -> str:
+        if not context.evidence:
+            return "I couldn't find any policy evidence covering that question, so I can't answer it reliably."
+        lines = ["Here's what the policy documents say:"]
+        for ev in context.evidence[:3]:
+            lines.append(f"- ({ev.document_id}, {ev.section}): {ev.snippet}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Events & Opportunity Agent
+    # ------------------------------------------------------------------
+
+    def classify_events_intent(self, query: str) -> EventsIntentResult:
+        return EventsIntentResult(intent=_classify_events(query))
+
+    def generate_events_response(self, context: EventsResponseContext) -> str:
+        if context.verification_status == VerificationStatus.FAILED:
+            if context.student_name is None:
+                return "I couldn't find a student record matching that request, so I can't answer this."
+            if context.intent == EventsIntent.UNKNOWN:
+                return (
+                    "I can help with finding events/workshops, checking your registrations, or events "
+                    "policy questions -- I couldn't tell what you're asking for here."
+                )
+            return "I couldn't complete this request: " + "; ".join(context.errors or ["a data problem occurred"])
+
+        hedge = "Note: I couldn't fully confirm this, so treat it as provisional. " if context.verification_status == VerificationStatus.NEEDS_REVIEW else ""
+        if context.intent in (EventsIntent.EVENT_DISCOVERY, EventsIntent.REGISTRATION_STATUS):
+            return hedge + self._render_event_assessments(context)
+        if context.intent == EventsIntent.POLICY_QUESTION:
+            return hedge + self._render_events_policy(context)
+        return (
+            "I can help with finding events/workshops, checking your registrations, or events policy "
+            "questions -- I couldn't tell what you're asking for here."
+        )
+
+    def _render_event_assessments(self, context: EventsResponseContext) -> str:
+        if not context.assessments:
+            return "I couldn't find any relevant upcoming events."
+
+        conflict_free = [a for a in context.assessments if not a.timetable_conflicts and not a.exam_conflicts]
+        conflicted = [a for a in context.assessments if a.timetable_conflicts or a.exam_conflicts]
+        lines: List[str] = []
+
+        if conflict_free:
+            lines.append("Events with no schedule conflicts:")
+            for a in conflict_free:
+                if a.already_registered:
+                    note = f" (you're already registered -- {a.registration_status})"
+                else:
+                    note = f" ({a.availability.value})"
+                lines.append(f"- {a.event.title} on {a.event.start_at.isoformat()} at {a.event.location}{note}")
+
+        if conflicted:
+            lines.append("Events that conflict with your academic schedule:")
+            for a in conflicted:
+                reasons = [f"class {c.course_code}" for c in a.timetable_conflicts]
+                reasons += [f"{c.course_code} exam" for c in a.exam_conflicts]
+                lines.append(f"- {a.event.title}: conflicts with {', '.join(reasons)}")
+
+        return "\n".join(lines)
+
+    def _render_events_policy(self, context: EventsResponseContext) -> str:
+        if not context.evidence:
+            return "I couldn't find any policy evidence covering that question, so I can't answer it reliably."
+        lines = ["Here's what the policy documents say:"]
+        for ev in context.evidence[:3]:
+            lines.append(f"- ({ev.document_id}, {ev.section}): {ev.snippet}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Campus Services Agent
+    # ------------------------------------------------------------------
+
+    def classify_services_intent(self, query: str) -> ServicesIntentResult:
+        return ServicesIntentResult(intent=_classify_services(query))
+
+    def generate_services_response(self, context: ServicesResponseContext) -> str:
+        if context.verification_status == VerificationStatus.FAILED:
+            if context.student_name is None:
+                return "I couldn't find a student record matching that request, so I can't answer this."
+            if context.intent == ServicesIntent.UNKNOWN:
+                return (
+                    "I can help with checking the status of your campus service cases, or campus "
+                    "services policy questions -- I couldn't tell what you're asking for here."
+                )
+            return "I couldn't complete this request: " + "; ".join(context.errors or ["a data problem occurred"])
+
+        hedge = "Note: I couldn't fully confirm this, so treat it as provisional. " if context.verification_status == VerificationStatus.NEEDS_REVIEW else ""
+        if context.intent == ServicesIntent.CASE_STATUS:
+            return hedge + self._render_case_assessments(context)
+        if context.intent == ServicesIntent.POLICY_QUESTION:
+            return hedge + self._render_services_policy(context)
+        return (
+            "I can help with checking the status of your campus service cases, or campus services "
+            "policy questions -- I couldn't tell what you're asking for here."
+        )
+
+    def _render_case_assessments(self, context: ServicesResponseContext) -> str:
+        if not context.case_assessments:
+            return "You have no recorded campus service cases."
+
+        lines = ["Your campus service cases:"]
+        overdue = []
+        for a in context.case_assessments:
+            breach_note = ""
+            if a.response_breached and a.resolution_breached:
+                breach_note = " -- OVERDUE (response and resolution both past due)"
+            elif a.resolution_breached:
+                breach_note = " -- OVERDUE (resolution past due)"
+            elif a.response_breached:
+                breach_note = " -- response past due"
+            lines.append(f"- {a.case.case_code} ({a.case.category}, {a.case.priority}, {a.case.status}){breach_note}")
+            if a.response_breached or a.resolution_breached:
+                overdue.append(a.case.case_code)
+
+        if overdue:
+            lines.append(f"Overdue case(s) requiring attention: {', '.join(overdue)}.")
+        else:
+            lines.append("No cases are currently overdue on their SLA.")
+
+        if context.evidence:
+            lines.append(f"Source: {context.evidence[0].document_id}, section '{context.evidence[0].section}'.")
+
+        return "\n".join(lines)
+
+    def _render_services_policy(self, context: ServicesResponseContext) -> str:
         if not context.evidence:
             return "I couldn't find any policy evidence covering that question, so I can't answer it reliably."
         lines = ["Here's what the policy documents say:"]

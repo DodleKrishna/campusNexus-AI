@@ -249,6 +249,41 @@ class ContextService:
         self._session.refresh(record)
         return record
 
+    def update_tool_call_record(
+        self,
+        tool_call_id: str,
+        status: ToolExecutionStatus,
+        result_data: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        postcondition_verified: Optional[bool] = None,
+        executed_at: Optional[datetime] = None,
+    ) -> ToolCallRecord:
+        """Update a previously-recorded tool call in place (status/result/postcondition).
+
+        ``record_tool_call`` above is create-or-dedup (a retried call with the
+        same idempotency_key gets back the existing row unchanged); this is
+        the explicit update path the Action Agent uses to move a PENDING
+        record it created at proposal time to its real SUCCESS/FAILED
+        outcome once the tool actually runs.
+        """
+        record = self._session.execute(
+            select(ToolCallRecord).where(ToolCallRecord.tool_call_id == tool_call_id)
+        ).scalar_one_or_none()
+        if record is None:
+            raise ValueError(f"unknown tool_call_id: {tool_call_id!r}")
+        record.status = status
+        if result_data is not None:
+            record.result_data = result_data
+        if error is not None:
+            record.error = error
+        if postcondition_verified is not None:
+            record.postcondition_verified = postcondition_verified
+        if executed_at is not None:
+            record.executed_at = executed_at
+        self._session.commit()
+        self._session.refresh(record)
+        return record
+
     # ------------------------------------------------------------------
     # Approvals
     # ------------------------------------------------------------------

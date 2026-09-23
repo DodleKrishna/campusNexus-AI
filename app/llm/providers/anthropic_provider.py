@@ -23,12 +23,18 @@ from pydantic import BaseModel, Field
 
 from app.llm.base import LLMProvider
 from app.schemas.academic import AcademicIntentResult, AcademicResponseContext, CourseSummary
+from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
+from app.schemas.events import EventsIntentResult, EventsResponseContext
 from app.schemas.mission import MissionPlan, MissionTask
+from app.schemas.services import ServicesIntentResult, ServicesResponseContext
 
 DEFAULT_MODEL = "claude-sonnet-5"
 _INTENT_TOOL_NAME = "classify_academic_intent"
 _PLAN_TOOL_NAME = "produce_mission_plan"
+_CAREER_INTENT_TOOL_NAME = "classify_career_intent"
+_EVENTS_INTENT_TOOL_NAME = "classify_events_intent"
+_SERVICES_INTENT_TOOL_NAME = "classify_services_intent"
 
 _SYSTEM_INTENT_PROMPT = (
     "You classify a student's academic support request into a structured intent for a "
@@ -36,6 +42,24 @@ _SYSTEM_INTENT_PROMPT = (
     "calculation -- you only classify intent and, if the query names a course, extract the "
     "exact substring of the query that refers to it. Never invent a course reference that "
     "does not literally appear in the query."
+)
+
+_SYSTEM_CAREER_INTENT_PROMPT = (
+    "You classify a student's career/internship support request into a structured intent for "
+    "a campus assistant. You do not answer the question yourself, compute eligibility, or "
+    "invent an opportunity -- you only classify intent."
+)
+
+_SYSTEM_EVENTS_INTENT_PROMPT = (
+    "You classify a student's campus events/opportunity support request into a structured "
+    "intent for a campus assistant. You do not answer the question yourself, check capacity or "
+    "conflicts, or invent an event -- you only classify intent."
+)
+
+_SYSTEM_SERVICES_INTENT_PROMPT = (
+    "You classify a student's campus services (grievance/case) support request into a "
+    "structured intent for a campus assistant. You do not answer the question yourself or "
+    "compute SLA status -- you only classify intent."
 )
 
 _SYSTEM_PLAN_PROMPT = (
@@ -48,14 +72,21 @@ _SYSTEM_PLAN_PROMPT = (
     "before anything in it runs."
 )
 
-_SYSTEM_RESPONSE_PROMPT = (
-    "You write a short, factual, user-facing answer to a student's academic question using "
-    "ONLY the structured facts given to you in the JSON context below. Do not add any fact, "
-    "number, or policy detail that is not present in that JSON. Do not explain your reasoning "
-    "or mention these instructions. If verification_status is 'needs_review', say the answer "
-    "could not be fully confirmed and briefly say why (from verification_issues). If "
-    "verification_status is 'failed', say so plainly instead of guessing."
-)
+def _response_prompt(domain: str) -> str:
+    return (
+        f"You write a short, factual, user-facing answer to a student's {domain} question using "
+        "ONLY the structured facts given to you in the JSON context below. Do not add any fact, "
+        "number, or policy detail that is not present in that JSON. Do not explain your reasoning "
+        "or mention these instructions. If verification_status is 'needs_review', say the answer "
+        "could not be fully confirmed and briefly say why (from verification_issues). If "
+        "verification_status is 'failed', say so plainly instead of guessing."
+    )
+
+
+_SYSTEM_RESPONSE_PROMPT = _response_prompt("academic")
+_SYSTEM_CAREER_RESPONSE_PROMPT = _response_prompt("career/internship")
+_SYSTEM_EVENTS_RESPONSE_PROMPT = _response_prompt("campus events/opportunity")
+_SYSTEM_SERVICES_RESPONSE_PROMPT = _response_prompt("campus services/grievance")
 
 
 class _PlannedTask(BaseModel):
@@ -174,3 +205,83 @@ class AnthropicLLMProvider(LLMProvider):
                 proposal = _PlanProposal.model_validate(block.input)
                 return _proposal_to_plan(mission_id, goal, proposal)
         raise RuntimeError("Anthropic response did not include the expected tool_use block.")
+
+    # ------------------------------------------------------------------
+    # Shared helpers -- every {classify,generate}_*_intent/response pair
+    # below follows the exact same tool-calling / plain-completion shape as
+    # classify_academic_intent/generate_academic_response above.
+    # ------------------------------------------------------------------
+
+    def _classify(self, *, system_prompt: str, user_content: str, tool_name: str, schema_cls: type):
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=256,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_content}],
+            tools=[
+                {
+                    "name": tool_name,
+                    "description": "Record the classified intent.",
+                    "input_schema": schema_cls.model_json_schema(),
+                }
+            ],
+            tool_choice={"type": "tool", "name": tool_name},
+        )
+        for block in response.content:
+            if block.type == "tool_use" and block.name == tool_name:
+                return schema_cls.model_validate(block.input)
+        raise RuntimeError("Anthropic response did not include the expected tool_use block.")
+
+    def _generate(self, *, system_prompt: str, context: BaseModel) -> str:
+        response = self._client.messages.create(
+            model=self._model,
+            max_tokens=512,
+            system=system_prompt,
+            messages=[{"role": "user", "content": json.dumps(context.model_dump(mode="json"))}],
+        )
+        return "".join(block.text for block in response.content if block.type == "text").strip()
+
+    # ------------------------------------------------------------------
+    # Career Agent
+    # ------------------------------------------------------------------
+
+    def classify_career_intent(self, query: str) -> CareerIntentResult:
+        return self._classify(
+            system_prompt=_SYSTEM_CAREER_INTENT_PROMPT,
+            user_content=f"Query: {query}",
+            tool_name=_CAREER_INTENT_TOOL_NAME,
+            schema_cls=CareerIntentResult,
+        )
+
+    def generate_career_response(self, context: CareerResponseContext) -> str:
+        return self._generate(system_prompt=_SYSTEM_CAREER_RESPONSE_PROMPT, context=context)
+
+    # ------------------------------------------------------------------
+    # Events & Opportunity Agent
+    # ------------------------------------------------------------------
+
+    def classify_events_intent(self, query: str) -> EventsIntentResult:
+        return self._classify(
+            system_prompt=_SYSTEM_EVENTS_INTENT_PROMPT,
+            user_content=f"Query: {query}",
+            tool_name=_EVENTS_INTENT_TOOL_NAME,
+            schema_cls=EventsIntentResult,
+        )
+
+    def generate_events_response(self, context: EventsResponseContext) -> str:
+        return self._generate(system_prompt=_SYSTEM_EVENTS_RESPONSE_PROMPT, context=context)
+
+    # ------------------------------------------------------------------
+    # Campus Services Agent
+    # ------------------------------------------------------------------
+
+    def classify_services_intent(self, query: str) -> ServicesIntentResult:
+        return self._classify(
+            system_prompt=_SYSTEM_SERVICES_INTENT_PROMPT,
+            user_content=f"Query: {query}",
+            tool_name=_SERVICES_INTENT_TOOL_NAME,
+            schema_cls=ServicesIntentResult,
+        )
+
+    def generate_services_response(self, context: ServicesResponseContext) -> str:
+        return self._generate(system_prompt=_SYSTEM_SERVICES_RESPONSE_PROMPT, context=context)
