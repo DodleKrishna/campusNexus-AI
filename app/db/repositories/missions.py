@@ -64,3 +64,21 @@ def count_approvals_for_step(session: Session, step_id: str) -> int:
 
     stmt = select(func.count()).select_from(ApprovalRecord).where(ApprovalRecord.step_id == step_id)
     return session.execute(stmt).scalar_one()
+
+
+def list_pending_approvals(
+    session: Session, *, mission_id: str | None = None, student_id: str | None = None
+) -> list[ApprovalRecord]:
+    """Every PENDING approval, optionally scoped to one mission or one
+    student (joined via Mission.user_id -- the student the mission ran for)
+    -- the Phase 8 Action Center's "what needs my decision" list, and a
+    STUDENT-role API caller's own-approvals-only view."""
+    from app.schemas.enums import ApprovalStatus
+
+    stmt = select(ApprovalRecord).where(ApprovalRecord.status == ApprovalStatus.PENDING)
+    if mission_id is not None:
+        stmt = stmt.where(ApprovalRecord.mission_id == mission_id)
+    if student_id is not None:
+        stmt = stmt.join(Mission, ApprovalRecord.mission_id == Mission.mission_id).where(Mission.user_id == student_id)
+    stmt = stmt.order_by(ApprovalRecord.created_at)
+    return list(session.execute(stmt).scalars().all())

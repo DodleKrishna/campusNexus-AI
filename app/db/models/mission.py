@@ -75,6 +75,12 @@ class AgentRun(Base):
     shape of the Phase 1 ``AgentResult`` schema; unlike the domain tables above,
     this data has no fixed relational shape to normalize into, so JSON storage
     is the appropriate (not merely convenient) representation here.
+
+    ``evidence`` (Phase 8): a list of already-JSON-safe
+    ``app.schemas.evidence.Evidence.model_dump(mode="json")`` dicts -- closes
+    a documented Phase 5 gap (AgentResult.evidence was never persisted, so a
+    resumed mission's pre-interruption steps had no retrievable citations).
+    Additive and backward compatible: defaults to ``[]``.
     """
 
     __tablename__ = "agent_runs"
@@ -86,6 +92,7 @@ class AgentRun(Base):
     status: Mapped[AgentResultStatus] = mapped_column(_enum_column(AgentResultStatus))
     facts: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     errors: Mapped[List[str]] = mapped_column(JSON, default=list)
+    evidence: Mapped[List[Dict[str, Any]]] = mapped_column(JSON, default=list)
     started_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
     completed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)

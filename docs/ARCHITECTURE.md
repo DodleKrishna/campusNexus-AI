@@ -569,12 +569,124 @@ caller-supplied data) is unchanged and still applies to the Action Agent's own p
   (`app/llm/providers/mock.py::_build_case_creation_plan`) is a standalone Action Agent task rather than
   chained after a Campus Services gather task -- chaining would make one action's approval-pause depend on how
   many *other* cases the student happens to already have, which is real but orthogonal.
-- Schedule-conflict data for a registration proposal is read from the upstream Events Agent's already-computed
+- ~~Schedule-conflict data for a registration proposal is read from the upstream Events Agent's already-computed
   assessment (reused, not re-derived) rather than the Action Agent independently re-running conflict detection
-  against raw timetable/exam data; capacity and duplicate-registration are what get independently rechecked
-  immediately before commit, since those are what can realistically change between propose and execute.
-- No FastAPI/Streamlit UI exists yet for reviewing/approving pending actions -- `ApprovalGate.decide` is a
-  plain Python call, demonstrated via `scripts/demo_actions.py` and tests only.
+  against raw timetable/exam data~~ -- **closed in Phase 8 §11**: the execute-time recheck now independently
+  re-derives conflicts from the student's current timetable/exams. This remains true only for the *propose-time*
+  precheck, which still reuses the upstream assessment (cheap, and re-verified for real immediately before commit).
+- ~~No FastAPI/Streamlit UI exists yet for reviewing/approving pending actions~~ -- **closed in Phase 8**: see
+  below.
+
+## CampusNexus Application: FastAPI + Streamlit (Phase 8)
+
+Phase 8 adds the first application surface -- a FastAPI backend (`app/api/`) and a Streamlit demo UI
+(`streamlit_app/`) -- over the multi-agent backend Phases 1-7 already built. Neither layer reimplements agent,
+rule, or verification logic: every route/screen composes existing `app.services`/`app.db.repositories`/
+`app.graph`/`app.tools` calls. This is a presentation layer, not a new component -- it sits outside CLAUDE.md's
+frozen 10-component list by design.
+
+### FastAPI (`app/api/`)
+
+- **Factory pattern**: `app/api/main.py::create_app(session_factory, knowledge_service, llm_provider,
+  tool_gateway=None)` builds a fully-wired `FastAPI` app -- the same `MissionOrchestrator`/`AgentRegistry`
+  wiring every demo script already does, stored on `app.state` and read back through per-request FastAPI
+  dependencies (`app/api/deps.py`). The module-level `app` (for `uvicorn app.api.main:app`) is just
+  `create_app(...)` called with the real dev DB/Chroma store/`CAMPUSNEXUS_LLM_PROVIDER`; tests call
+  `create_app(...)` directly with an isolated temp DB and a fresh `MockLLMProvider`, so the exact same routers/
+  dependencies/authorization logic run against test state -- nothing is mocked at the route level.
+- **Demo identity & trust boundary** (`app/api/identities.py`, spec section 3): `DEMO_IDENTITIES` is a fixed,
+  small, server-side dict (`student-demo`/`student-alt` backed by real seeded `Student` rows with a live-resolved
+  display name; `faculty-demo`/`admin-demo` backed by nothing but a constant label, exactly Phase 7's
+  `"admin-demo"` approver-string pattern formalized). A request identifies itself only via the opaque
+  `X-Demo-Identity` header; `app/api/deps.py::get_identity` looks that key up and is the *only* place a
+  request's role/student_id is ever established -- no endpoint accepts either as a trusted client-supplied
+  value, and `require_role`/`require_student_ownership` enforce them on every relevant route. **This is
+  explicitly a local-only demo convenience, not authentication.** A real deployment needs a genuine
+  authentication/SSO layer upstream of the Orchestrator that derives a verified identity from a real session
+  -- there is no password, token, or session concept here at all, and this app must never be exposed publicly
+  as-is.
+- **Two independent authorization layers**: the API boundary checks role/ownership *before* ever calling into
+  the Orchestrator/Action Agent; the Phase 7 `ToolGateway` still separately checks role/ownership again inside
+  `ActionAgent._execute` before any write. Removing either layer would still leave the other standing -- this
+  is deliberate defense in depth, not redundancy to be trimmed.
+- **Mission endpoints** (`app/api/routers/missions.py`) are thin wrappers around
+  `MissionOrchestrator.run_mission`/`resume_mission` -- both already-synchronous, already-blocking calls (as
+  everywhere else in this codebase); FastAPI runs a plain `def` route in its threadpool automatically, so no
+  background job queue was needed for a demo-scale app. `POST /missions` forces a STUDENT caller's mission onto
+  their own `student_id` (a mismatched explicit value is a 400, not silently overridden) and requires
+  ADMIN/FACULTY callers to name one explicitly (staff-assisting-a-student case).
+- **Evidence persistence gap closed**: `AgentRun` (Phase 1) never persisted `AgentResult.evidence` (a
+  documented Phase 5 limitation -- a resumed mission's pre-interruption steps had no retrievable citations).
+  Phase 8 adds an additive `evidence` JSON column, threads it through
+  `ContextService.record_agent_result(evidence=...)`, and the one call site in
+  `orchestrator.py::_dispatch_and_collect` now passes `outcome.agent_result.evidence` through (and
+  `_rebuild_results`, the resume path, reads it back) -- this is what makes `GET /missions/{id}/evidence` and
+  the Action Center's "supporting evidence" real, not reconstructed or approximated.
+- **Timeline mapping** (`app/api/timeline.py::build_timeline`): a pure function merging two kinds of *real*
+  persisted events -- each `MissionStep.started_at` (already written by the Orchestrator before every
+  dispatch) becomes a RUNNING entry, and every `AuditLog` row maps deterministically (via its `event_type`,
+  and for `task_verified`/`mission_finalized` the status embedded in the message text the Orchestrator already
+  writes) onto the spec's PLANNING/RUNNING/VERIFYING/WAITING_FOR_APPROVAL/COMPLETED/NEEDS_REVIEW/FAILED
+  vocabulary. Nothing is fabricated -- there is no "VERIFYING" *event* recorded today (verification completes
+  before an event is ever appended), so that state is inferred only from the checks a caller can already see
+  (`task_verified`'s embedded status), never invented with a synthetic timestamp.
+- **Dashboard composition** (`app/api/dashboard.py`): calls `app.services.{academic,career,events,services}`
+  and `app/db/repositories/calendar.py` exactly as the corresponding agents do. The one real computation here
+  (attendance percentage/eligibility) reuses the *exact* deterministic pipeline the Academic Agent uses
+  (`extract_attendance_threshold` over real RAG evidence, then `compute_attendance`) rather than an
+  ungrounded/hardcoded percentage -- a required-attendance figure is a policy fact, not something to invent
+  client-side, per CLAUDE.md's RAG-grounding rule.
+
+### Streamlit (`streamlit_app/`)
+
+- Single-entry app (`app.py`) with a persistent sidebar identity switcher (options imported directly from
+  `app.api.identities`, so the picker can never drift from the server-side allowlist) and a section radio
+  (Dashboard / Mission Workspace / Action Center / Campus Operations -- the last gated to ADMIN/FACULTY
+  identities client-side, and enforced again server-side regardless).
+- `api_client.py` is the *only* way any section talks to the backend -- no section imports `app.db`/
+  `app.services`/`app.graph` directly, so the UI can never drift from what the API actually enforces. Test-only
+  offline mode: `set_default_http_client(fastapi.testclient.TestClient(app))` points every `ApiClient`
+  constructed during a test at the real FastAPI app in-process. (A plain `httpx.Client` cannot call an ASGI app
+  synchronously on its own in the installed httpx version -- `ASGITransport` there only implements the async
+  interface; `TestClient` is what actually bridges that, and it's a real `httpx.Client` subclass, so it's a
+  drop-in `http_client`.)
+- **Action Center duplicate-submission guard** (`sections/action_center.py`): each pending-approval card sets a
+  per-approval `st.session_state` flag *before* calling the decision endpoint, so a rerun triggered by that same
+  click never re-renders the Approve/Reject buttons for an already-decided card -- the backend's 409-on-
+  already-resolved (Phase 7's `ApprovalGateError`) is the second line of defense if a request somehow still
+  lands twice.
+- Visual direction: light background, navy/teal accents (`theme.py`), Inter typeface, status badges mapped
+  from the same vocabulary the timeline uses, minimal animation.
+
+### Testing scope (spec section 14)
+
+Test depth is intentionally asymmetric: the spec's detailed priority list (contract validation, authorization,
+duplicate prevention, evidence rendering, permission separation) is API-shaped, so `tests/test_api_*.py` covers
+it thoroughly against the real FastAPI app + an isolated seeded DB (the same `create_app` factory tests and
+production both use). `tests/test_streamlit_app.py` is deliberately light -- a handful of
+`streamlit.testing.v1.AppTest` smoke tests (app loads, identity switch changes what's visible, each section
+renders without exception) proving the screens work against real data, not exhaustive interaction testing.
+
+### Genuine separate-process persistence test (spec section 12)
+
+`tests/test_persistence_subprocess.py` spawns `scripts/_persistence_subprocess_helper.py` (test-only,
+underscore-prefixed) as two real, independent `subprocess.run` OS processes against one isolated temp DB --
+not two `MissionOrchestrator` instances sharing the test's own interpreter (that same-process variant is
+`tests/test_action_orchestration.py::test_cross_process_approval_and_resumption`, already covering the
+same-process case). Process A proposes a registration and exits completely; process B (a fresh Python
+interpreter) approves and resumes it; a third invocation of process B's command demonstrates that repeated
+resumption never double-registers.
+
+### Known limitations
+
+- No production authentication/SSO, HTTPS, or rate limiting -- see the trust-boundary note above. Do not
+  deploy `app/api/`/`streamlit_app/` publicly as-is.
+- No background job queue: `POST /missions` and `.../resume` block for the duration of the mission run
+  (FastAPI's threadpool absorbs this for the demo's scale; a production system with slow/long-running agent
+  calls would want an async task queue and a polling/websocket status API instead).
+- The Streamlit app talks to the FastAPI backend over real HTTP (`http://127.0.0.1:8000` by default) -- both
+  processes must be started separately for a live demo (`uvicorn app.api.main:app` then
+  `streamlit run streamlit_app/app.py`).
 
 ## Non-Goals (for now)
 

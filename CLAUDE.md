@@ -99,6 +99,30 @@ across a component boundary. Free text is allowed only in the final user-facing 
   world state actually changed as intended (not just "tool call returned 200").
 - If post-condition verification fails, the mission is marked failed/needs-replan — it is never silently
   swallowed or retried blindly.
+- **Implemented in Phase 8** (`app/agents/action/agent.py::_execute`): the pre-execution recheck independently
+  re-derives every precondition against *current* DB state immediately before committing — for
+  `register_event`, this includes re-running real schedule-conflict detection (student's current timetable/
+  exams, not the propose-time snapshot). Any recheck result other than a clean VERIFIED — including a soft
+  NEEDS_REVIEW, e.g. a newly-appeared conflict — blocks execution outright at this stage. Unlike propose-time
+  (where NEEDS_REVIEW still proceeds to human approval, since a human hasn't looked yet), at execute-time a
+  human has already approved based on what could now be stale information, so nothing short of a clean
+  recheck may proceed.
+
+## Demo Application & Identity (Phase 8)
+
+- `app/api/` (FastAPI) and `streamlit_app/` (Streamlit) are a presentation/access layer only — they compose
+  existing `app.services`/`app.db.repositories`/`app.graph`/`app.tools` calls and must never reimplement
+  agent, rule, or verification logic.
+- There is no production authentication. `app/api/identities.py` is a fixed, explicit, server-side allowlist
+  of demo identities (`X-Demo-Identity` header → role + optional student_id); no endpoint ever trusts a
+  client-supplied role or student_id directly. Role and ownership are enforced at the API boundary
+  (`app/api/deps.py`) *and* again inside the existing Tool Gateway (Phase 7) — two independent layers, not one
+  substituting for the other.
+- `AgentRun` now persists `evidence` (JSON, additive) alongside `facts`/`errors` — any future agent's
+  `AgentResult.evidence` is automatically captured by the existing `ContextService.record_agent_result` call
+  in `app/graph/orchestrator.py`; no per-agent wiring is needed.
+- Do not deploy `app/api/`/`streamlit_app/` publicly as-is — see `docs/ARCHITECTURE.md`'s Phase 8 trust-boundary
+  note for what a real deployment still needs (authentication/SSO, HTTPS, rate limiting).
 
 ## Idempotency Requirement
 
@@ -128,11 +152,15 @@ across a component boundary. Free text is allowed only in the final user-facing 
 
 ## Important Development Commands
 
-FastAPI/`uvicorn` and the Streamlit UI are not yet scaffolded. What exists and works today:
+All commands below are plain `python`/console-script invocations and run identically in PowerShell, cmd, or a
+POSIX shell. Where a command needs an environment variable set explicitly, the PowerShell form is
+`$env:NAME = "value"` (not `export NAME=value`).
 
 ```
-# Install dependencies (editable install, plus pytest)
+# Install dependencies (editable install; add the "app" extra for FastAPI/Streamlit, "llm" for
+# the real Anthropic provider)
 pip install -e ".[dev]"
+pip install -e ".[dev,app]"
 
 # Initialize the dev database and load idempotent seed data
 python scripts/seed_data.py
@@ -187,6 +215,19 @@ python eval/action_scenarios.py
 # unauthorized access, action modification after approval, fabricated-result
 # postcondition catch).
 python scripts/demo_actions.py --student STU-DEMO-001
+
+# Run the genuine separate-process mission-recovery test (Phase 8 §12): spawns
+# scripts/_persistence_subprocess_helper.py as two real OS processes against an
+# isolated temp DB, proving pause/approve/resume survives a real process boundary.
+pytest tests/test_persistence_subprocess.py -v
+
+# Start the FastAPI backend (reads the same CAMPUSNEXUS_* env vars as every script
+# above; defaults to the dev DB + mock LLM). Interactive API docs at /docs.
+uvicorn app.api.main:app --reload --port 8000
+
+# Start the Streamlit demo UI (a separate process/terminal; talks to the FastAPI
+# backend over HTTP at http://127.0.0.1:8000 by default -- start the API first).
+streamlit run streamlit_app/app.py
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see

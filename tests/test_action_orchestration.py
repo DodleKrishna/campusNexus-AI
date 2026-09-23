@@ -25,8 +25,11 @@ from app.tools.build import build_default_tool_registry
 
 DEMO_STUDENT = "STU-DEMO-001"
 
+# "Competitive Coding Contest" is genuinely conflict-free against
+# STU-DEMO-001's timetable/exams -- unlike "Tech Talk: Cloud Native
+# Systems", which really does overlap CS301 (see tests/test_action_safety.py).
 REGISTRATION_GOAL = (
-    "Find the workshop titled 'Tech Talk: Cloud Native Systems', verify there are no conflicts with my "
+    "Find the workshop titled 'Competitive Coding Contest', verify there are no conflicts with my "
     "classes or exams, and register me for it."
 )
 CASE_GOAL = "File a complaint: 'Hostel washroom tap still leaking after last repair.'"

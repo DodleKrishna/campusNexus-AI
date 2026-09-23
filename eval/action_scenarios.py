@@ -50,7 +50,15 @@ from scripts.seed_data import run_seed
 DEMO_STUDENT = "STU-DEMO-001"
 UNKNOWN_STUDENT = "STU-NOPE-999"
 
+# "Competitive Coding Contest" is genuinely conflict-free against
+# STU-DEMO-001's timetable/exams -- unlike "Tech Talk: Cloud Native
+# Systems", which really does overlap CS301 (Phase 8 §11 safety scenario,
+# see scenario_schedule_conflict_blocks_execution below).
 REGISTER_GOAL = (
+    "Find the workshop titled 'Competitive Coding Contest', verify there are no conflicts with my "
+    "classes or exams, and register me for it."
+)
+CONFLICTING_REGISTER_GOAL = (
     "Find the workshop titled 'Tech Talk: Cloud Native Systems', verify there are no conflicts with my "
     "classes or exams, and register me for it."
 )
@@ -123,7 +131,7 @@ def scenario_successful_registration_persists_and_verifies(orchestrator, session
     final2 = orchestrator.resume_mission(final["mission_id"])
 
     with session_factory() as session:
-        reg = get_registration(session, 6, DEMO_STUDENT)  # event 6 = Tech Talk: Cloud Native Systems
+        reg = get_registration(session, 10, DEMO_STUDENT)  # event 10 = Competitive Coding Contest
     passed = (
         paused
         and final2["mission_status"] == MissionStatus.COMPLETED
@@ -222,6 +230,26 @@ def scenario_interrupted_then_resumed_completes_exactly_once(orchestrator, sessi
     return {"passed": passed, "case_code": case_code}
 
 
+def scenario_schedule_conflict_blocks_execution_after_approval(orchestrator, session_factory, knowledge_service=None, tool_gateway=None, llm=None) -> Dict[str, Any]:
+    """Phase 8 §11: a genuine schedule conflict (Tech Talk: Cloud Native
+    Systems really does overlap CS301) must block execution even though it
+    was already approved -- proving the execute-time recheck independently
+    re-derives conflicts rather than trusting the propose-time snapshot."""
+    final = orchestrator.run_mission(CONFLICTING_REGISTER_GOAL, user_id=DEMO_STUDENT, user_role=UserRole.STUDENT, student_id=DEMO_STUDENT)
+    task_id = _action_task_id(final)
+    _approve(session_factory, task_id)
+    final2 = orchestrator.resume_mission(final["mission_id"])
+
+    with session_factory() as session:
+        reg = get_registration(session, 6, DEMO_STUDENT)  # event 6 = Tech Talk: Cloud Native Systems
+    passed = (
+        final2["mission_status"] == MissionStatus.FAILED
+        and reg is None
+        and any("longer valid" in e for e in final2["agent_results"][task_id].errors)
+    )
+    return {"passed": passed, "final_status": final2["mission_status"].value, "errors": final2["agent_results"][task_id].errors}
+
+
 SCENARIOS = [
     ("successful-registration-persists-and-verifies", scenario_successful_registration_persists_and_verifies),
     ("rejected-action-never-executes", scenario_rejected_action_never_executes),
@@ -230,6 +258,7 @@ SCENARIOS = [
     ("full-event-precheck-fails-before-approval", scenario_full_event_precheck_fails_before_approval),
     ("invalid-student-identity-never-reaches-approval", scenario_invalid_student_identity_never_reaches_approval),
     ("interrupted-then-resumed-completes-exactly-once", scenario_interrupted_then_resumed_completes_exactly_once),
+    ("schedule-conflict-blocks-execution-after-approval", scenario_schedule_conflict_blocks_execution_after_approval),
 ]
 
 

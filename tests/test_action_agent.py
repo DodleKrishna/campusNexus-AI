@@ -207,9 +207,13 @@ def test_redispatch_after_rejection_never_executes(seeded_session, knowledge_ser
 
 
 def test_approved_registration_executes_and_verifies(seeded_session, knowledge_service) -> None:
+    # "Competitive Coding Contest" (event_id=10) is genuinely conflict-free
+    # against STU-DEMO-001's timetable/exams -- unlike "Tech Talk: Cloud
+    # Native Systems" (event_id=6), which really does overlap CS301 (see
+    # tests/test_action_safety.py) and is used there deliberately instead.
     _setup_mission(seeded_session, "m-11", "t-1")
     agent = _agent(seeded_session, knowledge_service)
-    agent.handle(_message("m-11", "t-1", constraints={"tool_name": "register_event", "event_title": "Tech Talk: Cloud Native Systems"}))
+    agent.handle(_message("m-11", "t-1", constraints={"tool_name": "register_event", "event_title": "Competitive Coding Contest"}))
 
     from app.db.repositories.missions import get_latest_approval_for_step
 
@@ -223,7 +227,7 @@ def test_approved_registration_executes_and_verifies(seeded_session, knowledge_s
 
     student = seeded_session.execute(select(Student).where(Student.student_code == DEMO_STUDENT)).scalar_one()
     rows = seeded_session.execute(
-        select(EventRegistration).where(EventRegistration.student_id == student.id, EventRegistration.event_id == 6)
+        select(EventRegistration).where(EventRegistration.student_id == student.id, EventRegistration.event_id == 10)
     ).scalars().all()
     assert len(rows) == 1
     assert rows[0].status.value == "confirmed"
@@ -236,7 +240,7 @@ def test_duplicate_execution_via_redispatch_never_double_registers(seeded_sessio
     without re-executing."""
     _setup_mission(seeded_session, "m-12", "t-1")
     agent = _agent(seeded_session, knowledge_service)
-    agent.handle(_message("m-12", "t-1", constraints={"tool_name": "register_event", "event_title": "Tech Talk: Cloud Native Systems"}))
+    agent.handle(_message("m-12", "t-1", constraints={"tool_name": "register_event", "event_title": "Competitive Coding Contest"}))
 
     from app.db.repositories.missions import get_latest_approval_for_step
 
@@ -252,7 +256,7 @@ def test_duplicate_execution_via_redispatch_never_double_registers(seeded_sessio
 
     student = seeded_session.execute(select(Student).where(Student.student_code == DEMO_STUDENT)).scalar_one()
     rows = seeded_session.execute(
-        select(EventRegistration).where(EventRegistration.student_id == student.id, EventRegistration.event_id == 6)
+        select(EventRegistration).where(EventRegistration.student_id == student.id, EventRegistration.event_id == 10)
     ).scalars().all()
     assert len(rows) == 1
 

@@ -47,7 +47,16 @@ from app.services.context import ContextService
 from app.services.knowledge import KnowledgeService
 from app.tools.build import build_default_tool_registry
 
+# "Competitive Coding Contest" is genuinely conflict-free against
+# STU-DEMO-001's timetable/exams -- unlike "Tech Talk: Cloud Native
+# Systems" (CONFLICTING_REGISTER_GOAL below), which really does overlap
+# CS301 and is used deliberately in Demo D8 to show the Phase 8 §11
+# execute-time safety recheck catching a real conflict.
 REGISTER_GOAL = (
+    "Find the workshop titled 'Competitive Coding Contest', verify there are no conflicts with my "
+    "classes or exams, and register me for it."
+)
+CONFLICTING_REGISTER_GOAL = (
     "Find the workshop titled 'Tech Talk: Cloud Native Systems', verify there are no conflicts with my "
     "classes or exams, and register me for it."
 )
@@ -161,18 +170,18 @@ class Demo:
     def demo_a_workshop_registration(self, student: str, admin: str) -> Optional[str]:
         _header("DEMO A -- WORKSHOP REGISTRATION")
         with self.session_factory() as session:
-            before = get_registration(session, 6, student)
+            before = get_registration(session, 10, student)
             _header("DB STATE BEFORE")
-            print(f"event_id=6 ('Tech Talk: Cloud Native Systems') registration for {student}: {before.status.value if before else '(none)'}")
+            print(f"event_id=10 ('Competitive Coding Contest') registration for {student}: {before.status.value if before else '(none)'}")
 
         final, task_id = self.run_action_mission(REGISTER_GOAL, student, admin, approve=True)
         if task_id is None:
             return None
 
         with self.session_factory() as session:
-            after = get_registration(session, 6, student)
+            after = get_registration(session, 10, student)
             _header("DB STATE AFTER")
-            print(f"event_id=6 registration for {student}: id={after.id if after else None} status={after.status.value if after else '(none)'}")
+            print(f"event_id=10 registration for {student}: id={after.id if after else None} status={after.status.value if after else '(none)'}")
 
         _header("AUDIT TRAIL")
         self.audit_trail(final["mission_id"])
@@ -288,6 +297,15 @@ class Demo:
                 "claim: 'registration succeeded for a nonexistent event_id=999999' -- "
                 f"independent post-check status={verification.status.value}; issues={verification.issues}"
             )
+
+        _header("D8: Schedule conflict blocks execution even after approval (Phase 8 safety improvement)")
+        final, task_id = self.run_action_mission(CONFLICTING_REGISTER_GOAL, student, admin, approve=True)
+        if task_id is not None and task_id in final["agent_results"]:
+            print(f"mission_status={final['mission_status'].value}")
+            print("errors:", final["agent_results"][task_id].errors)
+            with self.session_factory() as session:
+                reg = get_registration(session, 6, student)
+                print(f"event_id=6 ('Tech Talk: Cloud Native Systems') registration for {student}: {reg.status.value if reg else '(none -- blocked)'}")
 
 
 def main() -> int:

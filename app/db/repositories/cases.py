@@ -29,3 +29,12 @@ def get_case_sla(session: Session, case_code: str) -> CaseSLA | None:
         .where(CampusCase.case_code == case_code)
     )
     return session.execute(stmt).scalar_one_or_none()
+
+
+def list_all_cases(session: Session) -> list[CampusCase]:
+    """Every campus case, across every student -- the Phase 8 Campus
+    Operations admin view. Student-scoped reads still go through
+    ``get_student_cases``; this is deliberately unscoped and therefore only
+    ever exposed behind an ADMIN/FACULTY role check at the API boundary."""
+    stmt = select(CampusCase).order_by(CampusCase.created_at.desc())
+    return list(session.execute(stmt).scalars().all())

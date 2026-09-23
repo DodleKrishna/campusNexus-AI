@@ -183,6 +183,7 @@ class ContextService:
         status: AgentResultStatus,
         facts: Optional[Dict[str, Any]] = None,
         errors: Optional[List[str]] = None,
+        evidence: Optional[List[Dict[str, Any]]] = None,
         started_at: Optional[datetime] = None,
         completed_at: Optional[datetime] = None,
     ) -> AgentRun:
@@ -193,6 +194,7 @@ class ContextService:
             status=status,
             facts=facts or {},
             errors=errors or [],
+            evidence=evidence or [],
             started_at=started_at,
             completed_at=completed_at,
         )

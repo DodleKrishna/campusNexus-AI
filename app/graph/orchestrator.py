@@ -34,6 +34,7 @@ from app.graph.validator import validate_plan
 from app.llm.base import LLMProvider
 from app.schemas.agent import AgentResult
 from app.schemas.enums import AgentResultStatus, MissionStatus, TaskStatus, UserRole, VerificationPhase, VerificationStatus
+from app.schemas.evidence import Evidence
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.verification import VerificationResult
 from app.services.context import ContextService
@@ -190,6 +191,7 @@ class MissionOrchestrator:
                 status=run.status,
                 facts=facts,
                 errors=list(run.errors or []),
+                evidence=[Evidence.model_validate(e) for e in (run.evidence or [])],
                 started_at=run.started_at,
                 completed_at=run.completed_at,
             )
@@ -406,6 +408,7 @@ class MissionOrchestrator:
                     status=outcome.agent_result.status,
                     facts=facts_to_persist,
                     errors=outcome.agent_result.errors,
+                    evidence=[e.model_dump(mode="json") for e in outcome.agent_result.evidence],
                     started_at=outcome.agent_result.started_at,
                     completed_at=outcome.agent_result.completed_at,
                 )

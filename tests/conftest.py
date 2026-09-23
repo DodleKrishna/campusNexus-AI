@@ -99,3 +99,34 @@ def knowledge_service(rag_retriever):
     from app.services.knowledge import KnowledgeService
 
     return KnowledgeService(retriever=rag_retriever)
+
+
+# ---------------------------------------------------------------------------
+# Phase 8 API fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def api_app(seeded_session, session_factory, knowledge_service):
+    """A fully-wired FastAPI app (app.api.main.create_app) against the same
+    isolated, freshly-seeded temp DB every other test uses -- never the
+    shared dev DB. ``seeded_session`` is requested only for its seeding side
+    effect (mirrors tests/test_multiagent_orchestration.py's convention)."""
+    from app.api.main import create_app
+    from app.llm.providers.mock import MockLLMProvider
+    from app.tools.build import build_default_tool_registry
+
+    return create_app(
+        session_factory=session_factory,
+        knowledge_service=knowledge_service,
+        llm_provider=MockLLMProvider(),
+        tool_gateway=build_default_tool_registry(),
+    )
+
+
+@pytest.fixture()
+def api_client(api_app):
+    from fastapi.testclient import TestClient
+
+    with TestClient(api_app) as client:
+        yield client

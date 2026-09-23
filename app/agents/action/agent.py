@@ -52,6 +52,7 @@ from app.rules.action_preconditions import (
     check_case_creation,
     check_event_registration,
 )
+from app.rules.event_availability import find_exam_conflicts, find_timetable_conflicts
 from app.schemas.action import ActionProposal
 from app.schemas.agent import AgentMessage, AgentResult
 from app.schemas.enums import (
@@ -67,6 +68,7 @@ from app.schemas.enums import (
 from app.schemas.events import ExamConflict, TimetableConflict
 from app.schemas.tools import ToolCall
 from app.schemas.verification import VerificationCheck, VerificationResult
+from app.services import academic as academic_service
 from app.services import events as events_service
 from app.services.approval_gate import ApprovalGate
 from app.services.context import ContextService
@@ -541,13 +543,29 @@ class ActionAgent:
 
         precheck_checks = self._recheck(tool_call_record.tool_name, arguments, now)
         precheck = self._verifier.verify_pre_action(mission_id=message.mission_id, task_id=message.task_id, checks=precheck_checks)
-        if precheck.status == VerificationStatus.FAILED:
+        if precheck.status != VerificationStatus.VERIFIED:
+            # Unlike propose-time (where NEEDS_REVIEW still proceeds to human
+            # approval), at execute-time a human has *already* approved based
+            # on what could now be stale information -- so anything short of
+            # a clean recheck blocks execution here. A newly-appeared
+            # schedule conflict or capacity/duplicate change since approval
+            # is exactly what this catches.
             self._context.update_tool_call_record(
                 tool_call_record.tool_call_id,
                 status=ToolExecutionStatus.FAILED,
-                error="precondition recheck failed: " + "; ".join(precheck.issues),
+                error="preconditions are no longer valid (recheck): " + "; ".join(precheck.issues),
             )
-            return self._failed_outcome(message, precheck, facts={"tool_name": tool_call_record.tool_name})
+            # Force a hard FAILED verification regardless of whether the
+            # recheck itself came back FAILED or (soft) NEEDS_REVIEW -- at
+            # execute-time there is no "pause and ask a human again" option
+            # left (the approval was already spent), so a NEEDS_REVIEW
+            # recheck must not leave the task BLOCKED with no pending
+            # approval to ever resolve it. See tests/test_action_safety.py.
+            blocked = _new_verification(
+                message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
+                [f"Action blocked: preconditions are no longer valid ({'; '.join(precheck.issues)})."],
+            )
+            return self._failed_outcome(message, blocked, facts={"tool_name": tool_call_record.tool_name})
 
         tool_call = ToolCall(
             tool_call_id=tool_call_record.tool_call_id,
@@ -619,19 +637,27 @@ class ActionAgent:
             event = events_service.get_event_summary(self._session, int(arguments["event_id"])) if student_exists else None
             already_registered = False
             confirmed = 0
+            timetable_conflicts: List[TimetableConflict] = []
+            exam_conflicts: List[ExamConflict] = []
             if student_exists and event is not None:
                 already_registered = (
                     events_service.get_student_registration_status(self._session, str(arguments["student_id"]), event.event_id)
                     is not None
                 )
                 confirmed = events_service.get_registration_count(self._session, event.event_id)
-            # Schedule-conflict data was already established at propose time
-            # (a genuine EventsAgent read); capacity/duplicate are what can
-            # realistically have changed since then, so those are what this
-            # recheck focuses on independently re-confirming.
+                # Independently re-derived from the student's *current*
+                # timetable/exams -- not the propose-time EventsAgent
+                # assessment, which can be stale by the time a human actually
+                # approves (CLAUDE.md post-condition/idempotency spirit: never
+                # trust an earlier snapshot for a safety-relevant recheck).
+                timetable = academic_service.get_timetable(self._session, str(arguments["student_id"]))
+                exams = academic_service.get_exam_schedule(self._session, str(arguments["student_id"]))
+                timetable_conflicts = find_timetable_conflicts(event, timetable)
+                exam_conflicts = find_exam_conflicts(event, exams)
             return check_event_registration(
                 student_exists=student_exists, event=event, confirmed_registrations=confirmed,
-                already_registered=already_registered, now=now, conflict_check_performed=True,
+                already_registered=already_registered, now=now, conflict_check_performed=student_exists and event is not None,
+                timetable_conflicts=timetable_conflicts, exam_conflicts=exam_conflicts,
             )
         if tool_name == "create_calendar_event":
             student = get_student_by_id(self._session, str(arguments["student_id"]))
