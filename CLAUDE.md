@@ -135,6 +135,19 @@ across a component boundary. Free text is allowed only in the final user-facing 
   (the provider's `_ActionSpec`), never values the student did not state.
 - Demo runs use the isolated `data/demo/` environment (`scripts/reset_demo_env.py`), never the dev DB.
 
+## Mission & Action Flow (Phase 10)
+
+- A `register_event` task must depend on an events task plus an Academic timetable task and an Academic
+  exam-schedule task (independent of each other, so they run in parallel). The Action Agent builds its
+  pre-approval conflict check only from those verified upstream facts (`_upstream_schedule_check`); it must
+  never fetch missing academic context itself at propose time -- missing context is reported as not checked.
+- A schedule conflict that is actually found is a hard failure (no approval is created). Both checks stay:
+  the pre-approval check and the execute-time recheck against current DB state. Never remove either.
+- Replanning is bounded by `max_replans` *and* by failure fingerprints (`app/graph/failures.py`): when every
+  failure in a round exactly repeats an earlier one (same task, target, reasons, input facts) the mission
+  stops FAILED with a `duplicate_failure_detected` audit event. Do not suppress a retry whose reason or
+  input changed, and never hide a repeated run -- the UI folds it, the audit trail keeps it.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -251,6 +264,11 @@ python scripts/demo_preflight.py
 # Validate the real Anthropic provider's structured intents/plans (--e2e for full
 # missions on a throwaway DB). Exits 2 (UNAVAILABLE) without ANTHROPIC_API_KEY.
 python scripts/check_live_llm.py
+
+# Phase 10 demo on a throwaway DB: conflict-free registration, known conflict blocked
+# before approval, schedule change after approval (TOCTOU), duplicate-failure stop --
+# with plans, dependency traces, check verdicts and audit trails.
+python scripts/demo_phase10.py
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see

@@ -233,19 +233,41 @@ def _infer_case_priority(goal_lower: str) -> str:
     return "normal"
 
 
-def _build_event_registration_plan(mission_id: str, goal: str) -> MissionPlan:
+def _build_event_registration_plan(mission_id: str, goal: str, *, with_schedule: bool) -> MissionPlan:
+    """Events discovery, Academic timetable and Academic exams run in parallel
+    (none needs another's output); the registration proposal depends on all
+    three, so its pre-approval check sees the verified timetable/exams and
+    can detect a conflict *before* a human is asked. ``with_schedule`` is
+    False only when no Academic Agent is registered -- the proposal then
+    honestly reports "conflicts not checked" (NEEDS_REVIEW) instead."""
     event_title = _QUOTED_RE.search(goal).group(1)
-    discovery_task = MissionTask(
-        task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.EVENTS_OPPORTUNITY_AGENT,
-        objective=f"Find the '{event_title}' workshop and check for schedule conflicts with my classes and exams",
-        dependencies=[], requires_evidence=True,
+    tasks = [
+        MissionTask(
+            task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.EVENTS_OPPORTUNITY_AGENT,
+            objective=f"Find the '{event_title}' event", dependencies=[], requires_evidence=True,
+        )
+    ]
+    if with_schedule:
+        tasks.append(
+            MissionTask(
+                task_id=f"{mission_id}-task-2", mission_id=mission_id, agent=AgentName.ACADEMIC_AGENT,
+                objective="What is my timetable?", dependencies=[], requires_evidence=False,
+            )
+        )
+        tasks.append(
+            MissionTask(
+                task_id=f"{mission_id}-task-3", mission_id=mission_id, agent=AgentName.ACADEMIC_AGENT,
+                objective="When are my exams?", dependencies=[], requires_evidence=False,
+            )
+        )
+    tasks.append(
+        MissionTask(
+            task_id=f"{mission_id}-task-{len(tasks) + 1}", mission_id=mission_id, agent=AgentName.ACTION_AGENT,
+            objective=f"Register for '{event_title}'", dependencies=[t.task_id for t in tasks],
+            constraints={"tool_name": "register_event", "event_title": event_title},
+        )
     )
-    action_task = MissionTask(
-        task_id=f"{mission_id}-task-2", mission_id=mission_id, agent=AgentName.ACTION_AGENT,
-        objective=f"Register for '{event_title}'", dependencies=[discovery_task.task_id],
-        constraints={"tool_name": "register_event", "event_title": event_title},
-    )
-    return MissionPlan(mission_id=mission_id, goal=goal, tasks=[discovery_task, action_task])
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=tasks)
 
 
 def _build_calendar_creation_plan(mission_id: str, goal: str) -> MissionPlan:
@@ -453,7 +475,9 @@ class MockLLMProvider(LLMProvider):
         # goal would otherwise also satisfy _is_campus_services_goal's looser
         # keyword check and get silently routed to the wrong (read-only) plan.
         if _is_event_registration_goal(goal) and {AgentName.EVENTS_OPPORTUNITY_AGENT, AgentName.ACTION_AGENT}.issubset(supported):
-            return _build_event_registration_plan(mission_id, goal)
+            return _build_event_registration_plan(
+                mission_id, goal, with_schedule=AgentName.ACADEMIC_AGENT in supported
+            )
         if _is_calendar_creation_goal(goal) and AgentName.ACTION_AGENT in supported:
             return _build_calendar_creation_plan(mission_id, goal)
         if _is_case_creation_goal(goal) and AgentName.ACTION_AGENT in supported:
@@ -772,7 +796,7 @@ class MockLLMProvider(LLMProvider):
             lines.extend(_line(a) for a in conflict_free)
 
         if unchecked:
-            lines.append("Matching events (schedule conflicts NOT checked: no timetable/exam data was provided):")
+            lines.append("Matching events (schedule conflicts NOT checked in this step: no timetable/exam data was provided to it):")
             lines.extend(_line(a) for a in unchecked)
 
         if conflicted:

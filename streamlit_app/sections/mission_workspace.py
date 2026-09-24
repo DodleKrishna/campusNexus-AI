@@ -121,14 +121,21 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
             st.rerun()
 
     st.markdown(f"**Goal:** {mission['goal']}")
-    guidance = _STATUS_GUIDANCE.get(mission["status"])
-    if guidance is not None:
-        getattr(st, guidance[0])(guidance[1])
+    stop = mission.get("execution_stop")
+    if stop:
+        # Phase 10: the Orchestrator stopped replanning a failure that repeated
+        # exactly -- say so plainly instead of showing another generic failure.
+        tasks = ", ".join(short_ids_for(mission).get(t, t) for t in stop.get("task_ids") or [])
+        st.error(f"⏹️ {stop['message']}" + (f" (task {tasks})" if tasks else ""))
+    else:
+        guidance = _STATUS_GUIDANCE.get(mission["status"])
+        if guidance is not None:
+            getattr(st, guidance[0])(guidance[1])
 
     st.markdown("#### Structured Execution Plan")
     if not mission["plan"]:
         st.caption("No tasks were planned for this goal. See the final response below.")
-    short_ids = {task["task_id"]: f"T{index}" for index, task in enumerate(mission["plan"], start=1)}
+    short_ids = short_ids_for(mission)
     for task in mission["plan"]:
         deps = (
             " — uses results from " + ", ".join(short_ids.get(d, d) for d in task["dependencies"])
@@ -147,17 +154,7 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
     st.markdown("#### Agent Execution Results")
     if not mission["agent_results"]:
         st.caption("No agent has run yet.")
-    runs_per_task: dict = {}
-    for run in mission["agent_results"]:
-        runs_per_task[run["task_id"]] = runs_per_task.get(run["task_id"], 0) + 1
-    attempt_seen: dict = {}
-    for run in mission["agent_results"]:
-        label = short_ids.get(run["task_id"], run["task_id"])
-        attempt_seen[run["task_id"]] = attempt_seen.get(run["task_id"], 0) + 1
-        if runs_per_task[run["task_id"]] > 1:
-            # A task runs again after an approval (resume) or a replan; each
-            # run is a separate, persisted record -- label it, don't hide it.
-            label += f" (run {attempt_seen[run['task_id']]} of {runs_per_task[run['task_id']]})"
+    for run, label in _run_cards(mission["agent_results"], short_ids):
         awaiting = bool(run["facts"].get("awaiting_approval"))
         verdict = "WAITING FOR APPROVAL" if awaiting else theme.verification_label(run["status"]).upper()
         with st.expander(f"{label} · {_agent_label(run['agent'])} · {verdict}"):
@@ -199,6 +196,40 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
 
     with st.expander("Mission timeline"):
         _render_timeline(client, mission_id)
+
+
+def short_ids_for(mission: dict) -> dict:
+    return {task["task_id"]: f"T{index}" for index, task in enumerate(mission["plan"], start=1)}
+
+
+def _run_cards(runs: list, short_ids: dict) -> list:
+    """One card per distinct run. A task runs again after an approval (resume)
+    or a replan; each run is a separate persisted record, so it is labelled,
+    never hidden -- but a run that repeated the previous one *exactly* (the
+    API's ``identical_to_previous_run``) is folded into that card as an
+    attempt count instead of a confusing identical duplicate."""
+    cards: list = []  # [run, task_id, attempts]
+    for run in runs:
+        previous = next((c for c in reversed(cards) if c[1] == run["task_id"]), None)
+        if run.get("identical_to_previous_run") and previous is not None:
+            previous[2] += 1
+            continue
+        cards.append([run, run["task_id"], 1])
+
+    per_task = {}
+    for _, task_id, _ in cards:
+        per_task[task_id] = per_task.get(task_id, 0) + 1
+    seen: dict = {}
+    labelled = []
+    for run, task_id, attempts in cards:
+        seen[task_id] = seen.get(task_id, 0) + 1
+        label = short_ids.get(task_id, task_id)
+        if per_task[task_id] > 1:
+            label += f" (run {seen[task_id]} of {per_task[task_id]})"
+        if attempts > 1:
+            label += f" · same result on {attempts} attempts"
+        labelled.append((run, label))
+    return labelled
 
 
 _AGENT_LABELS = {

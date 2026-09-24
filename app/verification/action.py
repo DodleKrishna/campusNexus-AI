@@ -19,7 +19,7 @@ accept an unverified recommendation as authorization to execute".
 from __future__ import annotations
 
 import uuid
-from typing import List, Optional
+from typing import FrozenSet, List, Optional
 
 from app.schemas.enums import VerificationPhase, VerificationStatus
 from app.schemas.evidence import Evidence
@@ -36,8 +36,12 @@ class ActionVerifier:
         task_id: str,
         checks: List[VerificationCheck],
         evidence: Optional[List[Evidence]] = None,
+        blocking_check_names: FrozenSet[str] = frozenset(),
     ) -> VerificationResult:
-        return self._build(mission_id, task_id, VerificationPhase.PRE_ACTION, checks, evidence or [])
+        """``blocking_check_names`` escalates the named (normally soft) checks to
+        hard failures for this call -- Phase 10: a schedule conflict that is
+        *known* before approval blocks the proposal instead of reaching a human."""
+        return self._build(mission_id, task_id, VerificationPhase.PRE_ACTION, checks, evidence or [], blocking_check_names)
 
     def verify_post_action(
         self, *, mission_id: str, task_id: str, checks: List[VerificationCheck]
@@ -51,10 +55,12 @@ class ActionVerifier:
         phase: VerificationPhase,
         checks: List[VerificationCheck],
         evidence: List[Evidence],
+        blocking_check_names: FrozenSet[str] = frozenset(),
     ) -> VerificationResult:
+        soft_names = SOFT_CHECK_NAMES - blocking_check_names
         issues = [c.detail for c in checks if not c.passed and c.detail]
-        hard_failed = any(not c.passed for c in checks if c.name not in SOFT_CHECK_NAMES)
-        soft_failed = any(not c.passed for c in checks if c.name in SOFT_CHECK_NAMES)
+        hard_failed = any(not c.passed for c in checks if c.name not in soft_names)
+        soft_failed = any(not c.passed for c in checks if c.name in soft_names)
 
         if hard_failed:
             status = VerificationStatus.FAILED

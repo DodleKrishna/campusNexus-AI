@@ -15,6 +15,7 @@ from app.schemas.enums import AgentName, MissionStatus, TaskStatus, UserRole, Ve
 from app.schemas.mission import MissionPlan, MissionTask
 from tests.graph_doubles import (
     AlwaysFailAgent,
+    ChangingFailureAgent,
     FixedPlanLLMProvider,
     MismatchedVerificationAgent,
     NeedsReviewAgent,
@@ -206,7 +207,9 @@ def test_retry_limit_is_respected_not_looped_forever(session_factory) -> None:
     def plan_factory(mission_id: str, goal: str) -> MissionPlan:
         return MissionPlan(mission_id=mission_id, goal=goal, tasks=[_task(mission_id, 1, AgentName.ACADEMIC_AGENT)])
 
-    registry = _registry({AgentName.ACADEMIC_AGENT: lambda session: AlwaysFailAgent(session)})
+    # Phase 10: a *different* failure each attempt (new information), so only
+    # max_replans -- not duplicate-failure suppression -- stops it.
+    registry = _registry({AgentName.ACADEMIC_AGENT: lambda session: ChangingFailureAgent(session)})
     orchestrator = _orchestrator(session_factory, registry, plan_factory, max_replans=2)
 
     final = orchestrator.run_mission("always fails", user_id=MISSION_USER, user_role=UserRole.STUDENT)

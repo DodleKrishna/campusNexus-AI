@@ -58,10 +58,14 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
         info_cols[1].markdown(f"Target resource  \n`{approval.get('target_resource') or 'n/a'}`")
         info_cols[2].markdown(f"Student  \n`{approval.get('student_id') or 'n/a'}`")
         issues = approval.get("precheck_issues") or []
+        precheck_status = approval.get("precheck_status") or ("needs_review" if issues else "verified")
         info_cols[3].markdown(
-            f"Deterministic pre-check  \n{theme.status_badge('needs_review' if issues else 'verified')}",
+            f"Deterministic pre-check  \n{theme.status_badge(precheck_status)}",
             unsafe_allow_html=True,
         )
+        schedule_note = _schedule_check_note(approval.get("schedule_check"))
+        if schedule_note:
+            st.caption(schedule_note)
         if issues:
             st.warning(
                 "Pre-check flagged for the approver: " + "; ".join(issues)
@@ -87,6 +91,24 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
                 _decide(client, approval_id, "approve", reason, decided_key)
             if reject_col.button("❌ Reject", key=f"cn_reject_{approval_id}", use_container_width=True):
                 _decide(client, approval_id, "reject", reason, decided_key)
+
+
+def _schedule_check_note(schedule_check) -> str:
+    """One line on what the pre-approval conflict check actually used -- only
+    ever what the persisted proposal says, never an inferred claim."""
+    if not schedule_check:
+        return ""
+    if not schedule_check.get("performed"):
+        return "Schedule conflicts were NOT checked before approval (no timetable/exam data was available)."
+    clashes = len(schedule_check.get("timetable_conflicts") or []) + len(schedule_check.get("exam_conflicts") or [])
+    outcome = "no clash found." if clashes == 0 else f"{clashes} clash(es) found."
+    if schedule_check.get("source") == "upstream_academic_tasks":
+        return (
+            f"Schedule conflicts checked before approval against {schedule_check.get('timetable_entries_checked')} "
+            f"weekly class slot(s) and {schedule_check.get('exam_entries_checked')} exam(s) from verified Academic "
+            f"Agent results: {outcome}"
+        )
+    return f"Schedule conflicts checked before approval using the Events Agent's assessment: {outcome}"
 
 
 def _decide(client: ApiClient, approval_id: str, decision: str, reason: str, decided_key: str) -> None:

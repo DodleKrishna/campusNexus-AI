@@ -23,14 +23,19 @@ other ``SpecialistAgent`` -- no new orchestrator concept is needed:
 
 A precheck that fails outright never creates an approval -- CLAUDE.md:
 "never accept an unverified specialist recommendation as authorization to
-execute." A REJECTED approval is handled defensively here too (the
-scheduler should never re-dispatch a FAILED step, but this never executes
-regardless).
+execute." Phase 10: for ``register_event`` the propose-time schedule check is
+built from the verified upstream Academic timetable/exam facts the planner
+wires in as dependencies (``_upstream_schedule_check``), and a conflict found
+there is a hard failure -- a known clash never reaches the Approval Gate.
+The execute-time recheck still re-derives everything from current DB state.
+
+A REJECTED approval is handled defensively here too (the scheduler should
+never re-dispatch a FAILED step, but this never executes regardless).
 """
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -65,7 +70,8 @@ from app.schemas.enums import (
     VerificationPhase,
     VerificationStatus,
 )
-from app.schemas.events import ExamConflict, TimetableConflict
+from app.schemas.academic import ExamEntry, TimetableEntry
+from app.schemas.events import EventSummary, ExamConflict, TimetableConflict
 from app.schemas.tools import ToolCall
 from app.schemas.verification import VerificationCheck, VerificationResult
 from app.services import academic as academic_service
@@ -99,6 +105,69 @@ def _new_verification(mission_id: str, task_id: str, phase: VerificationPhase, s
         status=status,
         issues=issues,
     )
+
+
+# Phase 10: a schedule conflict that is actually *found* is a hard failure at
+# both propose time (never shown to a human as approvable) and execute time.
+# Only "couldn't check" (schedule_conflict_checked) stays soft.
+_SCHEDULE_CONFLICT_BLOCKING_CHECKS = frozenset({"no_schedule_conflicts"})
+
+
+@dataclass
+class _UpstreamScheduleCheck:
+    """Result of the propose-time schedule-conflict check, and where its input came from."""
+
+    performed: bool = False
+    source: str = "none"
+    timetable_conflicts: List[TimetableConflict] = field(default_factory=list)
+    exam_conflicts: List[ExamConflict] = field(default_factory=list)
+    timetable_entries: Optional[int] = None
+    exam_entries: Optional[int] = None
+
+    def as_facts(self) -> Dict[str, object]:
+        return {
+            "performed": self.performed,
+            "source": self.source,
+            "timetable_entries_checked": self.timetable_entries,
+            "exam_entries_checked": self.exam_entries,
+            "timetable_conflicts": [c.model_dump(mode="json") for c in self.timetable_conflicts],
+            "exam_conflicts": [c.model_dump(mode="json") for c in self.exam_conflicts],
+        }
+
+
+def _upstream_schedule_check(facts: Dict[str, object], event: EventSummary) -> _UpstreamScheduleCheck:
+    """Propose-time conflict check, built *only* from verified upstream task facts.
+
+    The dispatcher merges a task's dependencies' facts into its message, and
+    a task is only dispatched once every dependency is COMPLETED (verified),
+    so these facts come from verified Academic/Events Agent outputs. This
+    never fetches the student's timetable/exams itself: missing upstream
+    context is reported as "not checked", never silently filled in. (The
+    execute-time ``_recheck`` is different on purpose -- it re-reads current
+    DB state because upstream facts may be stale by then.)
+    """
+    raw_timetable, raw_exams = facts.get("timetable"), facts.get("exams")
+    full_scope = facts.get("timetable_scope", "all") == "all" and facts.get("exams_scope", "all") == "all"
+    if raw_timetable is not None and raw_exams is not None and full_scope:
+        timetable = [TimetableEntry.model_validate(item) for item in raw_timetable]
+        exams = [ExamEntry.model_validate(item) for item in raw_exams]
+        return _UpstreamScheduleCheck(
+            performed=True,
+            source="upstream_academic_tasks",
+            timetable_conflicts=find_timetable_conflicts(event, timetable),
+            exam_conflicts=find_exam_conflicts(event, exams),
+            timetable_entries=len(timetable),
+            exam_entries=len(exams),
+        )
+    for raw in facts.get("assessments") or []:
+        if raw.get("event", {}).get("event_id") == event.event_id and raw.get("conflict_check_performed"):
+            return _UpstreamScheduleCheck(
+                performed=True,
+                source="upstream_events_assessment",
+                timetable_conflicts=[TimetableConflict.model_validate(c) for c in raw.get("timetable_conflicts", [])],
+                exam_conflicts=[ExamConflict.model_validate(c) for c in raw.get("exam_conflicts", [])],
+            )
+    return _UpstreamScheduleCheck()
 
 
 @dataclass
@@ -228,20 +297,15 @@ class ActionAgent:
 
         already_registered = False
         confirmed_registrations = 0
-        conflict_performed = False
-        timetable_conflicts: List[TimetableConflict] = []
-        exam_conflicts: List[ExamConflict] = []
+        schedule = _UpstreamScheduleCheck()
         if student_exists and event is not None:
             already_registered = (
                 events_service.get_student_registration_status(self._session, student_id, event.event_id) is not None
             )
             confirmed_registrations = events_service.get_registration_count(self._session, event.event_id)
-            for raw in message.facts.get("assessments") or []:
-                if raw.get("event", {}).get("event_id") == event.event_id:
-                    conflict_performed = bool(raw.get("conflict_check_performed"))
-                    timetable_conflicts = [TimetableConflict.model_validate(c) for c in raw.get("timetable_conflicts", [])]
-                    exam_conflicts = [ExamConflict.model_validate(c) for c in raw.get("exam_conflicts", [])]
-                    break
+            schedule = _upstream_schedule_check(message.facts, event)
+        conflict_performed = schedule.performed
+        timetable_conflicts, exam_conflicts = schedule.timetable_conflicts, schedule.exam_conflicts
 
         checks = check_event_registration(
             student_exists=student_exists,
@@ -258,11 +322,25 @@ class ActionAgent:
             if student_exists
             else []
         )
+        # A conflict that is already *known* at propose time blocks the
+        # proposal outright (Phase 10) -- it is never shown to a human as an
+        # approvable action. Only "couldn't check" stays soft (NEEDS_REVIEW).
         precheck = self._verifier.verify_pre_action(
-            mission_id=message.mission_id, task_id=message.task_id, checks=checks, evidence=evidence
+            mission_id=message.mission_id, task_id=message.task_id, checks=checks, evidence=evidence,
+            blocking_check_names=_SCHEDULE_CONFLICT_BLOCKING_CHECKS,
         )
+        schedule_facts = schedule.as_facts()
         if precheck.status == VerificationStatus.FAILED:
-            return self._failed_outcome(message, precheck, facts={"tool_name": "register_event"})
+            outcome = self._failed_outcome(
+                message, precheck, facts={"tool_name": "register_event", "precheck_status": precheck.status.value, "schedule_check": schedule_facts}
+            )
+            conflicts = [f"class {c.course_code}" for c in timetable_conflicts]
+            conflicts += [f"{c.course_code} {c.exam_type} exam" for c in exam_conflicts]
+            if conflicts:
+                outcome.response_text += (
+                    f" '{event.title}' clashes with your {', '.join(conflicts)}, so it was not proposed for approval."
+                )
+            return outcome
 
         assert event is not None and student is not None  # guaranteed by precheck not FAILED
         parameters = {"student_id": student_id, "event_id": event.event_id}
@@ -278,7 +356,11 @@ class ActionAgent:
             description=description,
             precheck=precheck,
             evidence=evidence,
-            supporting_facts={"confirmed_registrations": confirmed_registrations, "capacity": event.capacity},
+            supporting_facts={
+                "confirmed_registrations": confirmed_registrations,
+                "capacity": event.capacity,
+                "schedule_check": schedule_facts,
+            },
         )
 
     def _propose_calendar(self, message: AgentMessage, student_id: str, now: datetime) -> ActionAgentOutcome:
@@ -470,6 +552,9 @@ class ActionAgent:
             "tool_call_id": tool_call_id,
             "proposal": proposal.model_dump(mode="json"),
             "awaiting_approval": True,
+            # The deterministic pre-check's own verdict, kept separate from the
+            # task's NEEDS_REVIEW (which only means "paused for a human").
+            "precheck_status": precheck.status.value,
         }
         agent_result = AgentResult(
             mission_id=mission_id, task_id=task_id, agent=AgentName.ACTION_AGENT, status=AgentResultStatus.PARTIAL,
@@ -542,7 +627,10 @@ class ActionAgent:
             return self._executed_outcome(message, tool_call_record, post, already_executed=True)
 
         precheck_checks = self._recheck(tool_call_record.tool_name, arguments, now)
-        precheck = self._verifier.verify_pre_action(mission_id=message.mission_id, task_id=message.task_id, checks=precheck_checks)
+        precheck = self._verifier.verify_pre_action(
+            mission_id=message.mission_id, task_id=message.task_id, checks=precheck_checks,
+            blocking_check_names=_SCHEDULE_CONFLICT_BLOCKING_CHECKS,
+        )
         if precheck.status != VerificationStatus.VERIFIED:
             # Unlike propose-time (where NEEDS_REVIEW still proceeds to human
             # approval), at execute-time a human has *already* approved based
@@ -565,7 +653,10 @@ class ActionAgent:
                 message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
                 [f"Action blocked: preconditions are no longer valid ({'; '.join(precheck.issues)})."],
             )
-            return self._failed_outcome(message, blocked, facts={"tool_name": tool_call_record.tool_name})
+            return self._failed_outcome(
+                message, blocked,
+                facts={"tool_name": tool_call_record.tool_name, "execution_recheck_status": precheck.status.value},
+            )
 
         tool_call = ToolCall(
             tool_call_id=tool_call_record.tool_call_id,
@@ -594,7 +685,10 @@ class ActionAgent:
         self._context.update_tool_call_record(
             tool_call_record.tool_call_id, status=result.status, postcondition_verified=(post.status == VerificationStatus.VERIFIED)
         )
-        return self._executed_outcome(message, tool_call_record, post, already_executed=False, result_data=result.data)
+        return self._executed_outcome(
+            message, tool_call_record, post, already_executed=False, result_data=result.data,
+            execution_recheck_status=precheck.status.value,
+        )
 
     def _executed_outcome(
         self,
@@ -604,6 +698,7 @@ class ActionAgent:
         *,
         already_executed: bool,
         result_data: Optional[Dict] = None,
+        execution_recheck_status: Optional[str] = None,
     ) -> ActionAgentOutcome:
         status_map = {
             VerificationStatus.VERIFIED: AgentResultStatus.SUCCESS,
@@ -615,6 +710,9 @@ class ActionAgent:
             "tool_result": result_data if result_data is not None else tool_call_record.result_data,
             "already_executed": already_executed,
             "postcondition_verified": post.status == VerificationStatus.VERIFIED,
+            # The execute-time recheck's verdict (None on an idempotent
+            # re-dispatch, which never re-executes and so never rechecks).
+            "execution_recheck_status": execution_recheck_status,
         }
         agent_result = AgentResult(
             mission_id=message.mission_id, task_id=message.task_id, agent=AgentName.ACTION_AGENT,

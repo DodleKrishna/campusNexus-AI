@@ -265,4 +265,8 @@ def test_pending_approval_exposes_the_precheck_issues_to_the_approver(api_client
     assert mission["status"] == "needs_approval"
     pending = [a for a in api_client.get("/approvals/pending", headers={"X-Demo-Identity": "admin-demo"}).json()
                if a["mission_id"] == mission["mission_id"]]
-    assert pending[0]["precheck_issues"] == ["No timetable/exam data was available to check for schedule conflicts."]
+    # Phase 10: the plan now feeds the student's timetable/exams into the
+    # proposal, so the pre-check is clean (was: "No timetable/exam data was
+    # available to check for schedule conflicts.").
+    assert pending[0]["precheck_issues"] == []
+    assert pending[0]["precheck_status"] == "verified"

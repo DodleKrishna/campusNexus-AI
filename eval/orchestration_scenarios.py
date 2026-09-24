@@ -40,6 +40,7 @@ from app.schemas.mission import MissionPlan, MissionTask  # noqa: E402
 from app.services.context import ContextService  # noqa: E402
 from graph_doubles import (  # noqa: E402
     AlwaysFailAgent,
+    ChangingFailureAgent,
     FixedPlanLLMProvider,
     MismatchedVerificationAgent,
     NeedsReviewAgent,
@@ -210,10 +211,66 @@ def scenario_retry_limit_is_bounded(session_factory) -> Dict[str, Any]:
     def plan_factory(mid, goal):
         return MissionPlan(mission_id=mid, goal=goal, tasks=[_task(mid, 1)])
 
-    orchestrator = _new_orchestrator(session_factory, _registry({AgentName.ACADEMIC_AGENT: lambda s: AlwaysFailAgent(s)}), plan_factory, max_replans=2)
+    # Each attempt fails with a *different* reason (new information), so only
+    # max_replans -- not Phase 10 duplicate-failure suppression -- bounds it.
+    orchestrator = _new_orchestrator(session_factory, _registry({AgentName.ACADEMIC_AGENT: lambda s: ChangingFailureAgent(s)}), plan_factory, max_replans=2)
     final = orchestrator.run_mission("always fails", user_id=MISSION_USER, user_role=UserRole.STUDENT)
     passed = final["mission_status"] == MissionStatus.FAILED and final["replan_count"] == 2
     return {"passed": passed, "replan_count": final["replan_count"]}
+
+
+def scenario_duplicate_failure_is_not_replanned_again(session_factory) -> Dict[str, Any]:
+    """Phase 10: the same deterministic failure with no new input stops after
+    one replan (two runs, not three), and the audit trail says why."""
+    def plan_factory(mid, goal):
+        return MissionPlan(mission_id=mid, goal=goal, tasks=[_task(mid, 1)])
+
+    orchestrator = _new_orchestrator(session_factory, _registry({AgentName.ACADEMIC_AGENT: lambda s: AlwaysFailAgent(s)}), plan_factory, max_replans=2)
+    final = orchestrator.run_mission("always fails the same way", user_id=MISSION_USER, user_role=UserRole.STUDENT)
+    with session_factory() as session:
+        context = ContextService(session)
+        events = [e.event_type for e in context.list_audit_events(final["mission_id"])]
+        runs = context.list_agent_runs(final["mission_id"])
+    passed = (
+        final["mission_status"] == MissionStatus.FAILED
+        and final["replan_count"] == 1
+        and len(runs) == 2
+        and events.count("replan_triggered") == 1
+        and events.count("duplicate_failure_detected") == 1
+        and final["final_result"].startswith("Execution stopped because the same verified failure occurred again")
+    )
+    return {"passed": passed, "replan_count": final["replan_count"], "agent_runs": len(runs), "audit_event_types": events}
+
+
+def scenario_changed_upstream_context_permits_retry(session_factory) -> Dict[str, Any]:
+    """Phase 10: an identical failure *reason* is still retried when the
+    task's input changed -- here a replan swaps in a different upstream task
+    whose facts differ -- so suppression never blocks a meaningful retry."""
+    calls = {"n": 0}
+
+    def plan_factory(mid, goal):
+        calls["n"] += 1
+        upstream = MissionTask(
+            task_id=f"{mid}-task-{calls['n'] + 10}", mission_id=mid, agent=AgentName.CAREER_AGENT,
+            objective=f"upstream variant {calls['n']}",
+        )
+        failing = _task(mid, 1, dependencies=[upstream.task_id])
+        return MissionPlan(mission_id=mid, goal=goal, tasks=[upstream, failing])
+
+    registry = _registry({
+        AgentName.CAREER_AGENT: lambda s: SuccessAgent(s),
+        AgentName.ACADEMIC_AGENT: lambda s: AlwaysFailAgent(s),
+    })
+    orchestrator = _new_orchestrator(session_factory, registry, plan_factory, max_replans=2)
+    final = orchestrator.run_mission("retry with new context", user_id=MISSION_USER, user_role=UserRole.STUDENT)
+    with session_factory() as session:
+        events = [e.event_type for e in ContextService(session).list_audit_events(final["mission_id"])]
+    passed = (
+        final["mission_status"] == MissionStatus.FAILED
+        and final["replan_count"] == 2
+        and "duplicate_failure_detected" not in events
+    )
+    return {"passed": passed, "replan_count": final["replan_count"], "audit_event_types": events}
 
 
 def scenario_interrupted_mission_and_resumption(session_factory) -> Dict[str, Any]:
@@ -281,6 +338,8 @@ SCENARIOS = [
     ("verification-failure-despite-successful-call", scenario_verification_failure_despite_successful_call),
     ("needs-review-pauses-without-auto-approving", scenario_needs_review_pauses_without_auto_approving),
     ("retry-limit-is-bounded", scenario_retry_limit_is_bounded),
+    ("duplicate-failure-is-not-replanned-again", scenario_duplicate_failure_is_not_replanned_again),
+    ("changed-upstream-context-permits-retry", scenario_changed_upstream_context_permits_retry),
     ("interrupted-mission-and-resumption", scenario_interrupted_mission_and_resumption),
     ("persisted-audit-history", scenario_persisted_audit_history),
 ]

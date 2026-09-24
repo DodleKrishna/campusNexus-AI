@@ -49,6 +49,12 @@ _ATTENDANCE_INTENTS = frozenset(
 )
 
 
+def _schedule_scope(course_resolution: CourseResolution) -> str:
+    if course_resolution.status == CourseResolutionStatus.RESOLVED and course_resolution.course_code:
+        return course_resolution.course_code
+    return "all"
+
+
 @dataclass
 class AcademicAgentOutcome:
     """Local convenience bundle for callers (demo runner, eval, tests).
@@ -171,10 +177,17 @@ class AcademicAgent:
             facts["threshold"] = threshold.model_dump(mode="json")
         if eligibility is not None:
             facts["eligibility"] = eligibility.model_dump(mode="json")
-        if timetable:
+        # A timetable/exam-schedule task publishes its list even when empty
+        # (a verified "no classes" is real context for a dependent conflict
+        # check), plus its scope: "all", or the one course it was filtered to
+        # -- a dependent task must not treat a single-course list as the
+        # student's whole schedule.
+        if student is not None and intent == AcademicIntent.TIMETABLE:
             facts["timetable"] = [t.model_dump(mode="json") for t in timetable]
-        if exams:
+            facts["timetable_scope"] = _schedule_scope(course_resolution)
+        if student is not None and intent == AcademicIntent.EXAM_SCHEDULE:
             facts["exams"] = [e.model_dump(mode="json") for e in exams]
+            facts["exams_scope"] = _schedule_scope(course_resolution)
 
         status_map = {
             VerificationStatus.VERIFIED: AgentResultStatus.SUCCESS,

@@ -54,18 +54,28 @@ class DispatchOutcome:
     error: Optional[str] = None
 
 
-def _build_message(
-    mission_id: str,
+def build_task_input_facts(
     task: MissionTask,
     base_facts: Dict[str, JsonValue],
     agent_results: Dict[str, AgentResult],
-) -> AgentMessage:
+) -> Dict[str, JsonValue]:
+    """The exact facts a task is dispatched with: base facts + its dependencies' facts + its query."""
     facts = dict(base_facts)
     for dependency_id in task.dependencies:
         upstream = agent_results.get(dependency_id)
         if upstream is not None:
             facts.update(upstream.facts)
     facts["query"] = task.objective
+    return facts
+
+
+def _build_message(
+    mission_id: str,
+    task: MissionTask,
+    base_facts: Dict[str, JsonValue],
+    agent_results: Dict[str, AgentResult],
+) -> AgentMessage:
+    facts = build_task_input_facts(task, base_facts, agent_results)
     return AgentMessage(
         message_id=f"msg-{uuid.uuid4().hex[:12]}",
         mission_id=mission_id,

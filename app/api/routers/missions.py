@@ -3,7 +3,7 @@ GET /missions/{id}/evidence, POST /missions/{id}/resume.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from app.api.deps import Identity, get_identity, get_orchestrator, get_session
 from app.api.schemas.missions import (
     AgentRunView,
     ApprovalSummaryView,
+    ExecutionStopView,
     MissionCreateRequest,
     MissionEvidenceResponse,
     MissionResponse,
@@ -22,7 +23,7 @@ from app.api.schemas.missions import (
 from app.api.timeline import build_timeline
 from app.db.models.mission import Mission
 from app.db.repositories.missions import get_audit_trail, get_mission_steps, list_pending_approvals
-from app.graph.orchestrator import MissionOrchestrator
+from app.graph.orchestrator import DUPLICATE_FAILURE_MESSAGE, MissionOrchestrator
 from app.schemas.enums import UserRole
 from app.schemas.evidence import Evidence
 from app.services.context import ContextService
@@ -60,16 +61,22 @@ def _mission_response(session: Session, mission: Mission) -> MissionResponse:
     ]
 
     runs = context.list_agent_runs(mission.mission_id)
-    agent_results = [
-        AgentRunView(
+    agent_results: List[AgentRunView] = []
+    last_run_by_task: dict = {}
+    for r in runs:
+        view = AgentRunView(
             task_id=r.step_id, agent=r.agent.value, status=r.status.value,
             facts={k: v for k, v in (r.facts or {}).items() if k != "_response_text"},
             errors=list(r.errors or []),
             evidence=[Evidence.model_validate(e) for e in (r.evidence or [])],
             response_text=str((r.facts or {}).get("_response_text") or ""),
         )
-        for r in runs
-    ]
+        previous = last_run_by_task.get(r.step_id)
+        view.identical_to_previous_run = previous is not None and (
+            (previous.status, previous.errors, previous.response_text) == (view.status, view.errors, view.response_text)
+        )
+        last_run_by_task[r.step_id] = view
+        agent_results.append(view)
 
     pending = list_pending_approvals(session, mission_id=mission.mission_id)
     pending_views = [
@@ -80,7 +87,22 @@ def _mission_response(session: Session, mission: Mission) -> MissionResponse:
     return MissionResponse(
         mission_id=mission.mission_id, goal=mission.original_goal, status=mission.status.value,
         plan=plan_view, agent_results=agent_results, pending_approvals=pending_views,
-        final_result=mission.final_result, created_at=mission.created_at, updated_at=mission.updated_at,
+        final_result=mission.final_result, execution_stop=_execution_stop(context, mission.mission_id),
+        created_at=mission.created_at, updated_at=mission.updated_at,
+    )
+
+
+def _execution_stop(context: ContextService, mission_id: str) -> Optional[ExecutionStopView]:
+    stop = next(
+        (e for e in reversed(context.list_audit_events(mission_id)) if e.event_type == "duplicate_failure_detected"),
+        None,
+    )
+    if stop is None:
+        return None
+    return ExecutionStopView(
+        reason="duplicate_failure",
+        message=DUPLICATE_FAILURE_MESSAGE,
+        task_ids=list((stop.event_metadata or {}).get("task_ids") or []),
     )
 
 

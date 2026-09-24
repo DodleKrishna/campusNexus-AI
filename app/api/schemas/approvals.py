@@ -33,6 +33,12 @@ class ApprovalView(BaseModel):
     # Issues the propose-time Deterministic Verifier pre-check raised (empty =
     # every pre-check passed) -- what the approver needs to know before deciding.
     precheck_issues: List[str] = []
+    # Phase 10: the pre-check's own verdict (verified/needs_review) -- distinct
+    # from verification_status, which is "partial" only because the task is
+    # paused for approval. None for proposals persisted before Phase 10.
+    precheck_status: Optional[str] = None
+    # Where the pre-approval schedule-conflict check got its data (register_event only).
+    schedule_check: Optional[Dict[str, JsonValue]] = None
 
 
 class ApprovalDecisionRequest(BaseModel):

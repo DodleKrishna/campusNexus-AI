@@ -99,8 +99,10 @@ def test_registration_without_a_named_event_never_picks_one(goal: str) -> None:
 
 def test_registration_with_a_named_event_still_proposes_the_action() -> None:
     plan, shape = _shape("Register me for the 'Competitive Coding Contest' workshop if it doesn't clash with my classes.")
-    assert shape == [(E, []), (X, [1])]
-    assert plan.tasks[1].constraints == {"tool_name": "register_event", "event_title": "Competitive Coding Contest"}
+    # Phase 10: events discovery, timetable and exams run in parallel, and the
+    # registration proposal depends on all three (pre-approval conflict check).
+    assert shape == [(E, []), (A, []), (A, []), (X, [1, 2, 3])]
+    assert plan.tasks[3].constraints == {"tool_name": "register_event", "event_title": "Competitive Coding Contest"}
 
 
 @pytest.mark.parametrize(

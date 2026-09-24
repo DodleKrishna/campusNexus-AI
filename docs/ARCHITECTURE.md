@@ -770,13 +770,94 @@ has the same rule.
 - Live-LLM behaviour is validated structurally (schemas plus the deterministic validator), but plan
   quality, intent accuracy and latency still have to be measured with a real key
   (`scripts/check_live_llm.py`). Prompt wording has not been tuned against real outputs.
-- The mock's registration plan has no Academic dependency, so propose-time conflict data is absent
-  and the approval card shows NEEDS_REVIEW. The execution-time recheck still catches the clash, and
-  `eval/action_scenarios.py` relies on that path.
-- A deterministic task failure is replanned up to `max_replans` times with the same outcome, so the UI
-  shows each run.
+- ~~The mock's registration plan has no Academic dependency, so the approval card shows NEEDS_REVIEW.~~
+  Resolved in Phase 10 (see below).
+- ~~A deterministic task failure is replanned up to `max_replans` times with the same outcome.~~
+  Resolved in Phase 10 (see below).
 - `POST /missions` still blocks for the whole mission. Live mode makes roughly 2 calls per task plus 1
   for the plan, and the UI waits up to 300 s.
+
+## Mission & Action Flow Refinement (Phase 10)
+
+No new agents, no new enum values, no architecture change. Three workflow-quality fixes.
+
+### Registration plans carry academic context before approval
+
+```
+Student goal
+  ├── T1 Events Agent: find the named event        ┐
+  ├── T2 Academic Agent: "What is my timetable?"   ├ independent -> one parallel dispatch round
+  └── T3 Academic Agent: "When are my exams?"      ┘
+        └── T4 Action Agent: register_event        (depends on T1, T2, T3)
+              pre-action verification -> Approval Gate -> [human] -> execute-time recheck -> write -> post-check
+```
+
+- **Planner.** `MockLLMProvider` builds this shape whenever the Academic Agent is registered (without it
+  the plan stays Events -> Action and the pre-check honestly reports "not checked"). The live planner's
+  Action Agent capability text now asks for the same three parallel dependencies.
+- **Dependency outputs reach the Action Agent** through the existing dispatcher fact merge
+  (`build_task_input_facts`, now public so the failure fingerprint hashes exactly the same input). The
+  Academic Agent publishes `timetable`/`exams` whenever that was the task's intent -- including an empty
+  list, which is a real "no classes" answer -- plus `timetable_scope`/`exams_scope` (`"all"` or the one
+  course it was filtered to).
+- **`ActionAgent._upstream_schedule_check`** builds the propose-time conflict check only from those
+  verified upstream facts (or an Events assessment that actually ran the check). It never fetches the
+  timetable itself at propose time: missing or course-scoped context is reported as not checked
+  (NEEDS_REVIEW), never filled in. The result, including where the data came from and how many class
+  slots/exams were checked, is persisted as `proposal.supporting_facts.schedule_check`.
+- **A found conflict is a hard failure.** `ActionVerifier.verify_pre_action(blocking_check_names=...)`
+  escalates `no_schedule_conflicts` for register_event at both propose and execute time, so a known clash
+  is never presented as approvable (no `ApprovalRecord` is created). "Couldn't check" stays soft. The
+  verifier's default soft/hard split is unchanged.
+
+### Two checks, on purpose
+
+The pre-approval check tells the human what is true *now*; the execute-time recheck (Phase 8,
+unchanged apart from recording its verdict) re-derives student, event status, deadline, capacity,
+duplicate, current timetable and current exams from the DB immediately before the write, because the
+world can change after approval. Proposal facts record `precheck_status`; executed/blocked outcomes
+record `execution_recheck_status`. `test_schedule_change_after_approval_blocks_the_write_toctou` proves
+the second check is not redundant: VERIFIED at approval, an exam rescheduled onto the event, write blocked,
+zero rows.
+
+### Bounded replanning without pointless repeats (`app/graph/failures.py`)
+
+Every failed task gets a deterministic fingerprint: agent, normalized objective, constraints (target
+resource), verification status, normalized reasons (generated ids stripped) and a hash of the exact input
+facts it was dispatched with. It is recorded on the failing task's `task_verified`/`task_failed` audit
+event (`failure_fingerprint`, `repeat_of_earlier_failure`); `replan_triggered` records the fingerprints it
+is replanning around. When every failure in a round is a repeat of an earlier one, the Orchestrator does
+not replan again: it appends `duplicate_failure_detected` (task ids, fingerprints, replan count) and
+finalizes FAILED with *"Execution stopped because the same verified failure occurred again without new
+information."* A different reason or different input facts (e.g. a replan gave the task new upstream
+data) is a new fingerprint and still gets its replan, bounded by `max_replans` as before. The history is
+rebuilt from the audit trail on `resume_mission`, so a new process still recognises a repeat.
+
+Net effect: a deterministic failure runs twice (original + one replan), not `1 + max_replans` times.
+`GRAPH_RECURSION_LIMIT` (200) replaces LangGraph's default of 25 node steps, which a legitimate
+two-level DAG with its full replan budget already exceeded.
+
+### API / UI (additive)
+
+- `ApprovalView.precheck_status` (the pre-check's own verdict, distinct from the paused task's
+  `verification_status`) and `schedule_check`. The Action Center badge uses `precheck_status` and shows
+  one line on what the schedule check used.
+- `MissionResponse.execution_stop` (from the `duplicate_failure_detected` audit event) and
+  `AgentRunView.identical_to_previous_run`. The Mission Workspace shows the stop message and folds an
+  exact repeat into the earlier run's card ("same result on 2 attempts"); distinct runs (proposal vs.
+  execution) are still shown separately. The timeline maps `duplicate_failure_detected` to FAILED.
+
+### Known limitations
+
+- After an execute-time block, the one permitted replan re-dispatches the same approved step, which runs
+  the recheck again against the already-granted approval (it is blocked again unless the world changed
+  back in between). A spent-on-failure approval is not yet invalidated.
+- The fingerprint's input hash covers the facts a task was dispatched with, not DB state the agent reads
+  itself; a DB change that produces the identical failure reason is (correctly) still a repeat, but one
+  that produces a *different* reason is only noticed by running the task.
+- `scripts/demo_actions.py` and the first eight `eval/action_scenarios.py` scenarios intentionally keep
+  the Phase 7 registry (no Academic Agent), so they still exercise the execute-time recheck as the only
+  conflict check.
 
 ## Non-Goals (for now)
 

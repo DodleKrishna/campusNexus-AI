@@ -10,6 +10,7 @@ Agent or a live/mocked LLM for planning.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional
 
@@ -70,6 +71,26 @@ class AlwaysFailAgent:
 
     def handle(self, message: AgentMessage) -> FakeOutcome:
         return _outcome(message, agent_status=AgentResultStatus.FAILED, verification_status=VerificationStatus.FAILED)
+
+
+class ChangingFailureAgent:
+    """Always fails, but with a *different* reason every attempt -- each retry
+    brings new information, so Phase 10 duplicate-failure suppression must not
+    stop it; only ``max_replans`` bounds it."""
+
+    _attempts = 0
+    _lock = threading.Lock()
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def handle(self, message: AgentMessage) -> FakeOutcome:
+        with ChangingFailureAgent._lock:
+            ChangingFailureAgent._attempts += 1
+            attempt = ChangingFailureAgent._attempts
+        outcome = _outcome(message, agent_status=AgentResultStatus.FAILED, verification_status=VerificationStatus.FAILED)
+        outcome.verification.issues.append(f"upstream data changed (observation #{attempt})")
+        return outcome
 
 
 class NeedsReviewAgent:

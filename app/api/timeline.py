@@ -43,6 +43,7 @@ _EVENT_TYPE_TO_STATUS = {
     "task_failed": "FAILED",
     "task_skipped": "FAILED",
     "replan_triggered": "RUNNING",
+    "duplicate_failure_detected": "FAILED",
     "approval_requested": "WAITING_FOR_APPROVAL",
     "approval_approved": "RUNNING",
     "approval_rejected": "FAILED",

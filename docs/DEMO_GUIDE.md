@@ -153,20 +153,22 @@ In each agent result, the badge is the Deterministic Verifier's verdict: **VERIF
   for it."* In mock mode keep the single quotes around the title.
 - **Expected before approval:**
   - Status **NEEDS APPROVAL**, with a banner explaining the next step.
-  - T1 Events: VERIFIED.
-  - T2 Action Agent: **WAITING FOR APPROVAL**, proposing *"Register Aditi Rao … for 'Competitive Coding
+  - The plan: T1 Events (find the event), T2 Academic (timetable), T3 Academic (exams), all
+    *independent* and run in parallel; T4 Action Agent *uses results from T1, T2, T3*.
+  - T1-T3: VERIFIED.
+  - T4 Action Agent: **WAITING FOR APPROVAL**, proposing *"Register Aditi Rao … for 'Competitive Coding
     Contest' … at Computer Lab 1"*.
 - Then follow the approval procedure (section 6).
 - **Expected after resume:**
   - Status COMPLETED.
   - **Action Result:** ✅ "Action 'register_event' executed and verified successfully."
   - Exactly one registration row is written. A repeat is refused as a duplicate.
-- **Be precise about the pre-check.** The deterministic pre-check runs before approval: student, event,
-  capacity, deadline, duplicate. This plan does not fetch her timetable first, so the approval card is
-  honestly flagged **NEEDS_REVIEW: "No timetable/exam data was available to check for schedule
-  conflicts."** The real conflict check happens at execution: every precondition, including her
-  timetable and exams, is re-derived from current data after approval and before the write. That's
-  the step that blocks the Tech Talk in section 7.
+- **Be precise about the two checks.** Before approval, the deterministic pre-check covers student, event,
+  capacity, deadline, duplicate **and** schedule conflicts, using the timetable and exams T2 and T3 just
+  produced, so the approval card shows **VERIFIED** with the note *"Schedule conflicts checked before
+  approval against 4 weekly class slot(s) and 4 exam(s) … no clash found."* After approval, every
+  precondition (including her *current* timetable and exams) is re-derived again immediately before the
+  write, because things can change after a human signs off (section 7, TOCTOU row).
 
 ### Demo 4: Campus grievance intelligence
 
@@ -197,7 +199,7 @@ In each agent result, the badge is the Deterministic Verifier's verdict: **VERIF
    the mission open; otherwise use **Open an existing mission**. Click **🔄 Resume after approval**.
 5. **Expected:**
    - Status COMPLETED, with the ✅ **Action Result** block.
-   - T2 shows *run 1 of 2: WAITING FOR APPROVAL* and *run 2 of 2: VERIFIED*.
+   - T4 shows *run 1 of 2: WAITING FOR APPROVAL* and *run 2 of 2: VERIFIED*.
    - The timeline shows `approval_approved → mission_resumed → … → mission_finalized`.
 
 Faculty cannot approve: only the Campus Administrator identity sees the buttons. Approving an
@@ -208,15 +210,16 @@ already-decided card is refused (HTTP 409).
 | Show | How | Expected |
 |---|---|---|
 | Duplicate prevention | Run Scenario 4 again after it completed. | FAILED: "Student already has a registration for this event." |
-| **Judges' failure demo:** execution-time conflict | Type *"Find the workshop titled 'Tech Talk: Cloud Native Systems', verify there are no conflicts with my classes or exams, and register me for it."*, approve it in the Action Center, then resume. | Approved, but the execution-time recheck finds her CS302 class clash. Status FAILED. ⛔ **Action Result:** "Action blocked: preconditions are no longer valid (1 schedule conflict(s) found.)". **No registration row is written** (checked in the database). |
+| **Judges' failure demo:** known conflict | Type *"Find the workshop titled 'Tech Talk: Cloud Native Systems', verify there are no conflicts with my classes or exams, and register me for it."* | The pre-check uses her timetable/exams **before** approval and finds the CS302 class clash. **No approval is ever requested** and nothing is written. Status FAILED with *"Execution stopped because the same verified failure occurred again without new information."* T4's card reads *"same result on 2 attempts"* (the one replan did not change anything). |
+| Schedule changes after approval (TOCTOU) | Not doable from the UI. Run `python scripts/demo_phase10.py` (scenario C) or `eval/action_scenarios.py`. | VERIFIED at approval; an exam is then rescheduled onto the event; the execution-time recheck blocks the write (FAILED, zero rows). |
 | Double approval | Click approve on an already-decided card (or repeat the API call). | HTTP 409. No second decision is recorded. |
 | Unsupported goal | *"Book me a flight to Goa for the holidays."* | FAILED with "CampusNexus can't help with this goal: …" and the list of what it can do. No task runs. |
 | Missing detail | *"Find a suitable event, check my schedule and prepare my registration."* | Lists conflict-free events, then "Registration was not prepared: no specific event was named…". It never picks an event for the student. |
 | Restart persistence | Leave a mission waiting for approval, restart the API, then approve and resume. | Completes normally. State is read from the database, not from memory. |
 
-In the registration missions, the Events task says **"schedule conflicts NOT checked"**. That is
-honest: that plan has no timetable task. The clash is still caught by the execution-time recheck,
-as the Tech Talk row shows.
+In the registration missions, the Events task (T1) says **"schedule conflicts NOT checked in this
+step"**. That is honest for T1 alone: it runs in parallel with the timetable/exam tasks, so it has no
+schedule data. The conflict check is done by T4's pre-check, using T2 and T3's verified results.
 
 ## 8. Recovery if something fails during the demo
 

@@ -14,6 +14,13 @@ so there is no cross-node session state to manage) -- the one exception is
 ``dispatch_and_collect``, which hands each *concurrently* dispatched task
 its own session (app/graph/dispatcher.py), since ``Session`` is not
 thread-safe.
+
+Phase 10 bounded replanning: every failed task gets a deterministic failure
+fingerprint (app/graph/failures.py) recorded in its audit event. When every
+failure of a round is an exact repeat of an earlier one (same task, target,
+reasons and input facts), the mission stops as FAILED with a
+``duplicate_failure_detected`` audit event instead of replanning again --
+a changed failure or changed input still gets its replan.
 """
 from __future__ import annotations
 
@@ -25,7 +32,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utc_now
 from app.graph.checkpoint import build_checkpointer
-from app.graph.dispatcher import dispatch_ready_tasks
+from app.graph.dispatcher import build_task_input_facts, dispatch_ready_tasks
+from app.graph.failures import all_failures_repeated, failure_fingerprint
 from app.graph.planner import generate_plan
 from app.graph.registry import AgentRegistry
 from app.graph.scheduler import compute_ready_and_blocked, has_blocked_tasks, has_failed_tasks, is_mission_complete
@@ -40,6 +48,11 @@ from app.schemas.verification import VerificationResult
 from app.services.context import ContextService
 
 DEFAULT_MAX_REPLANS = 2
+# LangGraph's default recursion limit (25 node steps) is lower than a legitimate
+# multi-level DAG with its full replan budget needs (each dispatch round is
+# three steps). Termination is still guaranteed by max_replans and by
+# duplicate-failure suppression; this only bounds a runaway graph.
+GRAPH_RECURSION_LIMIT = 200
 
 _VERIFICATION_TO_TASK_STATUS = {
     VerificationStatus.VERIFIED: TaskStatus.COMPLETED,
@@ -64,6 +77,21 @@ def _event_id() -> str:
 
 def _task_by_id(plan: MissionPlan, task_id: str) -> MissionTask:
     return next(task for task in plan.tasks if task.task_id == task_id)
+
+
+DUPLICATE_FAILURE_MESSAGE = "Execution stopped because the same verified failure occurred again without new information."
+
+
+def _rebuild_failure_fingerprints(context: ContextService, mission_id: str) -> List[str]:
+    """Every failure fingerprint this mission has already recorded, from the
+    audit trail -- so a resumed mission (a new process, replan_count reset)
+    still recognises a failure it has already seen."""
+    seen: List[str] = []
+    for event in context.list_audit_events(mission_id):
+        fingerprint = (event.event_metadata or {}).get("failure_fingerprint")
+        if fingerprint and fingerprint not in seen:
+            seen.append(fingerprint)
+    return seen
 
 
 class MissionOrchestrator:
@@ -116,10 +144,13 @@ class MissionOrchestrator:
             "mission_status": MissionStatus.PENDING,
             "replan_count": 0,
             "max_replans": self._max_replans,
+            "failure_fingerprints": [],
+            "round_failures": {},
+            "duplicate_failure_stop": False,
             "errors": [],
             "final_result": None,
         }
-        return self._graph.invoke(initial, config={"configurable": {"thread_id": mission_id}})
+        return self._graph.invoke(initial, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
 
     def resume_mission(self, mission_id: str) -> OrchestratorState:
         """Resume a mission after an interrupted execution.
@@ -145,6 +176,7 @@ class MissionOrchestrator:
 
             task_status = {step.step_id: step.status for step in mission.steps}
             agent_results, verifications, responses = self._rebuild_results(context, mission_id)
+            failure_fingerprints = _rebuild_failure_fingerprints(context, mission_id)
             mission_user_id, mission_user_role, mission_goal, prior_final_result = (
                 mission.user_id,
                 mission.user_role,
@@ -172,10 +204,13 @@ class MissionOrchestrator:
             "mission_status": MissionStatus.IN_PROGRESS,
             "replan_count": 0,
             "max_replans": self._max_replans,
+            "failure_fingerprints": failure_fingerprints,
+            "round_failures": {},
+            "duplicate_failure_stop": False,
             "errors": [],
             "final_result": prior_final_result,
         }
-        return self._graph.invoke(state, config={"configurable": {"thread_id": mission_id}})
+        return self._graph.invoke(state, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
 
     def _rebuild_results(
         self, context: ContextService, mission_id: str
@@ -395,11 +430,29 @@ class MissionOrchestrator:
             session_factory=self._session_factory,
         )
 
+        prior_agent_results = state.get("agent_results", {})
         task_status = dict(state.get("task_status", {}))
-        agent_results = dict(state.get("agent_results", {}))
+        agent_results = dict(prior_agent_results)
         verifications = dict(state.get("verifications", {}))
         responses = dict(state.get("responses", {}))
         errors = list(state.get("errors", []))
+        known_fingerprints = list(state.get("failure_fingerprints", []))
+        round_failures: Dict[str, Dict[str, object]] = {}
+
+        def _fingerprint_failure(task_id: str, verification_status: str, reasons: List[str]) -> dict:
+            task = _task_by_id(plan, task_id)
+            fingerprint = failure_fingerprint(
+                task,
+                mission_id=state["mission_id"],
+                verification_status=verification_status,
+                reasons=reasons,
+                input_facts=build_task_input_facts(task, base_facts, prior_agent_results),
+            )
+            repeated = fingerprint in known_fingerprints
+            if not repeated:
+                known_fingerprints.append(fingerprint)
+            round_failures[task_id] = {"fingerprint": fingerprint, "repeated": repeated}
+            return {"failure_fingerprint": fingerprint, "repeat_of_earlier_failure": repeated}
 
         session = self._session_factory()
         try:
@@ -411,6 +464,7 @@ class MissionOrchestrator:
                     task_status[task_id] = TaskStatus.FAILED
                     error_message = dispatched.error or "dispatch failed"
                     errors.append(f"{task_id}: {error_message}")
+                    failure_metadata = _fingerprint_failure(task_id, "dispatch_error", [error_message])
                     context.record_agent_result(
                         mission_id=state["mission_id"],
                         step_id=task_id,
@@ -427,6 +481,7 @@ class MissionOrchestrator:
                         event_type="task_failed",
                         actor="mission_orchestrator",
                         message=f"Task {task_id} failed to execute: {error_message}",
+                        metadata=failure_metadata,
                     )
                     continue
 
@@ -451,6 +506,15 @@ class MissionOrchestrator:
                     completed_at=outcome.agent_result.completed_at,
                 )
                 context.update_mission_step(task_id, status=new_status, completed_at=utc_now())
+                verified_metadata: dict = {"issues": outcome.verification.issues}
+                if new_status == TaskStatus.FAILED:
+                    verified_metadata.update(
+                        _fingerprint_failure(
+                            task_id,
+                            outcome.verification.status.value,
+                            list(outcome.verification.issues) + list(outcome.agent_result.errors),
+                        )
+                    )
                 context.append_audit_event(
                     event_id=_event_id(),
                     mission_id=state["mission_id"],
@@ -458,7 +522,7 @@ class MissionOrchestrator:
                     event_type="task_verified",
                     actor="mission_orchestrator",
                     message=f"Task {task_id} verification: {outcome.verification.status.value}",
-                    metadata={"issues": outcome.verification.issues},
+                    metadata=verified_metadata,
                 )
         finally:
             session.close()
@@ -470,6 +534,8 @@ class MissionOrchestrator:
             "responses": responses,
             "errors": errors,
             "ready_task_ids": [],
+            "failure_fingerprints": known_fingerprints,
+            "round_failures": round_failures,
         }
 
     def _update_mission_state(self, state: OrchestratorState) -> dict:
@@ -494,6 +560,23 @@ class MissionOrchestrator:
         if has_blocked_tasks(task_status):
             mission_status = MissionStatus.NEEDS_APPROVAL
         elif has_failed_tasks(task_status):
+            failed_ids = [task_id for task_id, status in task_status.items() if status == TaskStatus.FAILED]
+            round_failures = state.get("round_failures", {})
+            repeated_ids = [task_id for task_id, info in round_failures.items() if info.get("repeated")]
+            if all_failures_repeated(failed_ids, repeated_ids):
+                # Nothing about these failures changed since the last attempt
+                # (same task, target, reasons and input facts) -- another
+                # replan cannot produce new information. Stop, visibly.
+                self._record_duplicate_failure(state, failed_ids, round_failures)
+                self._persist_mission_status(state["mission_id"], MissionStatus.FAILED)
+                errors = list(state.get("errors", []))
+                errors.append(DUPLICATE_FAILURE_MESSAGE)
+                return {
+                    "mission_status": MissionStatus.FAILED,
+                    "task_status": task_status,
+                    "errors": errors,
+                    "duplicate_failure_stop": True,
+                }
             if state["replan_count"] < state["max_replans"]:
                 mission_status = MissionStatus.NEEDS_REPLAN
             else:
@@ -532,6 +615,30 @@ class MissionOrchestrator:
         finally:
             session.close()
 
+    def _record_duplicate_failure(
+        self, state: OrchestratorState, failed_ids: List[str], round_failures: Dict[str, Dict[str, object]]
+    ) -> None:
+        session = self._session_factory()
+        try:
+            ContextService(session).append_audit_event(
+                event_id=_event_id(),
+                mission_id=state["mission_id"],
+                event_type="duplicate_failure_detected",
+                actor="mission_orchestrator",
+                message=(
+                    f"{DUPLICATE_FAILURE_MESSAGE} Repeated failure(s): {', '.join(sorted(failed_ids))} "
+                    f"(after {state['replan_count']} replan(s); limit {state['max_replans']})."
+                ),
+                metadata={
+                    "task_ids": sorted(failed_ids),
+                    "fingerprints": {task_id: round_failures[task_id]["fingerprint"] for task_id in sorted(failed_ids)},
+                    "replan_count": state["replan_count"],
+                    "max_replans": state["max_replans"],
+                },
+            )
+        finally:
+            session.close()
+
     def _persist_mission_status(self, mission_id: str, status: MissionStatus) -> None:
         session = self._session_factory()
         try:
@@ -550,6 +657,11 @@ class MissionOrchestrator:
                 event_type="replan_triggered",
                 actor="mission_orchestrator",
                 message=f"Replanning after task failure (attempt {state['replan_count'] + 1}/{state['max_replans']}).",
+                metadata={
+                    "failed_tasks": {
+                        task_id: info["fingerprint"] for task_id, info in state.get("round_failures", {}).items()
+                    }
+                },
             )
             context.update_mission_status(state["mission_id"], MissionStatus.NEEDS_REPLAN)
         finally:
@@ -569,7 +681,12 @@ class MissionOrchestrator:
             if status == TaskStatus.FAILED:
                 task_status[task_id] = TaskStatus.PENDING
 
-        return {"plan": new_plan, "task_status": task_status, "replan_count": state["replan_count"] + 1}
+        return {
+            "plan": new_plan,
+            "task_status": task_status,
+            "replan_count": state["replan_count"] + 1,
+            "round_failures": {},
+        }
 
     def _finalize(self, state: OrchestratorState) -> dict:
         final_text = self._summarize(state)
@@ -617,6 +734,8 @@ class MissionOrchestrator:
             return "Mission failed: plan validation errors -- " + "; ".join(state["validation_errors"])
 
         text = gathered or f"Mission ended with status {state['mission_status'].value}."
+        if state.get("duplicate_failure_stop"):
+            text = f"{DUPLICATE_FAILURE_MESSAGE} {gathered}".strip()
         if unsupported:
             text += " Not handled by this mission: " + " ".join(unsupported)
         return text

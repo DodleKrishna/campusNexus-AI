@@ -36,6 +36,10 @@ class AgentRunView(BaseModel):
     # Phase 9 (additive): the agent's own user-facing answer for this task,
     # generated from its verified facts -- previously persisted but hidden.
     response_text: str = ""
+    # Phase 10 (additive): True when this run repeated the previous run of the
+    # same task exactly (same status, errors and answer) -- the UI folds it
+    # into that earlier run instead of showing an identical card again.
+    identical_to_previous_run: bool = False
 
 
 class ApprovalSummaryView(BaseModel):
@@ -43,6 +47,14 @@ class ApprovalSummaryView(BaseModel):
     step_id: str
     action_summary: str
     status: str
+
+
+class ExecutionStopView(BaseModel):
+    """Why the Orchestrator stopped replanning (Phase 10), from the audit trail."""
+
+    reason: str  # "duplicate_failure"
+    message: str
+    task_ids: List[str] = []
 
 
 class MissionResponse(BaseModel):
@@ -53,6 +65,7 @@ class MissionResponse(BaseModel):
     agent_results: List[AgentRunView]
     pending_approvals: List[ApprovalSummaryView] = []
     final_result: Optional[str] = None
+    execution_stop: Optional[ExecutionStopView] = None
     created_at: datetime
     updated_at: datetime
 

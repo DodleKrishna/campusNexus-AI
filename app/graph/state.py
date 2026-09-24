@@ -43,5 +43,14 @@ class OrchestratorState(TypedDict, total=False):
     replan_count: int
     max_replans: int
 
+    # Phase 10 bounded replanning (app/graph/failures.py). Every failure
+    # fingerprint seen so far in this mission (rebuilt from the audit trail on
+    # resume); the latest dispatch round's failures, task_id ->
+    # {"fingerprint", "repeated"}; and whether the mission was stopped
+    # because every failure was an exact repeat.
+    failure_fingerprints: List[str]
+    round_failures: Dict[str, Dict[str, object]]
+    duplicate_failure_stop: bool
+
     errors: List[str]
     final_result: Optional[str]
