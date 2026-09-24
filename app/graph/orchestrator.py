@@ -24,19 +24,24 @@ a changed failure or changed input still gets its replan.
 """
 from __future__ import annotations
 
+import threading
 import uuid
-from typing import Dict, List, Optional, Tuple
+from datetime import date, datetime, timezone
+from typing import Dict, List, Mapping, Optional, Tuple
 
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utc_now
+from app.db.repositories.missions import get_latest_approval_for_step, get_tool_call_by_id
+from app.db.session import upgrade_schema
 from app.graph.checkpoint import build_checkpointer
 from app.graph.dispatcher import MISSION_GOAL_KEY, build_task_input_facts, dispatch_ready_tasks
 from app.graph.failures import all_failures_repeated, failure_fingerprint
 from app.graph.planner import generate_plan
 from app.graph.registry import AgentRegistry
 from app.graph.scheduler import compute_ready_and_blocked, has_blocked_tasks, has_failed_tasks, is_mission_complete
+from app.graph.selection import build_selection_continuation_plan, continuation_step_id
 from app.graph.state import OrchestratorState
 from app.graph.validator import validate_plan
 from app.llm.base import LLMProvider, LLMTransientError
@@ -46,15 +51,20 @@ from app.schemas.agent import AgentResult
 from app.schemas.enums import (
     AgentName,
     AgentResultStatus,
+    ApprovalStatus,
     MissionStatus,
     TaskStatus,
+    ToolExecutionStatus,
     UserRole,
     VerificationPhase,
     VerificationStatus,
 )
 from app.schemas.evidence import Evidence
 from app.schemas.mission import MissionPlan, MissionTask
+from app.schemas.selection import SELECTABLE_ACTIONS, CandidateStatus, SelectedTarget, SelectionOutcome, SelectionResult
 from app.schemas.verification import VerificationResult
+from app.services import target_selection
+from app.services.approval_gate import ApprovalGate
 from app.services.context import ContextService
 
 DEFAULT_MAX_REPLANS = 2
@@ -100,9 +110,26 @@ _CANDIDATE_LABEL = (
     "or sent for approval):"
 )
 _SELECTION_GUIDANCE = (
-    "Choose one of the candidate events and ask to register for it by its exact title; it will then be "
-    "checked against your timetable and exams and sent for your approval."
+    "Select one of the candidate events in the Mission Workspace (or name it by its exact title in a new "
+    "request); it is then re-checked against your timetable and exams and sent for approval."
 )
+
+
+class SelectionError(Exception):
+    """A target selection the server refuses outright (Phase 13). ``status_code``
+    follows HTTP semantics so the API can pass it through unchanged."""
+
+    def __init__(self, status_code: int, detail: str) -> None:
+        super().__init__(detail)
+        self.status_code = status_code
+        self.detail = detail
+
+
+def _now(as_of: Optional[str]) -> datetime:
+    if as_of:
+        d = date.fromisoformat(str(as_of))
+        return datetime(d.year, d.month, d.day, tzinfo=timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 def _provider_unavailable_message(outage: Dict[str, object]) -> str:
@@ -120,10 +147,14 @@ def _provider_unavailable_message(outage: Dict[str, object]) -> str:
     )
 
 
-def unconfirmed_action_targets(plan: MissionPlan, goal: str) -> Dict[str, TargetProvenance]:
+def unconfirmed_action_targets(
+    plan: MissionPlan, goal: str, selections: Optional[Mapping[str, SelectedTarget]] = None
+) -> Dict[str, TargetProvenance]:
     """Action tasks whose target the student never named, keyed by task id.
 
-    Deterministic: the target must appear in the student's own goal. These
+    Deterministic: the target must appear in the student's own goal, or be
+    the resource of the student's persisted selection for that task
+    (``selections``, keyed by step id, loaded from the Context Service). These
     tasks are never dispatched -- no proposal, no approval -- because an
     agent's recommendation is not the student's selection.
     """
@@ -132,17 +163,20 @@ def unconfirmed_action_targets(plan: MissionPlan, goal: str) -> Dict[str, Target
         if task.agent != AgentName.ACTION_AGENT:
             continue
         tool_name = str(task.constraints.get("tool_name") or "").strip()
-        provenance = resolve_target_provenance(tool_name, task.constraints, goal)
+        selection = (selections or {}).get(task.task_id)
+        provenance = resolve_target_provenance(tool_name, task.constraints, goal, selection)
         if not provenance.confirmed:
             unconfirmed[task.task_id] = provenance
     return unconfirmed
 
 
-def unselected_declared_actions(plan: MissionPlan, goal: str) -> List[str]:
+def unselected_declared_actions(
+    plan: MissionPlan, goal: str, selections: Optional[Mapping[str, SelectedTarget]] = None
+) -> List[str]:
     """Tools the planner declared as awaiting the student's selection
     (``selection_required_actions``) for which the plan holds no action task
     with a confirmed target -- a named target always wins over the declaration."""
-    unconfirmed = unconfirmed_action_targets(plan, goal)
+    unconfirmed = unconfirmed_action_targets(plan, goal, selections)
     confirmed_tools = {
         str(task.constraints.get("tool_name") or "")
         for task in plan.tasks
@@ -151,14 +185,38 @@ def unselected_declared_actions(plan: MissionPlan, goal: str) -> List[str]:
     return [tool for tool in plan.selection_required_actions if tool not in confirmed_tools]
 
 
-def user_selection_required(plan: Optional[MissionPlan], goal: str) -> bool:
+def pending_selection_tools(
+    plan: Optional[MissionPlan], goal: str, selections: Optional[Mapping[str, SelectedTarget]] = None
+) -> List[str]:
+    """The action tools still waiting for the student to choose a target."""
+    if plan is None:
+        return []
+    tools = [p.tool_name for p in unconfirmed_action_targets(plan, goal, selections).values()]
+    tools += unselected_declared_actions(plan, goal, selections)
+    return list(dict.fromkeys(tools))
+
+
+def user_selection_required(
+    plan: Optional[MissionPlan], goal: str, selections: Optional[Mapping[str, SelectedTarget]] = None
+) -> bool:
     """True when an action the student asked for cannot proceed until they
     select its target: an action task was refused by target provenance, or the
     planner declared the action without a target. Structured state only --
-    never the final response's prose."""
-    if plan is None:
+    never the final response's prose. A persisted selection (``selections``)
+    satisfies it once the continuation plan carries the selected action."""
+    return bool(pending_selection_tools(plan, goal, selections))
+
+
+def selection_locked(session: Session, selection: SelectedTarget) -> bool:
+    """True once the selected action is approved or executed: from then on the
+    selection can never change (an approval for one target never covers another)."""
+    approval = get_latest_approval_for_step(session, selection.step_id)
+    if approval is None:
         return False
-    return bool(unconfirmed_action_targets(plan, goal)) or bool(unselected_declared_actions(plan, goal))
+    if approval.status == ApprovalStatus.APPROVED:
+        return True
+    tool_call = get_tool_call_by_id(session, approval.tool_call_id) if approval.tool_call_id else None
+    return tool_call is not None and tool_call.status == ToolExecutionStatus.SUCCESS
 
 
 def _task_identity(task: MissionTask) -> tuple:
@@ -216,7 +274,23 @@ class MissionOrchestrator:
         self._registry = registry
         self._llm_provider = llm_provider
         self._max_replans = max_replans
+        # Serializes selection requests in this process, so two clicks on the
+        # same candidate can never both create a proposal.
+        self._selection_lock = threading.Lock()
+        self._schema_ready = False
         self._graph = self._build_graph()
+
+    def _ensure_schema(self) -> None:
+        """Bring an existing database up to the current tables/columns once,
+        before this orchestrator's first mission operation (additive and
+        idempotent -- see ``upgrade_schema``). Lazy, so building an
+        orchestrator (e.g. at API import time) never touches a database."""
+        if self._schema_ready:
+            return
+        bind = self._session_factory.kw.get("bind")
+        if bind is not None:
+            upgrade_schema(bind)
+        self._schema_ready = True
 
     # ------------------------------------------------------------------
     # Public API
@@ -232,6 +306,7 @@ class MissionOrchestrator:
         as_of: str | None = None,
     ) -> OrchestratorState:
         """Plan and execute a brand-new mission for ``goal``."""
+        self._ensure_schema()
         mission_id = f"mission-{uuid.uuid4().hex[:12]}"
         initial: OrchestratorState = {
             "mission_id": mission_id,
@@ -272,6 +347,7 @@ class MissionOrchestrator:
         resume correctly by reading the SQLite-backed Mission/MissionStep/
         AuditLog rows alone.
         """
+        self._ensure_schema()
         session = self._session_factory()
         try:
             context = ContextService(session)
@@ -320,6 +396,187 @@ class MissionOrchestrator:
             "final_result": prior_final_result,
         }
         return self._graph.invoke(state, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
+
+    def select_target(
+        self,
+        mission_id: str,
+        *,
+        tool_name: str,
+        resource_type: str,
+        resource_id: int,
+        selected_by: str,
+        as_of: Optional[str] = None,
+    ) -> SelectionOutcome:
+        """Phase 13: the student picked one of the mission's candidates.
+
+        Deterministic -- no LLM call. Validates the request against the
+        mission's persisted candidates and the resource's *current* state,
+        records the selection (the only USER_SELECTION authorization),
+        writes the next plan version of the same mission and resumes it, so
+        the Action Agent proposes, pre-checks and requests approval exactly as
+        for a named target. A candidate that is no longer valid is BLOCKED:
+        nothing is proposed and no approval is created.
+        """
+        self._ensure_schema()
+        with self._selection_lock:
+            outcome, continue_run = self._apply_selection(
+                mission_id, tool_name=tool_name, resource_type=resource_type, resource_id=resource_id,
+                selected_by=selected_by, now=_now(as_of),
+            )
+            if continue_run:
+                self.resume_mission(mission_id)
+        return outcome
+
+    def _apply_selection(
+        self, mission_id: str, *, tool_name: str, resource_type: str, resource_id: int, selected_by: str, now: datetime
+    ) -> Tuple[SelectionOutcome, bool]:
+        session = self._session_factory()
+        try:
+            context = ContextService(session)
+            mission = context.get_mission(mission_id)
+            if mission is None:
+                raise SelectionError(404, f"unknown mission_id {mission_id!r}")
+            plan = context.get_latest_plan_snapshot(mission_id)
+            if plan is None:
+                raise SelectionError(409, "This mission has no plan to continue.")
+            goal, student_id = mission.original_goal, mission.user_id
+            selections = context.list_active_target_selections(mission_id)
+            candidate_tools = {r.tool_name for r in context.list_action_candidates(mission_id)}
+            if tool_name not in candidate_tools:
+                raise SelectionError(422, f"This mission has no candidates to select for {tool_name!r}.")
+            current = next((s for s in selections.values() if s.tool_name == tool_name), None)
+            if current is None and tool_name not in pending_selection_tools(plan, goal, selections):
+                raise SelectionError(409, "This mission does not need a target selection.")
+            record = context.get_action_candidate(mission_id, tool_name, resource_type, resource_id)
+            if record is None:
+                raise SelectionError(404, f"{resource_type} {resource_id} is not one of this mission's candidates.")
+
+            # Once the current selection's action is approved or executed, the
+            # selection can no longer change (an approval for A never covers B).
+            if current is not None and selection_locked(session, current):
+                raise SelectionError(
+                    409, f"The action for '{current.title}' is already approved or completed; the selection can no longer change."
+                )
+
+            was_selectable = record.status == CandidateStatus.ELIGIBLE.value
+            assessment = target_selection.reassess_candidate(session, record, student_id=student_id, now=now)
+            candidate = target_selection.to_candidate(record, selections, session)
+            if not assessment.selectable:
+                message = (
+                    f"'{record.title}' can no longer be selected: {' '.join(assessment.reasons)} "
+                    "This changed after it was recommended. Please choose another event."
+                    if was_selectable
+                    else f"'{record.title}' cannot be selected: {' '.join(assessment.reasons)} Please choose another event."
+                )
+                context.append_audit_event(
+                    event_id=_event_id(), mission_id=mission_id, event_type="target_selection_blocked", actor=selected_by,
+                    message=message,
+                    metadata={"tool_name": tool_name, "resource_type": resource_type, "resource_id": resource_id,
+                              "status": assessment.status.value, "reasons": assessment.reasons},
+                )
+                return SelectionOutcome(result=SelectionResult.BLOCKED, message=message, candidate=candidate), False
+
+            if current is not None and current.resource_id == resource_id:
+                approval = get_latest_approval_for_step(session, current.step_id)
+                if approval is not None and approval.status == ApprovalStatus.PENDING:
+                    return SelectionOutcome(
+                        result=SelectionResult.ALREADY_SELECTED,
+                        message=f"'{current.title}' is already selected and awaiting approval.",
+                        candidate=candidate, selection=current,
+                    ), False
+                # Selected before but no live proposal (e.g. it went stale):
+                # continue again under the same selection -- a fresh proposal
+                # must pass the pre-check before any new approval.
+                self._persist_continuation(context, plan, current)
+                return SelectionOutcome(
+                    result=SelectionResult.SELECTED, message=f"Re-checking '{current.title}' for a new approval.",
+                    candidate=candidate, selection=current,
+                ), True
+
+            superseded_approval_id = None
+            if current is not None:
+                superseded_approval_id = self._supersede_selection(session, current, new_title=record.title, actor=selected_by)
+
+            step_id = continuation_step_id(
+                plan, tool_name=tool_name, selections=selections,
+                unconfirmed_task_ids=unconfirmed_action_targets(plan, goal, selections).keys(),
+                existing_step_ids=[step.step_id for step in mission.steps],
+            )
+            saved = context.record_target_selection(
+                selection_id=f"sel-{uuid.uuid4().hex[:12]}", mission_id=mission_id, step_id=step_id,
+                tool_name=tool_name, resource_type=resource_type, resource_id=resource_id, title=record.title,
+                selected_by=selected_by,
+            )
+            selection = context.get_active_target_selection(mission_id, step_id)
+            assert selection is not None and selection.selection_id == saved.selection_id
+            context.append_audit_event(
+                event_id=_event_id(), mission_id=mission_id, step_id=step_id, event_type="target_selected",
+                actor=selected_by,
+                message=f"Student selected '{record.title}' for {tool_name} (target source: user_selection).",
+                metadata={"selection": selection.model_dump(mode="json"), "assessment": assessment.model_dump(mode="json"),
+                          "superseded_selection_id": current.selection_id if current else None},
+            )
+            self._persist_continuation(context, plan, selection)
+            return SelectionOutcome(
+                result=SelectionResult.SELECTED, message=f"Selected: {record.title}",
+                candidate=target_selection.to_candidate(record, {step_id: selection}, session), selection=selection,
+                superseded_selection_id=current.selection_id if current else None,
+                superseded_approval_id=superseded_approval_id,
+            ), True
+        finally:
+            session.close()
+
+    @staticmethod
+    def _supersede_selection(session: Session, current: SelectedTarget, *, new_title: str, actor: str) -> Optional[str]:
+        """The student chose a different target before approval. A pending
+        approval for the old target is marked EDIT_REQUIRED (the existing
+        lifecycle for a changed payload) and its tool call can never run."""
+        context = ContextService(session)
+        reason = f"The student selected '{new_title}' instead of '{current.title}'."
+        superseded_approval_id = None
+        approval = get_latest_approval_for_step(session, current.step_id)
+        if approval is not None and approval.status == ApprovalStatus.PENDING:
+            ApprovalGate(session).mark_superseded(approval.approval_id, requested_by=actor, reason=reason)
+            tool_call = get_tool_call_by_id(session, approval.tool_call_id) if approval.tool_call_id else None
+            if tool_call is not None and tool_call.status == ToolExecutionStatus.PENDING:
+                context.update_tool_call_record(
+                    tool_call.tool_call_id, status=ToolExecutionStatus.FAILED,
+                    error="never executed; its approval was superseded by a new selection: " + reason,
+                )
+            superseded_approval_id = approval.approval_id
+        context.supersede_target_selection(current.selection_id, reason=reason)
+        context.append_audit_event(
+            event_id=_event_id(), mission_id=current.mission_id, step_id=current.step_id,
+            event_type="target_selection_superseded", actor=actor, message=reason,
+            metadata={"selection_id": current.selection_id, "superseded_approval_id": superseded_approval_id},
+        )
+        return superseded_approval_id
+
+    @staticmethod
+    def _persist_continuation(context: ContextService, plan: MissionPlan, selection: SelectedTarget) -> None:
+        """Write the next plan version (same mission) carrying the selected
+        action, and make its step runnable. ``resume_mission`` then continues
+        from the Context Service alone -- no planner call."""
+        mission_id = plan.mission_id
+        schedule = target_selection.verified_schedule(context, mission_id, plan)
+        record = context.get_action_candidate(mission_id, selection.tool_name, selection.resource_type, selection.resource_id)
+        upstream = [*(schedule.step_ids if schedule else []), *([record.recommended_by_step_id] if record and record.recommended_by_step_id else [])]
+        new_plan = build_selection_continuation_plan(plan, step_id=selection.step_id, selection=selection, upstream_step_ids=upstream)
+        mission = context.get_mission(mission_id)
+        existing = {step.step_id for step in mission.steps} if mission else set()
+        action = _task_by_id(new_plan, selection.step_id)
+        if selection.step_id in existing:
+            context.update_mission_step(selection.step_id, status=TaskStatus.PENDING, agent=action.agent, objective=action.objective)
+        else:
+            context.create_mission_step(
+                step_id=selection.step_id, mission_id=mission_id, agent=action.agent, objective=action.objective,
+                sequence=len(new_plan.tasks) - 1,
+            )
+        context.append_audit_event(
+            event_id=_event_id(), mission_id=mission_id, event_type="plan_generated", actor="mission_orchestrator",
+            message=f"Plan continued with the student's selection ('{selection.title}'); no replanning.",
+            metadata={"plan": new_plan.model_dump(mode="json"), "source": "user_selection", "selection_id": selection.selection_id},
+        )
 
     def _rebuild_results(
         self, context: ContextService, mission_id: str
@@ -527,7 +784,8 @@ class MissionOrchestrator:
         approval. Its read-only upstream tasks still run, so candidates are
         still shown -- as candidates, for the student to choose from."""
         task_status = dict(state.get("task_status", {}))
-        for task_id, provenance in unconfirmed_action_targets(plan, state["original_goal"]).items():
+        selections = context.list_active_target_selections(state["mission_id"])
+        for task_id, provenance in unconfirmed_action_targets(plan, state["original_goal"], selections).items():
             if task_status.get(task_id) in (TaskStatus.COMPLETED, TaskStatus.SKIPPED):
                 continue
             task_status[task_id] = TaskStatus.SKIPPED
@@ -549,7 +807,7 @@ class MissionOrchestrator:
             for e in context.list_audit_events(state["mission_id"])
             if e.event_type == "action_target_unconfirmed" and (e.event_metadata or {}).get("source") == "planner"
         }
-        for tool_name in unselected_declared_actions(plan, state["original_goal"]):
+        for tool_name in unselected_declared_actions(plan, state["original_goal"], selections):
             if tool_name in recorded:
                 continue
             context.append_audit_event(
@@ -938,10 +1196,12 @@ class MissionOrchestrator:
             session.close()
 
     def _finalize(self, state: OrchestratorState) -> dict:
-        final_text = self._summarize(state)
         session = self._session_factory()
         try:
             context = ContextService(session)
+            selections = context.list_active_target_selections(state["mission_id"])
+            candidate_note = self._record_candidates(session, state, selections)
+            final_text = self._summarize(state, selections, candidate_note)
             context.update_mission_status(state["mission_id"], state["mission_status"], final_result=final_text)
             context.append_audit_event(
                 event_id=_event_id(),
@@ -955,15 +1215,54 @@ class MissionOrchestrator:
         return {"final_result": final_text}
 
     @staticmethod
-    def _summarize(state: OrchestratorState) -> str:
+    def _record_candidates(session: Session, state: OrchestratorState, selections: Mapping[str, SelectedTarget]) -> str:
+        """Phase 13: when a completed mission is waiting for the student to pick
+        an action's target, persist the verified candidates (deterministic, no
+        LLM) and return one line saying how many can be selected."""
+        plan = state.get("plan")
+        if plan is None or state["mission_status"] != MissionStatus.COMPLETED:
+            return ""
+        tools = [t for t in pending_selection_tools(plan, state["original_goal"], selections) if t in SELECTABLE_ACTIONS]
+        if not tools:
+            return ""
+        candidates = target_selection.record_candidates(
+            session, mission_id=state["mission_id"], plan=plan, tools=tools,
+            student_id=state["student_id"], now=_now(state.get("as_of")),
+        )
+        counts: Dict[str, int] = {}
+        for candidate in candidates:
+            counts[candidate.assessment.status.value] = counts.get(candidate.assessment.status.value, 0) + 1
+        ContextService(session).append_audit_event(
+            event_id=_event_id(),
+            mission_id=state["mission_id"],
+            event_type="action_candidates_recorded",
+            actor="mission_orchestrator",
+            message=f"Recorded {len(candidates)} candidate target(s) for {', '.join(tools)}; the student selects one.",
+            metadata={"tools": tools, "status_counts": counts},
+        )
+        if not candidates:
+            return "No candidate events were found to select from."
+        eligible = counts.get(CandidateStatus.ELIGIBLE.value, 0)
+        return (
+            f"{eligible} of {len(candidates)} candidate event(s) can be selected now; the others show why they "
+            "cannot. Nothing is registered until you select one and an approver approves it."
+        )
+
+    @staticmethod
+    def _summarize(
+        state: OrchestratorState,
+        selections: Optional[Mapping[str, SelectedTarget]] = None,
+        candidate_note: str = "",
+    ) -> str:
         plan = state.get("plan")
         responses = state.get("responses", {})
         task_status = state.get("task_status", {})
         unsupported = list(plan.unsupported_requests) if plan is not None else []
+        selections = selections or {}
         # Phase 12B: an action whose target the student never named was not
         # prepared. Say so, and present any events found as candidates -- an
         # agent's recommendation is never the student's selection.
-        unconfirmed = unconfirmed_action_targets(plan, state["original_goal"]) if plan is not None else {}
+        unconfirmed = unconfirmed_action_targets(plan, state["original_goal"], selections) if plan is not None else {}
         confirmed_registration = plan is not None and any(
             task.agent == AgentName.ACTION_AGENT
             and task.constraints.get("tool_name") == "register_event"
@@ -1012,8 +1311,16 @@ class MissionOrchestrator:
             text = f"{DUPLICATE_FAILURE_MESSAGE} {gathered}".strip()
         if selection_notes:
             text += " " + " ".join(selection_notes)
+        if candidate_note:
+            text += " " + candidate_note
+        chosen = [s for s in selections.values() if plan is not None and s.step_id in {t.task_id for t in plan.tasks}]
+        for selection in chosen:
+            text += f" Selected by you: '{selection.title}' ({selection.tool_name})."
         if unsupported:
-            text += " Not handled by this mission: " + " ".join(unsupported)
+            # Phase 13: after a selection, the planner's original notes describe
+            # the goal as it stood before the student chose -- label them so.
+            prefix = "Planner notes from before your selection:" if chosen else "Not handled by this mission:"
+            text += f" {prefix} " + " ".join(unsupported)
         return text
 
     # ------------------------------------------------------------------

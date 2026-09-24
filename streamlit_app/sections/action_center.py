@@ -100,6 +100,8 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
             f"Deterministic pre-check  \n{theme.status_badge(precheck_status)}",
             unsafe_allow_html=True,
         )
+        if approval.get("target_source_label"):
+            st.caption(f"Target: {approval['target_source_label']}.")
         schedule_note = _schedule_check_note(approval.get("schedule_check"))
         if schedule_note:
             st.caption(schedule_note)

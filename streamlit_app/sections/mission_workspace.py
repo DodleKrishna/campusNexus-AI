@@ -32,6 +32,10 @@ CANNED_MISSIONS = [
         "Find the workshop titled 'Competitive Coding Contest', verify there are no conflicts with my classes "
         "or exams, and register me for it.",
     ),
+    (
+        "🗓️ Choose an event & register",
+        "Find a suitable event, check my schedule and prepare my registration.",
+    ),
 ]
 
 _MISSION_ID_KEY = "cn_current_mission_id"
@@ -167,6 +171,9 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
             st.caption("Structured facts passed to the orchestrator and to any dependent task:")
             st.json(run["facts"], expanded=False)
 
+    if mission.get("user_selection_required") or mission.get("selected_target"):
+        _render_candidate_selection(client, mission)
+
     if mission["pending_approvals"]:
         st.markdown("#### Recommended Actions (waiting for approval)")
         for approval in mission["pending_approvals"]:
@@ -229,6 +236,120 @@ def _render_stale_approvals(client: ApiClient, mission: dict) -> None:
                 st.error(f"Re-check failed: {exc}")
             else:
                 st.rerun()
+
+
+_CANDIDATE_STATUS_LABELS = {
+    "eligible": "No schedule conflict · Registration open",
+    "conflict": "Schedule conflict",
+    "full": "Event full",
+    "deadline_passed": "Registration deadline passed",
+    "already_registered": "Already registered",
+    "unavailable": "Registration not open",
+    "needs_review": "Could not be fully checked",
+}
+_SELECTION_FLASH_KEY = "cn_selection_flash"
+
+
+def _render_candidate_selection(client: ApiClient, mission: dict) -> None:
+    """Phase 13: the student picks the action's target from verified candidates.
+
+    Every status and reason shown comes from the server's deterministic
+    check. Only an eligible candidate gets an enabled button, and the server
+    re-validates it again on click -- the UI never decides what is safe.
+    """
+    mission_id = mission["mission_id"]
+    try:
+        listing = client.get_candidates(mission_id)
+    except (ApiUnavailableError, ApiError) as exc:
+        st.warning(f"Could not load candidate events: {exc}")
+        return
+    selected = listing.get("selected_target")
+    flash = st.session_state.pop(_SELECTION_FLASH_KEY, None)
+
+    if selected:
+        st.markdown("#### Your selection")
+        st.success(f"Selected: **{selected['title']}**")
+        _render_continuation_progress(mission)
+    if not listing["candidates"] or not (listing["user_selection_required"] or listing["selection_open"]):
+        if flash is not None:
+            getattr(st, flash[0])(flash[1])
+        return
+
+    st.markdown("#### Choose a different event" if selected else "#### Choose an event")
+    st.caption(
+        "CampusNexus recommends; you choose. Each event below was checked against your timetable, exams and "
+        "current registration rules. Selecting one prepares the registration for an approver. Nothing is "
+        "registered until it is approved."
+    )
+    if flash is not None:
+        getattr(st, flash[0])(flash[1])
+    if st.button("🔄 Refresh availability", key=f"refresh-candidates-{mission_id}"):
+        try:
+            client.refresh_candidates(mission_id)
+        except (ApiUnavailableError, ApiError) as exc:
+            st.session_state[_SELECTION_FLASH_KEY] = ("error", f"Refresh failed: {exc}")
+        st.rerun()
+
+    candidates = sorted(listing["candidates"], key=lambda c: (not c["selectable"], c.get("start_at") or ""))
+    for candidate in candidates:
+        _render_candidate_card(client, mission_id, candidate, listing["selection_open"])
+
+
+def _render_candidate_card(client: ApiClient, mission_id: str, candidate: dict, selection_open: bool) -> None:
+    status = candidate["assessment"]["status"]
+    with st.container(border=True):
+        title = candidate["title"] + (" ✅ (your selection)" if candidate.get("selected") else "")
+        st.markdown(f"**{title}**")
+        st.caption(f"{candidate.get('start_at') or 'time unknown'} · {candidate.get('venue') or 'venue unknown'}")
+        if candidate.get("recommendation_reason"):
+            st.caption(f"Why recommended: {candidate['recommendation_reason']}")
+        label = _CANDIDATE_STATUS_LABELS.get(status, status)
+        if candidate["selectable"]:
+            seats = candidate.get("seats_remaining")
+            st.markdown(f"🟢 {label}" + (f" · {seats} seat(s) left" if seats is not None else ""))
+        else:
+            st.markdown(f"🔴 {label}")
+            for reason in candidate["assessment"].get("reasons") or []:
+                st.caption(reason)
+        if candidate.get("selected"):
+            return
+        key = f"select-{mission_id}-{candidate['resource_id']}"
+        if candidate["selectable"] and selection_open:
+            if st.button("Select this event", key=key):
+                _select(client, mission_id, candidate)
+        else:
+            st.button("Unavailable", key=key, disabled=True)
+
+
+def _select(client: ApiClient, mission_id: str, candidate: dict) -> None:
+    try:
+        with st.spinner("Re-checking the event and preparing the registration..."):
+            result = client.select_candidate(mission_id, candidate["resource_id"])
+        st.session_state[_SELECTION_FLASH_KEY] = ("success", result["message"])
+    except ApiUnavailableError as exc:
+        st.session_state[_SELECTION_FLASH_KEY] = ("error", f"⚠️ {exc}")
+    except ApiError as exc:
+        # 409: the event changed since it was recommended -- the server says why.
+        st.session_state[_SELECTION_FLASH_KEY] = ("warning", str(exc.detail))
+    st.rerun()
+
+
+def _render_continuation_progress(mission: dict) -> None:
+    """Selected -> pre-check -> approval, read from the action task's real results."""
+    runs = [r for r in mission["agent_results"] if r["agent"] == "action_agent"]
+    latest = runs[-1] if runs else None
+    steps = ["Selected"]
+    if latest is not None:
+        precheck = latest["facts"].get("precheck_status")
+        if precheck:
+            steps.append(f"Pre-check {precheck.upper()}")
+        if latest["facts"].get("awaiting_approval"):
+            steps.append("Approval required")
+        elif latest["status"] == "success":
+            steps.append("Registered and verified")
+        elif latest["status"] == "failed":
+            steps.append("Blocked")
+    st.markdown(" → ".join(f"**{step}**" for step in steps))
 
 
 def short_ids_for(mission: dict) -> dict:

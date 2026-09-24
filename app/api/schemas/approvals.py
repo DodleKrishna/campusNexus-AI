@@ -54,6 +54,10 @@ class ApprovalView(BaseModel):
     replaced_by_approval_id: Optional[str] = None
     # One plain-language line explaining the status to an approver.
     status_message: Optional[str] = None
+    # Phase 12B/13: where the action's target came from (user_goal,
+    # user_selection, caller_supplied, not_required) and a concise label.
+    target_source: Optional[str] = None
+    target_source_label: Optional[str] = None
 
 
 class ApprovalDecisionRequest(BaseModel):

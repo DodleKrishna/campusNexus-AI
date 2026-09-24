@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, JSON, String, Text
+from sqlalchemy import Enum as SAEnum, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UTCDateTime, utc_now
@@ -171,6 +171,61 @@ class AuditLog(Base):
     message: Mapped[str] = mapped_column(Text)
     event_metadata: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
     timestamp: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+    mission = relationship("Mission")
+
+
+class ActionCandidateRecord(Base):
+    """Phase 13: one resource the student may select as an action's target.
+
+    Recorded when a mission ends needing a selection; re-assessed (never
+    re-planned) on refresh and on selection. ``assessment`` holds the latest
+    deterministic ``CandidateAssessment``; ``recommendation`` holds why an
+    agent suggested it. The Event row itself is never copied -- ``resource_id``
+    is its real id and every check reloads it.
+    """
+
+    __tablename__ = "action_candidates"
+    __table_args__ = (UniqueConstraint("mission_id", "tool_name", "resource_type", "resource_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.mission_id"), index=True)
+    tool_name: Mapped[str] = mapped_column(String(100))
+    resource_type: Mapped[str] = mapped_column(String(40))
+    resource_id: Mapped[int] = mapped_column()
+    title: Mapped[str] = mapped_column(String(255))
+    recommended_by_step_id: Mapped[Optional[str]] = mapped_column(String(64), default=None)
+    recommendation: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    assessment: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
+    status: Mapped[str] = mapped_column(String(40))
+    sequence: Mapped[int] = mapped_column(default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    assessed_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+    mission = relationship("Mission")
+
+
+class TargetSelectionRecord(Base):
+    """Phase 13: the student's explicit, server-validated choice of a target.
+
+    The only thing that can make an action's target USER_SELECTION. A newer
+    selection for the same mission step supersedes the older one (the old row
+    is kept, with ``superseded_at``/``superseded_reason``, for the audit trail).
+    """
+
+    __tablename__ = "target_selections"
+
+    selection_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    mission_id: Mapped[str] = mapped_column(ForeignKey("missions.mission_id"), index=True)
+    step_id: Mapped[str] = mapped_column(String(64), index=True)
+    tool_name: Mapped[str] = mapped_column(String(100))
+    resource_type: Mapped[str] = mapped_column(String(40))
+    resource_id: Mapped[int] = mapped_column()
+    title: Mapped[str] = mapped_column(String(255))
+    selected_by: Mapped[str] = mapped_column(String(120))
+    selected_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    superseded_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    superseded_reason: Mapped[Optional[str]] = mapped_column(Text, default=None)
 
     mission = relationship("Mission")
 

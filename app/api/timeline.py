@@ -54,6 +54,12 @@ _EVENT_TYPE_TO_STATUS = {
     "action_target_unconfirmed": "NEEDS_REVIEW",
     # Phase 12C: an LLM provider outage paused the task; resuming re-runs it.
     "provider_unavailable": "NEEDS_REVIEW",
+    # Phase 13: the student chooses a target; a no-longer-valid choice is refused.
+    "action_candidates_recorded": "NEEDS_REVIEW",
+    "action_candidates_refreshed": "VERIFYING",
+    "target_selected": "RUNNING",
+    "target_selection_blocked": "NEEDS_REVIEW",
+    "target_selection_superseded": "RUNNING",
 }
 
 

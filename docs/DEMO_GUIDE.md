@@ -104,7 +104,7 @@ Choose the identity in the sidebar under **Viewing as**.
 | Faculty: Prof. Meera Nair | Staff view. Can view any student, but **cannot approve** actions. |
 | Campus Administrator: Priya Desai | The only identity allowed to approve or reject actions in the **Action Center**. |
 
-## 5. The four demonstration scenarios
+## 5. The demonstration scenarios
 
 Run them as **Student: Aditi Rao** from **Mission Workspace**. Type the goal into **Or describe your own
 goal** and click **Run Mission**, or use the matching canned button. Every goal below was run through
@@ -186,6 +186,41 @@ In each agent result, the badge is the Deterministic Verifier's verdict: **VERIF
 - **Staff view:** as the Campus Administrator, **Campus Operations** shows open and overdue counts and
   per-case SLA status across all students.
 
+### Demo 5: Choose an event, then approve (Phase 13)
+
+This demo shows three separate roles: **the AI recommends, the student selects, an approver approves.**
+
+> Checked by the automated UI test (`tests/test_phase13_api_ui.py`, Streamlit AppTest against the real
+> API) and by `python scripts/demo_phase13.py`. It has not yet been rehearsed by hand in a browser against
+> the reset demo database. Walk through it once before presenting.
+
+- **Goal:** the 🗓️ **Choose an event & register** button, i.e. *"Find a suitable event, check my
+  schedule and prepare my registration."*
+- **Expected after the mission runs:**
+  - Status COMPLETED. The plan has T1 Academic (timetable), T2 Academic (exams) and T3 Events, with no
+    Action task. No approval exists.
+  - A **Choose an event** section lists the candidate events. **Competitive Coding Contest** and
+    **Photography Contest Exhibition** show 🟢 *No schedule conflict · Registration open* with an
+    enabled **Select this event** button.
+  - Every other candidate shows 🔴 and the reason, with a disabled **Unavailable** button. Examples:
+    Hackathon Kickoff Session *"Conflicts with CS301 class (Mon 10:00-11:00)"*, Robotics Expo (CS302
+    exam), Startup Pitch Night (full), the AI workshop (already registered).
+  - These statuses come from the deterministic registration rules applied to T1/T2's verified timetable
+    and exams. The Events Agent's text is not used.
+- **Select Competitive Coding Contest.** The same mission continues. No new mission is created and the
+  LLM is not called:
+  - *"Selected: Competitive Coding Contest"*, then **Selected → Pre-check VERIFIED → Approval required**.
+  - Status NEEDS APPROVAL. A new T4 Action Agent task *uses results from T1, T2, T3*.
+- **Action Center** (as the Campus Administrator): the card shows *"Target: Selected by the student in
+  Mission Workspace."* Approve it, then return and **Resume after approval**.
+- **Expected after resume:** COMPLETED, ✅ "Action 'register_event' executed and verified successfully",
+  exactly one new registration row.
+- **Optional:**
+  - Before approving, select **Photography Contest Exhibition** instead. The first request is replaced
+    (it can no longer be approved) and a new approval for the new event appears.
+  - **🔄 Refresh availability** re-checks capacity, deadlines, registrations, timetable and exams
+    without calling the LLM.
+
 ## 6. Approval procedure
 
 1. Note the mission ID shown in the Mission Workspace.
@@ -214,7 +249,7 @@ already-decided card is refused (HTTP 409).
 | Schedule changes after approval (TOCTOU) | Not doable from the UI. Run `python scripts/demo_phase10.py` (scenario C) or `eval/action_scenarios.py`. | VERIFIED at approval; an exam is then rescheduled onto the event; the execution-time recheck blocks the write (FAILED, zero rows). |
 | Double approval | Click approve on an already-decided card (or repeat the API call). | HTTP 409. No second decision is recorded. |
 | Unsupported goal | *"Book me a flight to Goa for the holidays."* | FAILED with "CampusNexus can't help with this goal: …" and the list of what it can do. No task runs. |
-| Missing detail | *"Find a suitable event, check my schedule and prepare my registration."* | Lists conflict-free events, then "Registration was not prepared: no specific event was named…". It never picks an event for the student. |
+| Missing detail | *"Find a suitable event, check my schedule and prepare my registration."* | Lists the candidate events with their deterministic status and waits for the student to select one (Demo 5). It never picks an event for the student. Selecting an unsafe event is refused with the reason, and no approval is created. |
 | Restart persistence | Leave a mission waiting for approval, restart the API, then approve and resume. | Completes normally. State is read from the database, not from memory. |
 
 In the registration missions, the Events task (T1) says **"schedule conflicts NOT checked in this

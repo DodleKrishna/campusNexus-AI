@@ -16,6 +16,7 @@ from typing import Any, List, Mapping, Optional
 from app.rules.event_availability import compute_availability
 from app.schemas.action import TargetProvenance, TargetSource
 from app.schemas.events import EventAvailabilityStatus, EventSummary, ExamConflict, TimetableConflict
+from app.schemas.selection import SelectedTarget
 from app.schemas.verification import VerificationCheck
 
 # category -> the one department that category is routed to. Mirrors
@@ -54,8 +55,34 @@ def target_named_in_goal(target: str, goal: str) -> bool:
     return bool(normalized_target) and f" {normalized_target} " in f" {_normalize_for_match(goal)} "
 
 
+def _selection_provenance(
+    tool_name: str, field: str, constraints: Mapping[str, Any], selection: SelectedTarget
+) -> TargetProvenance:
+    """A persisted selection confirms only the exact resource it names, for
+    the exact tool it was made for -- nothing else in the constraints counts."""
+    raw_id = constraints.get("event_id")
+    try:
+        event_id = int(raw_id) if raw_id is not None else None
+    except (TypeError, ValueError):
+        event_id = None
+    if selection.tool_name == tool_name and event_id == selection.resource_id:
+        return TargetProvenance(
+            tool_name=tool_name, target_field=field, target_value=selection.title, source=TargetSource.USER_SELECTION
+        )
+    return TargetProvenance(
+        tool_name=tool_name,
+        target_field=field,
+        target_value=str(constraints.get(field) or "") or None,
+        source=TargetSource.UNCONFIRMED,
+        reason=f"the action's target does not match the student's selection ('{selection.title}').",
+    )
+
+
 def resolve_target_provenance(
-    tool_name: str, constraints: Mapping[str, Any], goal: Optional[str]
+    tool_name: str,
+    constraints: Mapping[str, Any],
+    goal: Optional[str],
+    selection: Optional[SelectedTarget] = None,
 ) -> TargetProvenance:
     """Decide whether an action's target was explicitly selected by the student.
 
@@ -63,11 +90,15 @@ def resolve_target_provenance(
     supplied because the caller passed the constraints directly (an explicit
     human edit of an action) -- the caller is then the source. A planner's
     choice, an agent's recommendation or the top search result is never
-    enough: the target must appear in what the student wrote.
+    enough: the target must appear in what the student wrote, or (Phase 13)
+    be the resource of ``selection`` -- a server-validated selection the
+    student made from the mission's candidates, loaded from the database.
     """
     field = ACTION_TARGET_FIELDS.get(tool_name)
     if field is None:
         return TargetProvenance(tool_name=tool_name, source=TargetSource.NOT_REQUIRED)
+    if selection is not None and goal is not None:
+        return _selection_provenance(tool_name, field, constraints, selection)
 
     raw_value = constraints.get(field)
     value = str(raw_value).strip() if raw_value is not None else ""

@@ -172,8 +172,8 @@ _UNSUPPORTED_GOAL_NOTE = (
     "(event registration, personal calendar entries, filing a campus complaint)."
 )
 _UNNAMED_EVENT_NOTE = (
-    "Registration was not prepared: no specific event was named. Pick one of the conflict-free events listed "
-    "and ask to register for it by its exact title, and the registration will be prepared for approval."
+    "Registration was not prepared: no specific event was named. Select one of the conflict-free candidate "
+    "events (or ask to register for it by its exact title), and the registration will be prepared for approval."
 )
 
 

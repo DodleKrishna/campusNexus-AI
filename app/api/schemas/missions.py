@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from app.schemas.common import JsonValue
 from app.schemas.evidence import Evidence
+from app.schemas.selection import ActionCandidate, SelectedTarget
 
 
 class MissionCreateRequest(BaseModel):
@@ -73,6 +74,9 @@ class MissionResponse(BaseModel):
     # Post-12C (additive): an action the student asked for is waiting for them
     # to select its target (derived from the latest plan, never from prose).
     user_selection_required: bool = False
+    # Phase 13 (additive): the target the student selected for this mission's
+    # action, if any (GET /missions/{id}/candidates lists the choices).
+    selected_target: Optional[SelectedTarget] = None
     created_at: datetime
     updated_at: datetime
 
@@ -101,3 +105,31 @@ class TaskEvidenceView(BaseModel):
 class MissionEvidenceResponse(BaseModel):
     mission_id: str
     tasks: List[TaskEvidenceView]
+
+
+class CandidateListResponse(BaseModel):
+    """Phase 13: the mission's selectable targets, with deterministic statuses."""
+
+    mission_id: str
+    user_selection_required: bool
+    # Whether the student may still choose (or change) a target right now.
+    selection_open: bool
+    selected_target: Optional[SelectedTarget] = None
+    candidates: List[ActionCandidate]
+
+
+class SelectionRequest(BaseModel):
+    """Only the resource's identity -- every other fact is reloaded server-side."""
+
+    resource_type: Literal["event"]
+    resource_id: int = Field(gt=0)
+    action: Literal["register_event"] = "register_event"
+
+
+class SelectionResponse(BaseModel):
+    result: str  # "selected" | "already_selected"
+    message: str
+    selection: Optional[SelectedTarget] = None
+    candidate: Optional[ActionCandidate] = None
+    superseded_approval_id: Optional[str] = None
+    mission: MissionResponse

@@ -184,12 +184,19 @@ def _upstream_schedule_check(facts: Dict[str, object], event: EventSummary) -> _
     return _UpstreamScheduleCheck()
 
 
-def _target_provenance(message: AgentMessage) -> TargetProvenance:
+def _target_provenance(message: AgentMessage, context: ContextService) -> TargetProvenance:
     """``mission_goal`` is supplied by the Orchestrator's dispatcher; without
-    it the constraints came straight from the caller (an explicit edit)."""
+    it the constraints came straight from the caller (an explicit edit).
+
+    Phase 13: the student's selection for this step is read here from the
+    Context Service -- never from message facts, which upstream agents feed --
+    so this layer confirms a USER_SELECTION target independently of the
+    Orchestrator.
+    """
     goal = message.facts.get("mission_goal")
     tool_name = str(message.constraints.get("tool_name") or "").strip()
-    return resolve_target_provenance(tool_name, message.constraints, str(goal) if goal is not None else None)
+    selection = context.get_active_target_selection(message.mission_id, message.task_id) if goal is not None else None
+    return resolve_target_provenance(tool_name, message.constraints, str(goal) if goal is not None else None, selection)
 
 
 @dataclass
@@ -295,7 +302,7 @@ class ActionAgent:
         # Phase 12B: the Orchestrator already skips an action whose target the
         # student never named; this is the independent second layer. No
         # proposal -- and so no approval -- for an unconfirmed target.
-        provenance = _target_provenance(message)
+        provenance = _target_provenance(message, self._context)
         if not provenance.confirmed:
             verification = _new_verification(
                 message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
@@ -554,7 +561,7 @@ class ActionAgent:
             input_model=self._input_model(tool_name),
         )
         target_resource = approved_payload["target_resource"]
-        provenance = _target_provenance(message).model_dump(mode="json")
+        provenance = _target_provenance(message, self._context).model_dump(mode="json")
         supporting_facts = {**supporting_facts, "target_provenance": provenance}
         proposal_id = f"prop-{uuid.uuid4().hex[:12]}"
         tool_call_id = f"tc-{uuid.uuid4().hex[:12]}"

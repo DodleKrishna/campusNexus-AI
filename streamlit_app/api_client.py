@@ -126,6 +126,18 @@ class ApiClient:
     def resume_mission(self, mission_id: str) -> Dict[str, Any]:
         return self._request("POST", f"/missions/{mission_id}/resume", timeout=MISSION_TIMEOUT_SECONDS)
 
+    def get_candidates(self, mission_id: str) -> Dict[str, Any]:
+        return self._request("GET", f"/missions/{mission_id}/candidates")
+
+    def refresh_candidates(self, mission_id: str) -> Dict[str, Any]:
+        return self._request("POST", f"/missions/{mission_id}/candidates/refresh")
+
+    def select_candidate(
+        self, mission_id: str, resource_id: int, *, resource_type: str = "event", action: str = "register_event"
+    ) -> Dict[str, Any]:
+        body = {"resource_type": resource_type, "resource_id": resource_id, "action": action}
+        return self._request("POST", f"/missions/{mission_id}/selection", json=body, timeout=MISSION_TIMEOUT_SECONDS)
+
     def list_pending_approvals(self) -> List[Dict[str, Any]]:
         return self._request("GET", "/approvals/pending")
 

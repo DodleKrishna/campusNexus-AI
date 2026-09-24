@@ -22,6 +22,12 @@ STALE_MESSAGE = (
     "Approval expired because execution conditions changed. Review the updated action and approve again."
 )
 _REPLACEABLE = (ApprovalStatus.STALE, ApprovalStatus.EDIT_REQUIRED)
+_TARGET_SOURCE_LABELS = {
+    "user_goal": "Named by the student in the mission goal",
+    "user_selection": "Selected by the student in Mission Workspace",
+    "caller_supplied": "Supplied in an explicit action edit",
+    "not_required": "No target selection needed",
+}
 
 
 def _lifecycle_fields(session: Session, approval: ApprovalRecord, view: ApprovalView) -> None:
@@ -74,6 +80,9 @@ def _enrich(session: Session, approval: ApprovalRecord) -> ApprovalView:
         view.precheck_issues = list(proposing_run.errors or [])
         view.precheck_status = facts.get("precheck_status")
         view.schedule_check = (proposal.get("supporting_facts") or {}).get("schedule_check")
+        source = ((proposal.get("supporting_facts") or {}).get("target_provenance") or facts.get("target_provenance") or {}).get("source")
+        view.target_source = source
+        view.target_source_label = _TARGET_SOURCE_LABELS.get(source) if source else None
     return view
 
 

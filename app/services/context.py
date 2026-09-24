@@ -20,12 +20,14 @@ from app.db.models.career import Application
 from app.db.models.events import Event, EventRegistration
 from app.db.models.identity import Student
 from app.db.models.mission import (
+    ActionCandidateRecord,
     AgentRun,
     ApprovalRecord,
     AuditLog,
     MemoryRecord,
     Mission,
     MissionStep,
+    TargetSelectionRecord,
     ToolCallRecord,
 )
 from app.db.models.services import CampusCase, CaseStatus
@@ -40,6 +42,7 @@ from app.schemas.enums import (
     UserRole,
 )
 from app.schemas.mission import MissionPlan
+from app.schemas.selection import SelectedTarget
 
 _RESOLVED_APPROVAL_STATUSES = {
     ApprovalStatus.APPROVED,
@@ -448,6 +451,117 @@ class ContextService:
         if entry is None or "plan" not in entry.event_metadata:
             return None
         return MissionPlan.model_validate(entry.event_metadata["plan"])
+
+    # ------------------------------------------------------------------
+    # Phase 13: action candidates + the student's target selections
+    # ------------------------------------------------------------------
+
+    def upsert_action_candidate(
+        self,
+        *,
+        mission_id: str,
+        tool_name: str,
+        resource_type: str,
+        resource_id: int,
+        title: str,
+        status: str,
+        assessment: Dict[str, Any],
+        assessed_at: datetime,
+        recommendation: Optional[Dict[str, Any]] = None,
+        recommended_by_step_id: Optional[str] = None,
+        sequence: Optional[int] = None,
+    ) -> ActionCandidateRecord:
+        """Insert a candidate, or update its title/assessment in place (one row
+        per mission/tool/resource). The recommendation is kept from the first
+        insert unless a new one is given."""
+        record = self.get_action_candidate(mission_id, tool_name, resource_type, resource_id)
+        if record is None:
+            record = ActionCandidateRecord(
+                mission_id=mission_id, tool_name=tool_name, resource_type=resource_type, resource_id=resource_id,
+                sequence=sequence or 0,
+            )
+            self._session.add(record)
+        record.title = title
+        record.status = status
+        record.assessment = assessment
+        record.assessed_at = assessed_at
+        if recommendation is not None:
+            record.recommendation = recommendation
+        if recommended_by_step_id is not None:
+            record.recommended_by_step_id = recommended_by_step_id
+        self._session.commit()
+        self._session.refresh(record)
+        return record
+
+    def get_action_candidate(
+        self, mission_id: str, tool_name: str, resource_type: str, resource_id: int
+    ) -> Optional[ActionCandidateRecord]:
+        stmt = select(ActionCandidateRecord).where(
+            ActionCandidateRecord.mission_id == mission_id,
+            ActionCandidateRecord.tool_name == tool_name,
+            ActionCandidateRecord.resource_type == resource_type,
+            ActionCandidateRecord.resource_id == resource_id,
+        )
+        return self._session.execute(stmt).scalar_one_or_none()
+
+    def list_action_candidates(self, mission_id: str) -> List[ActionCandidateRecord]:
+        stmt = (
+            select(ActionCandidateRecord)
+            .where(ActionCandidateRecord.mission_id == mission_id)
+            .order_by(ActionCandidateRecord.sequence, ActionCandidateRecord.id)
+        )
+        return list(self._session.execute(stmt).scalars().all())
+
+    def record_target_selection(
+        self,
+        *,
+        selection_id: str,
+        mission_id: str,
+        step_id: str,
+        tool_name: str,
+        resource_type: str,
+        resource_id: int,
+        title: str,
+        selected_by: str,
+    ) -> TargetSelectionRecord:
+        record = TargetSelectionRecord(
+            selection_id=selection_id, mission_id=mission_id, step_id=step_id, tool_name=tool_name,
+            resource_type=resource_type, resource_id=resource_id, title=title, selected_by=selected_by,
+        )
+        self._session.add(record)
+        self._session.commit()
+        self._session.refresh(record)
+        return record
+
+    def supersede_target_selection(self, selection_id: str, *, reason: str) -> TargetSelectionRecord:
+        record = self._session.get(TargetSelectionRecord, selection_id)
+        if record is None:
+            raise ValueError(f"unknown selection_id: {selection_id!r}")
+        if record.superseded_at is None:
+            record.superseded_at = utc_now()
+            record.superseded_reason = reason
+            self._session.commit()
+            self._session.refresh(record)
+        return record
+
+    def list_active_target_selections(self, mission_id: str) -> Dict[str, SelectedTarget]:
+        """The mission's current (not superseded) selections, keyed by step id."""
+        stmt = (
+            select(TargetSelectionRecord)
+            .where(TargetSelectionRecord.mission_id == mission_id, TargetSelectionRecord.superseded_at.is_(None))
+            .order_by(TargetSelectionRecord.selected_at)
+        )
+        return {
+            record.step_id: SelectedTarget(
+                selection_id=record.selection_id, mission_id=record.mission_id, step_id=record.step_id,
+                tool_name=record.tool_name, resource_type=record.resource_type, resource_id=record.resource_id,
+                title=record.title, selected_by=record.selected_by, selected_at=record.selected_at,
+            )
+            for record in self._session.execute(stmt).scalars().all()
+        }
+
+    def get_active_target_selection(self, mission_id: str, step_id: str) -> Optional[SelectedTarget]:
+        return self.list_active_target_selections(mission_id).get(step_id)
 
     # ------------------------------------------------------------------
     # Agent runs

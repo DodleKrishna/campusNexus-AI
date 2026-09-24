@@ -28,12 +28,14 @@ from app.db.models.communication import CalendarEvent, Notification, Notificatio
 from app.db.models.events import Club, Event, EventRegistration, EventStatus, RegistrationStatus
 from app.db.models.identity import Department, Student, User
 from app.db.models.mission import (
+    ActionCandidateRecord,
     AgentRun,
     ApprovalRecord,
     AuditLog,
     MemoryRecord,
     Mission,
     MissionStep,
+    TargetSelectionRecord,
     ToolCallRecord,
 )
 from app.db.models.services import CampusCase, CaseAssignment, CasePriority, CaseSLA, CaseStatus
@@ -67,12 +69,14 @@ __all__ = [
     "Department",
     "Student",
     "User",
+    "ActionCandidateRecord",
     "AgentRun",
     "ApprovalRecord",
     "AuditLog",
     "MemoryRecord",
     "Mission",
     "MissionStep",
+    "TargetSelectionRecord",
     "ToolCallRecord",
     "CampusCase",
     "CaseAssignment",

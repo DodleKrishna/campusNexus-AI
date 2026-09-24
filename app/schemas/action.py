@@ -27,12 +27,16 @@ from app.schemas.common import JsonValue, NonBlankStr, utc_now
 class TargetSource(str, Enum):
     """Where an action's target resource came from (Phase 12B).
 
-    Only a target the student named -- in the mission goal, or directly by the
-    caller of an explicit edit -- may reach a proposal. An agent's
+    Only a target the student named -- in the mission goal, by selecting it from
+    the mission's candidates, or directly by the caller of an explicit edit --
+    may reach a proposal. An agent's
     recommendation ("best match", "first result") is never a source.
     """
 
     USER_GOAL = "user_goal"
+    # Phase 13: the student picked this exact resource from the mission's
+    # server-validated candidate list (a persisted TargetSelection record).
+    USER_SELECTION = "user_selection"
     CALLER_SUPPLIED = "caller_supplied"
     NOT_REQUIRED = "not_required"
     UNCONFIRMED = "unconfirmed"

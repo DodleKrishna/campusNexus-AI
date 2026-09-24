@@ -1156,6 +1156,78 @@ It never produced an approval or a tool call, but the mission ended FAILED after
   checkpointer never constructs a serializer that could take `allowed_objects`, so it is left unchanged
   rather than filtered.
 
+## Candidate Selection & Action Continuation (Phase 13)
+
+The flow: a goal that names no target ("Find a suitable event, check my schedule and prepare my
+registration") → candidates → the student selects one → the same mission continues → approval →
+execution. This keeps three roles separate: an agent **recommends**, the student **selects**, an
+approver **approves**. No new agent or component was added.
+
+### Candidates (`app/services/target_selection.py`, `app/rules/candidate_status.py`)
+
+- When a mission ends COMPLETED with `user_selection_required`, `_finalize` records one
+  `action_candidates` row per event from the verified Events task results of the current plan. Each row
+  holds the real event id, the canonical title, why it was recommended (matched terms or skill gaps,
+  evidence refs), and the latest deterministic `CandidateAssessment`. The event row itself is not copied.
+- Status comes from `check_event_registration`, the same rule the Action Agent's pre-check and
+  execute-time recheck use. `derive_candidate_status` maps it to ELIGIBLE, CONFLICT, FULL,
+  DEADLINE_PASSED, ALREADY_REGISTERED, UNAVAILABLE or NEEDS_REVIEW. Only ELIGIBLE is selectable. A
+  schedule that was never checked is never ELIGIBLE. Neither the LLM nor the Events Agent's text is used.
+- At discovery, conflicts are computed from the mission's verified Academic timetable and exam results
+  (`verified_schedule`). A refresh or a selection re-reads the student's *current* timetable and exams.
+  Refreshing (`POST /missions/{id}/candidates/refresh`) never calls the LLM or creates a mission.
+
+### Selection (`MissionOrchestrator.select_target`)
+
+- The request carries only `resource_type`, `resource_id` and `action`. The server checks the following:
+  - the mission exists and the caller is its own student (staff get 403, so an approver never selects);
+  - the action is one this mission has candidates for;
+  - the mission still needs a selection;
+  - the resource is one of *this* mission's persisted candidates;
+  - the current selection's action is not already approved or executed.
+- The candidate is then re-assessed against current data. Anything short of ELIGIBLE is BLOCKED: the
+  stored status is updated, a `target_selection_blocked` event says why, and no selection, proposal or
+  approval is created.
+- A valid selection is persisted in `target_selections` (`target_selected` event). This record is the
+  only thing that makes a target `TargetSource.USER_SELECTION`. `resolve_target_provenance` confirms a
+  selection only for its exact tool and resource id. The Orchestrator reads it from the Context Service,
+  and the Action Agent reads it again itself (never from message facts). Two independent layers, as for
+  named targets.
+- Continuation stays in the **same mission**. `build_selection_continuation_plan`
+  (`app/graph/selection.py`) writes the next plan version as a `plan_generated` audit event with
+  `source: user_selection`. That version adds, or rewrites in place, one action task. The task's
+  constraints are `tool_name`, `event_id` and the canonical `event_title`. It depends on the verified
+  timetable/exam tasks plus the Events task that recommended the event. The tool is removed from
+  `selection_required_actions`, and `resume_mission` runs the new plan. There is no planner call and no
+  replan. The Action Agent proposes, runs the Phase 10 pre-check from the upstream facts and requests an
+  approval bound (Phase 11 fingerprint) to that event.
+- Idempotency: a per-orchestrator lock serializes selections, including their continuation. Re-selecting
+  the target whose approval is pending returns `already_selected` and changes nothing.
+- Changing the selection before approval supersedes the old selection. Its pending approval becomes
+  `EDIT_REQUIRED` (the existing changed-payload lifecycle) and its tool call is marked FAILED so it can
+  never run. The same action step then gets a new proposal and approval. Once the approval is granted or
+  the action has executed, the selection can no longer change (409).
+- A conflict that appears after approval is still caught by the Phase 11 execute-time recheck (STALE).
+  The student can re-select once the event is valid again, and a new approval is required.
+
+### API / UI (additive)
+
+- `GET /missions/{id}/candidates`, `POST /missions/{id}/candidates/refresh`, `POST /missions/{id}/selection`.
+- `MissionResponse` adds `selected_target`. `ApprovalView` adds `target_source` and `target_source_label`.
+- Mission Workspace: a **Choose an event** section with candidate cards (only eligible ones have an
+  enabled button), **Refresh availability**, and *Selected → Pre-check → Approval required* progress.
+  Action Center: *"Target: Selected by the student in Mission Workspace."*
+- Schema: two new tables, `action_candidates` and `target_selections`. `upgrade_schema` now also creates
+  any missing table, which is equally additive.
+
+### Known limitations
+
+- Only `register_event` targets can be selected. Calendar entries and complaints still need their details
+  named in the goal.
+- Candidates are recorded when the discovery mission finishes. A mission from before Phase 13 has none.
+- The selection lock is per process. Two API processes could still race; the unique candidate rows and
+  approval binding keep that safe, but one of the two selections could supersede the other.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

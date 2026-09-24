@@ -84,11 +84,16 @@ def upgrade_schema(engine: Engine) -> list[str]:
     a phase added a column (e.g. Phase 11's approval binding columns) would fail
     on the first SELECT. Strictly additive and idempotent: it only ever adds
     *nullable* columns and never drops, renames or rewrites anything. Returns
-    the ``table.column`` names it added.
+    the ``table.column`` names it added. A table that did not exist yet (e.g.
+    Phase 13's candidate/selection tables) is created, which is equally additive.
     """
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
     added: list[str] = []
+    missing = [table for table in Base.metadata.sorted_tables if table.name not in existing_tables]
+    if missing:
+        Base.metadata.create_all(engine, tables=missing)
+        added.extend(table.name for table in missing)
     with engine.begin() as connection:
         for table in Base.metadata.sorted_tables:
             if table.name not in existing_tables:

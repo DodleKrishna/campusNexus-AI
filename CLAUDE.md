@@ -214,6 +214,24 @@ across a component boundary. Free text is allowed only in the final user-facing 
   discarded, never repaired. Change a budget only with evidence from `stats()["max_completion_tokens_used"]`.
 - Anthropic errors remain the generic `LLMProviderError`, unchanged from Phase 9.
 
+## Candidate Selection (Phase 13)
+
+- When an action's target is not named, the student selects it from the mission's persisted candidates
+  (`action_candidates`). A server-validated `target_selections` record is the only source of
+  `TargetSource.USER_SELECTION`. An agent's recommendation, the planner, or message facts never are.
+  Both the Orchestrator and the Action Agent load the selection from the Context Service.
+- Candidate status is deterministic: `check_event_registration` mapped by
+  `app/rules/candidate_status.py`. Never let an LLM or agent prose decide selectability, and never
+  duplicate the registration rules.
+- A selection re-validates the candidate against current data first. Anything short of ELIGIBLE is
+  refused with its reason, and no selection, proposal or approval is created.
+- Continuation stays in the same mission: a new plan version (`plan_generated`, `source: user_selection`)
+  plus `resume_mission`. No planner call, no replan. The approval flow, pre-check, execute-time recheck and
+  STALE handling are unchanged.
+- A changed selection supersedes the old one. Its pending approval becomes EDIT_REQUIRED and its tool call
+  can never run. After approval or execution the selection is locked. Only the mission's own student may
+  select (staff get 403). Refreshing candidates never calls the LLM.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -346,6 +364,11 @@ python scripts/check_live_llm.py --provider groq --case C_unnamed_registration -
 # before approval, schedule change after approval (TOCTOU), duplicate-failure stop --
 # with plans, dependency traces, check verdicts and audit trails.
 python scripts/demo_phase10.py
+
+# Phase 13 demo on a throwaway DB: unnamed registration -> deterministic candidates -> unsafe pick
+# refused -> student selects Competitive Coding Contest (USER_SELECTION) -> same mission proposes ->
+# one approval -> approve -> resume -> exactly one verified registration; no LLM call after discovery.
+python scripts/demo_phase13.py
 
 # Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
 # resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,
