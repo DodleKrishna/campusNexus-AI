@@ -3,7 +3,9 @@
 Creates a fresh SQLite database and Chroma policy store under ``data/demo/``,
 seeds the fictional campus, and ingests the policy corpus. It never reads or
 writes the development database (``data/campusnexus.db``) or the development
-vector store (``data/chroma``), and it refuses to delete anything outside
+vector store (``data/chroma``). A reset deletes only the demo database and
+demo policy store (other files in ``data/demo/``, such as saved live-LLM
+reports, are kept), and it refuses to delete anything outside
 ``data/demo/``.
 
 Why a rebuild (not just re-running seed_data.py) before a demo: seed data is
@@ -30,6 +32,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from app.auth.accounts import DEV_ACCOUNTS, resolve_seed_password, seed_dev_accounts
 from app.db.session import create_db_engine, create_session_factory, init_db
 from app.rag.config import get_rag_config
 from app.rag.embeddings import get_embedding_provider
@@ -40,18 +43,33 @@ from scripts.seed_data import build_summary, run_seed
 DEMO_DIR = REPO_ROOT / "data" / "demo"
 DEMO_DB_PATH = DEMO_DIR / "campusnexus_demo.db"
 DEMO_CHROMA_PATH = DEMO_DIR / "chroma"
+# Kept across resets (only the DB and policy store are rebuilt); git-ignored with data/demo/.
+DEMO_CREDENTIALS_PATH = DEMO_DIR / "dev_credentials.txt"
+
+
+def _demo_state_paths() -> list[Path]:
+    """Exactly what a reset rebuilds: the demo database (plus SQLite side files)
+    and the demo policy store. Anything else in data/demo/ -- e.g. saved live-LLM
+    reports -- is kept."""
+    db = DEMO_DB_PATH
+    return [db, *(db.with_name(db.name + suffix) for suffix in ("-wal", "-shm", "-journal")), DEMO_CHROMA_PATH]
 
 
 def _remove_demo_dir() -> None:
     resolved = DEMO_DIR.resolve()
     if resolved.parent != (REPO_ROOT / "data").resolve() or resolved.name != "demo":
         raise SystemExit(f"Refusing to delete unexpected path: {resolved}")
-    if resolved.exists():
+    for path in _demo_state_paths():
+        if path.resolve().parent != resolved:
+            raise SystemExit(f"Refusing to delete unexpected path: {path.resolve()}")
         try:
-            shutil.rmtree(resolved)
+            if path.is_dir():
+                shutil.rmtree(path)
+            elif path.exists():
+                path.unlink()
         except PermissionError as exc:
             raise SystemExit(
-                f"Could not delete {resolved} ({exc}). Stop the API/Streamlit processes using the demo "
+                f"Could not delete {path} ({exc}). Stop the API/Streamlit processes using the demo "
                 "environment, then re-run this script."
             ) from exc
 
@@ -75,8 +93,10 @@ def main() -> None:
     engine = create_db_engine(db_path=DEMO_DB_PATH)
     init_db(engine)
     session_factory = create_session_factory(engine)
+    password, password_source = resolve_seed_password(DEMO_CREDENTIALS_PATH)
     with session_factory() as session:
         run_seed(session)
+        seed_dev_accounts(session, password)
         summary = build_summary(session)
     engine.dispose()
 
@@ -104,6 +124,9 @@ def main() -> None:
     print("    export CAMPUSNEXUS_VECTOR_STORE_PATH=data/demo/chroma")
     print(f"    export CAMPUSNEXUS_EMBEDDING_PROVIDER={config.embedding_provider}")
     print("\nThen: python scripts/demo_preflight.py")
+    print("\nReact app sign-in (development accounts, password from " + password_source + "):")
+    for spec in DEV_ACCOUNTS:
+        print(f"  {spec.email:<28} {spec.role.value}")
 
 
 if __name__ == "__main__":

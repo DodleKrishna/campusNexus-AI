@@ -26,6 +26,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
 from app.schemas.academic import AcademicIntentResult, AcademicResponseContext, CourseSummary
+from app.schemas.agent_chat import EnquiryPlan
 from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
@@ -130,6 +131,12 @@ class LLMProvider(ABC):
         any fact not already present in ``context``.
         """
         raise NotImplementedError
+
+    def plan_enquiry(self, query: str) -> EnquiryPlan:
+        """Phase 15: decide which specialists the read-only Enquiry Agent should
+        consult for ``query`` (structured output only -- it never answers).
+        Providers that don't support it fail visibly rather than guess."""
+        raise LLMProviderError(f"LLM provider {getattr(self, 'name', type(self).__name__)!r} does not support enquiry planning.")
 
     @abstractmethod
     def plan_mission(

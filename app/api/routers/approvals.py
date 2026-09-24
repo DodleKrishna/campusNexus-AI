@@ -80,8 +80,10 @@ def _enrich(session: Session, approval: ApprovalRecord) -> ApprovalView:
         view.precheck_issues = list(proposing_run.errors or [])
         view.precheck_status = facts.get("precheck_status")
         view.schedule_check = (proposal.get("supporting_facts") or {}).get("schedule_check")
-        source = ((proposal.get("supporting_facts") or {}).get("target_provenance") or facts.get("target_provenance") or {}).get("source")
+        provenance = (proposal.get("supporting_facts") or {}).get("target_provenance") or facts.get("target_provenance") or {}
+        source = provenance.get("source")
         view.target_source = source
+        view.target_title = provenance.get("target_value")
         view.target_source_label = _TARGET_SOURCE_LABELS.get(source) if source else None
     return view
 

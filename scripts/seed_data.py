@@ -59,6 +59,7 @@ from app.db.models import (  # noqa: F401  (import registers all mapped classes)
     TimetableSlot,
     User,
 )
+from app.auth.accounts import DEV_ACCOUNTS, resolve_seed_password, seed_dev_accounts
 from app.db.session import create_db_engine, create_session_factory, init_db
 from app.schemas.enums import UserRole
 
@@ -963,12 +964,17 @@ def main() -> None:
     engine = create_db_engine()
     init_db(engine)
     session_factory = create_session_factory(engine)
+    password, password_source = resolve_seed_password(Path(__file__).resolve().parents[1] / "data" / "dev_credentials.txt")
     with session_factory() as session:
         summary = run_seed(session)
+        created = seed_dev_accounts(session, password)
 
     print("Seed complete. Row counts:")
     for field_name, value in summary.__dict__.items():
         print(f"  {field_name}: {value}")
+    print(f"Development sign-in accounts ({len(created)} new; password from {password_source}):")
+    for spec in DEV_ACCOUNTS:
+        print(f"  {spec.email} ({spec.role.value})")
 
 
 if __name__ == "__main__":

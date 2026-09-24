@@ -24,6 +24,7 @@ from app.schemas.academic import (
     CourseSummary,
     ExamEligibilityStatus,
 )
+from app.schemas.agent_chat import EnquiryConsultation, EnquiryPlan
 from app.schemas.career import CareerIntent, CareerIntentResult, CareerResponseContext, OpportunityEligibilityStatus
 from app.schemas.enums import AgentName, VerificationStatus
 from app.schemas.events import EventsIntent, EventsIntentResult, EventsResponseContext
@@ -468,6 +469,45 @@ class MockLLMProvider(LLMProvider):
     """Deterministic LLM stand-in -- no network, no model, fully reproducible."""
 
     name = "mock"
+
+    def plan_enquiry(self, query: str) -> EnquiryPlan:
+        """Deterministic keyword routing for the read-only Enquiry Agent."""
+        q = query.lower()
+        consults: List[EnquiryConsultation] = []
+
+        def ask(agent: str, objective: str) -> None:
+            if not any(c.agent == agent and c.objective == objective for c in consults):
+                consults.append(EnquiryConsultation(agent=agent, objective=objective))
+
+        live_class = any(k in q for k in ("class started", "class begun", "class begin", "class start", "class on now"))
+        action_agent = None
+        if _mentions(q, _REGISTRATION_WORDS) or "apply for" in q or "apply to" in q:
+            action_agent = "placements" if _mentions(q, _CAREER_WORDS) else "events"
+        elif any(k in q for k in ("file a complaint", "raise a complaint", "submit a complaint", "lodge a complaint")):
+            action_agent = "complaints"
+
+        broad = any(k in q for k in ("today", "important", "anything", "what do i have", "overview", "summary", "this week"))
+        if live_class:
+            ask("academic", "What is my timetable?")
+        if broad or _mentions(q, ("timetable", "schedule", "class")) and not live_class:
+            ask("academic", "What is my timetable?")
+        if broad or "exam" in q:
+            ask("academic", "When are my exams?")
+        if "attend" in q:
+            ask("academic", query)
+        if broad or _mentions(q, _EVENTS_WORDS):
+            ask("events", _EVENTS_DISCOVERY_OBJECTIVE)
+        if broad or _mentions(q, _CAREER_WORDS) or "deadline" in q:
+            ask("placements", "Find internships I'm eligible for and identify my skill gaps")
+        if broad or _mentions(q, _SERVICES_WORDS):
+            ask("complaints", "Check my complaints and tell me whether any are overdue.")
+        out_of_scope = None
+        if not consults and action_agent is None:
+            out_of_scope = "This question is outside what the campus agents can look up."
+        return EnquiryPlan(
+            consultations=consults[:6], action_requested=action_agent is not None, action_agent=action_agent,
+            asks_live_class_status=live_class, out_of_scope=out_of_scope,
+        )
 
     def plan_mission(
         self, mission_id: str, goal: str, *, supported_agents: List[AgentName]

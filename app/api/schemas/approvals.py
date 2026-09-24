@@ -58,6 +58,9 @@ class ApprovalView(BaseModel):
     # user_selection, caller_supplied, not_required) and a concise label.
     target_source: Optional[str] = None
     target_source_label: Optional[str] = None
+    # Phase 14: the target's canonical name as the provenance check confirmed it
+    # (e.g. the selected event's title).
+    target_title: Optional[str] = None
 
 
 class ApprovalDecisionRequest(BaseModel):

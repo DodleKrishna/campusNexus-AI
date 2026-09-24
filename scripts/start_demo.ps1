@@ -7,13 +7,14 @@
     scripts/demo_preflight.py and refuses to start if it fails, then opens the API and the UI
     in two separate PowerShell windows. Close those windows to stop the demo.
 
-    Mock mode is the default. For live mode, set these in this shell before running:
-        $env:CAMPUSNEXUS_LLM_PROVIDER = "anthropic"
-        $env:ANTHROPIC_API_KEY = "<key>"
-    The script never switches modes on its own.
+    Mock (deterministic demo) mode is the default. For live mode, set these in this shell before running:
+        $env:CAMPUSNEXUS_LLM_PROVIDER = "groq"        # or "anthropic"
+        $env:GROQ_API_KEY = "<key>"                  # or $env:ANTHROPIC_API_KEY
+    The script never switches modes on its own, and a live-provider failure is never replaced by mock output.
 
 .PARAMETER Reset
-    Rebuild data/demo/ first (scripts/reset_demo_env.py). Use before every demo run.
+    Rebuild the demo database and policy store in data/demo/ first (scripts/reset_demo_env.py). Other
+    files there (e.g. saved live-LLM reports) are kept. Use before every demo run.
 
 .PARAMETER LiveCheck
     In live mode, let the preflight make one small real LLM request.

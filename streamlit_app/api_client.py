@@ -126,6 +126,9 @@ class ApiClient:
     def resume_mission(self, mission_id: str) -> Dict[str, Any]:
         return self._request("POST", f"/missions/{mission_id}/resume", timeout=MISSION_TIMEOUT_SECONDS)
 
+    def list_student_missions(self, student_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+        return self._request("GET", f"/students/{student_id}/missions", params={"limit": limit})
+
     def get_candidates(self, mission_id: str) -> Dict[str, Any]:
         return self._request("GET", f"/missions/{mission_id}/candidates")
 

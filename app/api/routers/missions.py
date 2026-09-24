@@ -1,18 +1,18 @@
 """POST /missions, GET /missions/{id}, GET /missions/{id}/timeline,
 GET /missions/{id}/evidence, POST /missions/{id}/resume, and (Phase 13)
 GET /missions/{id}/candidates, POST /missions/{id}/candidates/refresh,
-POST /missions/{id}/selection.
+POST /missions/{id}/selection, and (Phase 14) GET /students/{id}/missions.
 """
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.deps import Identity, get_identity, get_orchestrator, get_session
+from app.api.deps import Identity, get_identity, get_orchestrator, get_session, require_student_ownership
 from app.api.schemas.missions import (
     AgentRunView,
     ApprovalSummaryView,
@@ -21,7 +21,9 @@ from app.api.schemas.missions import (
     MissionCreateRequest,
     MissionEvidenceResponse,
     MissionResponse,
+    MissionSummaryView,
     MissionTaskView,
+    RunningStepView,
     MissionTimelineResponse,
     SelectionRequest,
     SelectionResponse,
@@ -43,7 +45,7 @@ from app.graph.orchestrator import (
     selection_locked,
     user_selection_required,
 )
-from app.schemas.enums import ApprovalStatus, UserRole
+from app.schemas.enums import ApprovalStatus, MissionStatus, TaskStatus, UserRole
 from app.schemas.evidence import Evidence
 from app.schemas.selection import SelectionResult
 from app.services import target_selection
@@ -115,12 +117,31 @@ def _mission_response(session: Session, mission: Mission) -> MissionResponse:
 
     return MissionResponse(
         mission_id=mission.mission_id, goal=mission.original_goal, status=mission.status.value,
-        plan=plan_view, agent_results=agent_results, pending_approvals=pending_views, stale_approvals=stale_views,
+        student_id=mission.user_id, plan=plan_view, agent_results=agent_results, pending_approvals=pending_views, stale_approvals=stale_views,
         final_result=mission.final_result, execution_stop=_execution_stop(context, mission.mission_id),
         user_selection_required=user_selection_required(plan, mission.original_goal, selections),
         selected_target=next(iter(selections.values()), None),
+        provider_unavailable=_provider_unavailable(context, mission),
         created_at=mission.created_at, updated_at=mission.updated_at,
     )
+
+
+def _provider_unavailable(context: ContextService, mission: Mission) -> Optional[Dict]:
+    """The outage that stopped the mission's latest run, if it stopped FAILED
+    because the LLM provider was unavailable (Phase 12C events). Only the
+    structured, key-free fields are passed on."""
+    if mission.status != MissionStatus.FAILED:
+        return None
+    outage: Optional[Dict] = None
+    for event in context.list_audit_events(mission.mission_id):
+        metadata = event.event_metadata or {}
+        if event.event_type in ("mission_created", "mission_resumed"):
+            outage = None
+        elif event.event_type == "provider_unavailable" or (
+            event.event_type == "plan_generation_failed" and metadata.get("kind")
+        ):
+            outage = {k: metadata.get(k) for k in ("provider", "model", "kind", "status_code", "retry_after_seconds")}
+    return outage
 
 
 def _next_approval_id(session: Session, approval) -> Optional[str]:
@@ -287,3 +308,37 @@ def select_candidate(
         result=outcome.result.value, message=outcome.message, selection=outcome.selection, candidate=outcome.candidate,
         superseded_approval_id=outcome.superseded_approval_id, mission=_mission_response(session, mission),
     )
+
+
+@router.get("/students/{student_id}/missions", response_model=List[MissionSummaryView])
+def list_student_missions(
+    student_id: str,
+    limit: int = 10,
+    identity: Identity = Depends(get_identity),
+    session: Session = Depends(get_session),
+) -> List[MissionSummaryView]:
+    """A student's most recent missions, newest first (Phase 14): what the
+    dashboard shows as active work, and what the UI polls for progress while a
+    slow live mission is still running."""
+    require_student_ownership(identity, student_id)
+    missions = (
+        session.query(Mission).filter(Mission.user_id == student_id)
+        .order_by(Mission.created_at.desc()).limit(max(1, min(limit, 50))).all()
+    )
+    context = ContextService(session)
+    views: List[MissionSummaryView] = []
+    for mission in missions:
+        steps = sorted(mission.steps, key=lambda s: s.sequence)
+        running = next((s for s in steps if s.status == TaskStatus.IN_PROGRESS), None)
+        plan = context.get_latest_plan_snapshot(mission.mission_id)
+        selections = context.list_active_target_selections(mission.mission_id)
+        views.append(MissionSummaryView(
+            mission_id=mission.mission_id, goal=mission.original_goal, status=mission.status.value,
+            user_selection_required=user_selection_required(plan, mission.original_goal, selections),
+            pending_approvals=len(list_pending_approvals(session, mission_id=mission.mission_id)),
+            running_step=RunningStepView(task_id=running.step_id, agent=running.agent.value, objective=running.objective) if running else None,
+            steps_total=len(steps),
+            steps_done=sum(1 for s in steps if s.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.SKIPPED)),
+            created_at=mission.created_at, updated_at=mission.updated_at,
+        ))
+    return views

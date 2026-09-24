@@ -1,0 +1,15 @@
+import { useQuery } from "@tanstack/react-query";
+import { api, queryKeys } from "@/api/endpoints";
+
+const STALE = 60_000;
+
+export const useDashboard = () => useQuery({ queryKey: queryKeys.dashboard, queryFn: api.dashboard, staleTime: STALE });
+export const useProfile = () => useQuery({ queryKey: queryKeys.profile, queryFn: api.profile, staleTime: 5 * STALE });
+export const useAttendance = () => useQuery({ queryKey: queryKeys.attendance, queryFn: api.attendance, staleTime: STALE });
+export const useExams = () => useQuery({ queryKey: queryKeys.exams, queryFn: api.exams, staleTime: STALE });
+export const useRequests = () => useQuery({ queryKey: queryKeys.requests, queryFn: api.requests, staleTime: STALE });
+export const useNotifications = () => useQuery({ queryKey: queryKeys.notifications, queryFn: api.notifications, staleTime: STALE });
+// Slot status (upcoming / now / completed) moves with the clock: refresh every minute.
+export const useTodaySchedule = () =>
+  useQuery({ queryKey: queryKeys.todaySchedule, queryFn: api.todaySchedule, refetchInterval: 60_000, staleTime: 30_000 });
+export const useHealth = () => useQuery({ queryKey: queryKeys.health, queryFn: api.health, staleTime: 5 * STALE, retry: 1 });

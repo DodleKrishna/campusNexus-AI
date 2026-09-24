@@ -7,6 +7,8 @@ class UserRole(str, Enum):
 
     STUDENT = "student"
     FACULTY = "faculty"
+    # Phase 15: head of department (a faculty member with department authority).
+    HOD = "hod"
     STAFF = "staff"
     ADMIN = "admin"
 

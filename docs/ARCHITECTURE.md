@@ -1228,6 +1228,31 @@ approver **approves**. No new agent or component was added.
 - The selection lock is per process. Two API processes could still race; the unique candidate rows and
   approval binding keep that safe, but one of the two selections could supersede the other.
 
+## Demo UX Hardening (Phase 14)
+
+Presentation only. No agent, rule or verification behaviour changed.
+
+- `streamlit_app/presenters.py` holds the pure UI logic: stage labels, verification summaries, the
+  mission state a student sees first, the action result, candidate grouping and campus-time formatting.
+  It only rephrases fields the API returned and is unit-tested against real API payloads
+  (`tests/test_phase14_ux.py`).
+- Additive, read-only API fields:
+  - `GET /students/{id}/missions` (recent missions with the step currently running) and
+    `MissionResponse.student_id`. The UI polls these while a slow mission runs, to say which agent is
+    working. No percentages are invented.
+  - `MissionResponse.provider_unavailable`, taken from the Phase 12C audit events. It gives a distinct
+    PROVIDER UNAVAILABLE state and never a traceback.
+  - `/health` `live_ai_configured` (whether a key is present, never the key).
+  - `ApprovalView.target_title`.
+- Fixed while walking through the real UI:
+  - `streamlit run streamlit_app/app.py` resolved `import app` to the UI script itself. The repo root is
+    now forced first on `sys.path`.
+  - The theme's CSS was rendered as page text, because a blank line ends an HTML block in Streamlit
+    Markdown.
+  - `reset_demo_env.py` deleted all of `data/demo/`, including saved live-LLM reports. It now removes only
+    the demo DB and policy store.
+- Raw structured facts and document ids are shown only with **Show technical details** in the sidebar.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

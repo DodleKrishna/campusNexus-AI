@@ -19,7 +19,7 @@ from app.agents.action.agent import ActionAgent
 from app.agents.career.agent import CareerAgent
 from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
-from app.api.routers import admin, approvals, health, missions, students
+from app.api.routers import admin, agents, approvals, auth, health, me, missions, students
 from app.db.session import create_db_engine, create_session_factory, upgrade_schema
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
@@ -30,6 +30,7 @@ from app.rag.embeddings import get_embedding_provider
 from app.rag.retriever import PolicyRetriever
 from app.rag.vector_store import PolicyVectorStore
 from app.schemas.enums import AgentName
+from app.services.agent_chat import SpecialistGateway
 from app.services.knowledge import KnowledgeService
 from app.tools.build import build_default_tool_registry
 from app.tools.registry import ToolGateway
@@ -78,12 +79,17 @@ def create_app(
     fastapi_app.state.tool_gateway = tool_gateway
     fastapi_app.state.knowledge_service = knowledge_service
     fastapi_app.state.llm_provider = llm_provider
+    fastapi_app.state.specialist_gateway = SpecialistGateway(registry=registry, session_factory=session_factory)
 
     fastapi_app.include_router(health.router)
     fastapi_app.include_router(students.router)
     fastapi_app.include_router(missions.router)
     fastapi_app.include_router(approvals.router)
     fastapi_app.include_router(admin.router)
+    # Phase 15: JWT-authenticated React application API.
+    fastapi_app.include_router(auth.router)
+    fastapi_app.include_router(me.router)
+    fastapi_app.include_router(agents.router)
     return fastapi_app
 
 

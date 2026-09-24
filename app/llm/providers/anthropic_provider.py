@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.llm.base import LLMProvider, LLMProviderError
 from app.rules.action_preconditions import CATEGORY_DEPARTMENTS, VALID_CASE_PRIORITIES
 from app.schemas.academic import AcademicIntentResult, AcademicResponseContext, CourseSummary
+from app.schemas.agent_chat import EnquiryPlan
 from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
@@ -67,6 +68,18 @@ _PLAN_TOOL_NAME = "produce_mission_plan"
 _CAREER_INTENT_TOOL_NAME = "classify_career_intent"
 _EVENTS_INTENT_TOOL_NAME = "classify_events_intent"
 _SERVICES_INTENT_TOOL_NAME = "classify_services_intent"
+
+_ENQUIRY_TOOL_NAME = "plan_enquiry"
+_SYSTEM_ENQUIRY_PROMPT = (
+    "You route a student's campus question to read-only specialist agents. You never answer the question "
+    "yourself and never compute anything. Choose only the specialists whose data the question needs, and write "
+    "one short self-contained question for each. For a broad question such as 'what do I have today' or "
+    "'anything important', consult academic twice (timetable, and exam schedule), plus events, placements "
+    "(deadlines and application status) and complaints (overdue cases). If the student asks to perform an action "
+    "(register, apply, file or cancel something), set action_requested and action_agent -- no action is ever taken "
+    "here. If the student asks whether a class has actually started, set asks_live_class_status and consult "
+    "academic for the timetable. Put anything outside all four specialists in out_of_scope."
+)
 
 _SYSTEM_INTENT_PROMPT = (
     "You classify a student's academic support request into a structured intent for a "
@@ -416,6 +429,12 @@ class AnthropicLLMProvider(LLMProvider):
     # ------------------------------------------------------------------
     # Mission Orchestrator
     # ------------------------------------------------------------------
+
+    def plan_enquiry(self, query: str) -> EnquiryPlan:
+        return self._structured(
+            max_tokens=_PLAN_MAX_TOKENS, system=_SYSTEM_ENQUIRY_PROMPT, content=f"Student question: {query}",
+            tool_name=_ENQUIRY_TOOL_NAME, description="Record which specialists to consult.", schema_cls=EnquiryPlan,
+        )
 
     def plan_mission(
         self, mission_id: str, goal: str, *, supported_agents: List[AgentName]

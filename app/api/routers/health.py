@@ -8,6 +8,8 @@ of letting mock output pass as live AI output.
 """
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -37,4 +39,8 @@ def health(request: Request, session: Session = Depends(get_session)) -> dict:
         "database": {"seeded": student_count > 0, "students": student_count},
         "policy_store": policy_store,
         "llm": {"provider": provider.name, "live": provider.is_live, "model": provider.model_name},
+        # Phase 14: whether a live provider *could* be used (a key is present in
+        # the API's environment). Never the key itself. The running mode is
+        # still only what ``llm`` says -- nothing switches automatically.
+        "live_ai_configured": {"groq": bool(os.environ.get("GROQ_API_KEY")), "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY"))},
     }

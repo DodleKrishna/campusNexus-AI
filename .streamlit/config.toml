@@ -9,3 +9,11 @@ headless = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# Phase 14: hide the developer toolbar (Deploy button) in the demo UI.
+toolbarMode = "minimal"
+
+[theme]
+# Phase 14: brand accent (buttons, radio, toggles) instead of the default red.
+primaryColor = "#0FA3A3"

@@ -11,11 +11,22 @@ from __future__ import annotations
 
 import streamlit as st
 
-from streamlit_app import theme
+from streamlit_app import presenters, theme
 from streamlit_app.api_client import ApiClient, ApiError, ApiUnavailableError
 
 
 _FLASH_KEY = "cn_action_center_flash"
+_ACTION_LABELS = {
+    "register_event": "Register for event",
+    "create_calendar_event": "Create calendar entry",
+    "create_campus_case": "File campus complaint",
+}
+# The named checks of check_event_registration -- all passed when the
+# deterministic pre-check is VERIFIED with no issues.
+_REGISTRATION_CHECKS = (
+    "student record", "event exists", "not already registered", "registration open",
+    "before deadline", "seats available", "no class/exam conflict",
+)
 STALE_MESSAGE = "Approval expired because execution conditions changed. Review the updated action and approve again."
 
 
@@ -45,7 +56,8 @@ def render(client: ApiClient, can_decide: bool) -> None:
         _render_card(client, approval, can_decide)
 
     if stale:
-        st.markdown("#### Expired approvals")
+        st.divider()
+        st.markdown("#### Expired / stale approvals")
         st.caption(
             "These were approved, but what they were approved for stopped being true before they ran, so "
             "nothing was executed. An expired approval can never be reused."
@@ -82,8 +94,10 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
     already_decided = st.session_state.get(decided_key)
 
     with st.container(border=True):
-        st.markdown(f"**{approval['action_summary']}**")
-        st.caption(f"Mission `{approval['mission_id']}` · requested {approval['created_at']}")
+        action = _ACTION_LABELS.get(approval.get("tool_name") or "", "Action")
+        target = approval.get("target_title") or approval.get("target_resource") or "n/a"
+        st.markdown(f"**{action}: {target}** &nbsp; {theme.status_badge(approval['status'])}", unsafe_allow_html=True)
+        st.caption(f"Mission {approval['mission_id']} · requested {presenters.fmt_when(approval['created_at'])}")
         if approval.get("replaces_approval_id"):
             st.info(
                 f"New request `{approval_id}`, replacing expired approval `{approval['replaces_approval_id']}`. "
@@ -91,9 +105,9 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
                 "against current data and needs its own decision."
             )
         info_cols = st.columns(4)
-        info_cols[0].markdown(f"Tool  \n`{approval.get('tool_name') or 'n/a'}`")
-        info_cols[1].markdown(f"Target resource  \n`{approval.get('target_resource') or 'n/a'}`")
-        info_cols[2].markdown(f"Student  \n`{approval.get('student_id') or 'n/a'}`")
+        info_cols[0].markdown(f"Action  \n**{action}**")
+        info_cols[1].markdown(f"Target  \n**{target}**")
+        info_cols[2].markdown(f"Student  \n**{approval.get('student_id') or 'n/a'}**")
         issues = approval.get("precheck_issues") or []
         precheck_status = approval.get("precheck_status") or ("needs_review" if issues else "verified")
         info_cols[3].markdown(
@@ -101,7 +115,9 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
             unsafe_allow_html=True,
         )
         if approval.get("target_source_label"):
-            st.caption(f"Target: {approval['target_source_label']}.")
+            st.caption(f"Target source: {approval['target_source_label']}.")
+        if approval.get("tool_name") == "register_event" and precheck_status == "verified" and not issues:
+            st.caption("✔ Checks passed: " + ", ".join(_REGISTRATION_CHECKS) + ".")
         schedule_note = _schedule_check_note(approval.get("schedule_check"))
         if schedule_note:
             st.caption(schedule_note)
@@ -111,13 +127,14 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
                 + " All preconditions are re-checked against current data before execution."
             )
 
-        with st.expander("Validated parameters & supporting evidence"):
+        with st.expander("Details: validated parameters & policy evidence"):
+            st.caption(approval["action_summary"])
             st.json(approval.get("parameters") or {})
             evidence = approval.get("evidence") or []
             if not evidence:
                 st.caption("No policy evidence attached to this proposal.")
             for ev in evidence:
-                st.markdown(f"- **{ev['title']}** (`{ev['document_id']}`): {ev['snippet'][:220]}")
+                st.markdown(f"- **{ev['title']}** ({ev.get('policy_version') or 'unversioned'}): {ev['snippet'][:220]}")
 
         if not can_decide:
             st.caption("Only a Campus Administrator identity may approve or reject actions.")

@@ -63,6 +63,8 @@ class ExecutionStopView(BaseModel):
 class MissionResponse(BaseModel):
     mission_id: str
     goal: str
+    # Phase 14 (additive): whose mission this is (the UI polls that student's missions).
+    student_id: Optional[str] = None
     status: str
     plan: List[MissionTaskView]
     agent_results: List[AgentRunView]
@@ -77,6 +79,10 @@ class MissionResponse(BaseModel):
     # Phase 13 (additive): the target the student selected for this mission's
     # action, if any (GET /missions/{id}/candidates lists the choices).
     selected_target: Optional[SelectedTarget] = None
+    # Phase 14 (additive): set when the mission's last run stopped because the
+    # LLM provider was unavailable (Phase 12C) -- taken from the audit trail's
+    # structured events, never from prose. Carries provider/model/kind only.
+    provider_unavailable: Optional[Dict[str, JsonValue]] = None
     created_at: datetime
     updated_at: datetime
 
@@ -133,3 +139,26 @@ class SelectionResponse(BaseModel):
     candidate: Optional[ActionCandidate] = None
     superseded_approval_id: Optional[str] = None
     mission: MissionResponse
+
+
+class RunningStepView(BaseModel):
+    task_id: str
+    agent: str
+    objective: str
+
+
+class MissionSummaryView(BaseModel):
+    """Phase 14: one row of a student's recent missions (dashboard + progress)."""
+
+    mission_id: str
+    goal: str
+    status: str
+    user_selection_required: bool = False
+    pending_approvals: int = 0
+    # The step currently executing, if any (from MissionStep status) -- lets the
+    # UI say which agent is working while a slow live mission runs.
+    running_step: Optional[RunningStepView] = None
+    steps_total: int = 0
+    steps_done: int = 0
+    created_at: datetime
+    updated_at: datetime

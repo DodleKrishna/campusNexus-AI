@@ -24,6 +24,7 @@ from app.db.models.career import (
     Skill,
     StudentSkill,
 )
+from app.db.models.auth import AuthAccount
 from app.db.models.communication import CalendarEvent, Notification, NotificationStatus
 from app.db.models.events import Club, Event, EventRegistration, EventStatus, RegistrationStatus
 from app.db.models.identity import Department, Student, User
@@ -41,6 +42,7 @@ from app.db.models.mission import (
 from app.db.models.services import CampusCase, CaseAssignment, CasePriority, CaseSLA, CaseStatus
 
 __all__ = [
+    "AuthAccount",
     "AttendanceRecord",
     "Course",
     "CourseStatus",

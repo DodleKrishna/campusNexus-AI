@@ -19,8 +19,11 @@ In both modes, attendance percentages, eligibility, schedule conflicts, SLA stat
 computed by deterministic Python rules, never by the LLM. In live mode the LLM chooses the plan and the
 wording; it never computes those results.
 
-Always say which mode you are presenting. The sidebar shows it: **"🧪 Offline mock LLM"** or
-**"🧠 Live LLM: anthropic · <model>"**.
+Always say which mode you are presenting. The sidebar shows it: **DETERMINISTIC DEMO MODE** or
+**LIVE AI MODE · Provider: Groq · Model: openai/gpt-oss-120b** (or Anthropic). If no live key is
+configured, demo mode says so calmly and runs fully offline. A live-provider outage shows **PROVIDER
+UNAVAILABLE** ("Live AI is temporarily unavailable. Your mission state has been preserved."). It is never
+replaced by mock output.
 
 ## 1. One-time setup
 
@@ -41,7 +44,7 @@ The demo uses its own database and policy store under `data/demo/`. The developm
 python scripts/reset_demo_env.py
 ```
 
-This deletes and rebuilds `data/demo/` only. Rebuild before every demo, for two reasons:
+This deletes and rebuilds only the demo database and demo policy store in `data/demo/` (other files there, such as saved live-LLM reports, are kept). Rebuild before every demo, for two reasons:
 
 - Seed dates (upcoming events, exam dates, complaint SLA deadlines) are relative to the moment of seeding.
 - Earlier runs leave registrations, cases and approvals behind. For example, running the registration
@@ -60,8 +63,8 @@ start if it fails), starts the API and UI on 127.0.0.1 in two windows, and opens
 powershell -ExecutionPolicy Bypass -File scripts\start_demo.ps1 -Reset
 ```
 
-For live mode, set `$env:CAMPUSNEXUS_LLM_PROVIDER = "anthropic"` and `$env:ANTHROPIC_API_KEY` in that
-same shell first. Add `-LiveCheck` to make one real request during preflight. Close the "CampusNexus API"
+For live mode, set `$env:CAMPUSNEXUS_LLM_PROVIDER = "groq"` and `$env:GROQ_API_KEY` (or `anthropic` and
+`$env:ANTHROPIC_API_KEY`) in that same shell first. Add `-LiveCheck` to make one real request during preflight. Close the "CampusNexus API"
 and "CampusNexus UI" windows to stop. The manual steps below do the same thing by hand.
 
 **Terminal 1: API.** The environment variables must be set in the same terminal that runs uvicorn.
@@ -104,122 +107,116 @@ Choose the identity in the sidebar under **Viewing as**.
 | Faculty: Prof. Meera Nair | Staff view. Can view any student, but **cannot approve** actions. |
 | Campus Administrator: Priya Desai | The only identity allowed to approve or reject actions in the **Action Center**. |
 
-## 5. The demonstration scenarios
+## 5. Judge-facing demo script
 
-Run them as **Student: Aditi Rao** from **Mission Workspace**. Type the goal into **Or describe your own
-goal** and click **Run Mission**, or use the matching canned button. Every goal below was run through
-the UI against a freshly reset demo database, and the expected results were observed.
+Run everything as **Student: Aditi Rao** unless a step says otherwise. The four starter buttons at the
+top of **Mission Workspace** send ordinary natural-language goals through the same path as a typed goal.
+The exact inputs are given below, so you can type them instead. Every step was walked through in a real
+browser against a freshly reset demo database (mock mode).
 
-In each agent result, the badge is the Deterministic Verifier's verdict: **VERIFIED**, **NEEDS_REVIEW**,
-**FAILED**, or **WAITING FOR APPROVAL**. Citations appear under **Evidence & Trust**, labelled by task.
+Each mission shows **Mission progress** (one stage per agent task, with its real verifier result), then
+the plan with dependencies, per-agent results with a one-line summary of what the deterministic check
+used and its policy sources, **Evidence & trust**, and the final response. **Show technical details** in
+the sidebar reveals the raw structured facts and document ids if a judge asks.
 
-### Demo 1: Academic recovery (evidence-grounded, deterministic)
+### 1. Dashboard (30 s)
 
-- **Goal:** *"My Operating Systems attendance is low. Can I write the exam, and how can I recover?"*
-- **Expected:**
-  - Plan: T1 and T2, both Academic Agent tasks, independent. Both VERIFIED. Status COMPLETED.
-  - Course resolved to **Operating Systems (CS301)**.
-  - **34/50 = 68.0%** against the active policy's **75%**.
-  - On attendance alone she is **NOT currently eligible** for the exam. She needs **14 more consecutive
-    classes**.
-  - Citation: `attendance-policy-v2`, section *Minimum Attendance Requirement*.
-  - The answer notes that fee clearance is not evaluated by the system.
-- **Say:** the percentage, the eligibility and the class count come from plain Python rules against the
-  active policy version. The LLM only plans and words the answer.
-- The canned 🎓 button asks a 3-part variant: attendance, requirement and recovery, without the exam
-  question.
+- **Point out:** the five summary cards and **Active missions & actions**.
+  - Aditi Rao, CSE year 3, CGPA 7.80.
+  - **Attendance risk: 1 course (CS301 68.0%)**.
+  - Next exam CS301.
+  - 3 open opportunities.
+  - Grievances: 3 open, 3 past SLA.
+- The sidebar says **DETERMINISTIC DEMO MODE** (or **LIVE AI MODE · Provider · Model** when started
+  live). Mock output is never presented as live AI.
 
-### Demo 2: Multi-agent career mission
+### 2. Attendance Recovery (1 min)
 
-- **Goal:** *"Help me prepare for AI internships without missing important classes."* (or the 💼 button)
-- **Expected plan:**
-  - T1 Academic: timetable.
-  - T2 Academic: exams.
-  - T3 Career: AI internships and skill gaps.
-  - T4 Events: *uses results from T1, T2, T3*.
-- **Expected results:** all four VERIFIED, status COMPLETED.
-  - T3: 3 eligible internships, e.g. AI Software Engineering Intern at NimbusCloud Technologies, where
-    she has already applied. Skill gaps: Cloud Computing (AWS), Docker, Kubernetes, Node.js, React.
-  - T4: the AI & Deep Learning Workshop is conflict-free (she is already registered).
-    **Tech Talk: Cloud Native Systems conflicts with class CS302.**
-  - T3 and T4 each show 3 policy citations.
-- **Say:** open T4's structured facts. Every assessed event has `conflict_check_performed: true`, using
-  the timetable and exams that T1 and T2 produced. Its topic matching used T3's skill gaps.
+- **Input:** 🎓 **Attendance Recovery**, i.e. *"Check my Operating Systems attendance, determine whether
+  I currently meet the attendance requirement, and explain how many classes I need to attend to reach the
+  required attendance."*
+- **Expect:** COMPLETED. The Academic stages are VERIFIED. The answer: 68.0% (34/50) against a required
+  75%, needs 14 more consecutive classes.
+- **Point out:**
+  - Open T3: *"✔ Attendance calculated from current student records (34/50 classes); required 75% from
+    Attendance Policy (2025-26) (v2)."*
+  - Open its **Evidence & trust** group: the policy title, version, section and snippet.
+  - The number is computed in code. The LLM only phrases it.
 
-### Demo 3: Human-approved action (conflict-free event)
+### 3. AI Internship multi-agent mission (1.5 min)
 
-- **Goal:** the 📝 **Workshop registration (approval-gated)** button, i.e. *"Find the workshop titled
-  'Competitive Coding Contest', verify there are no conflicts with my classes or exams, and register me
-  for it."* In mock mode keep the single quotes around the title.
-- **Expected before approval:**
-  - Status **NEEDS APPROVAL**, with a banner explaining the next step.
-  - The plan: T1 Events (find the event), T2 Academic (timetable), T3 Academic (exams), all
-    *independent* and run in parallel; T4 Action Agent *uses results from T1, T2, T3*.
-  - T1-T3: VERIFIED.
-  - T4 Action Agent: **WAITING FOR APPROVAL**, proposing *"Register Aditi Rao … for 'Competitive Coding
-    Contest' … at Computer Lab 1"*.
-- Then follow the approval procedure (section 6).
-- **Expected after resume:**
-  - Status COMPLETED.
-  - **Action Result:** ✅ "Action 'register_event' executed and verified successfully."
-  - Exactly one registration row is written. A repeat is refused as a duplicate.
-- **Be precise about the two checks.** Before approval, the deterministic pre-check covers student, event,
-  capacity, deadline, duplicate **and** schedule conflicts, using the timetable and exams T2 and T3 just
-  produced, so the approval card shows **VERIFIED** with the note *"Schedule conflicts checked before
-  approval against 4 weekly class slot(s) and 4 exam(s) … no clash found."* After approval, every
-  precondition (including her *current* timetable and exams) is re-derived again immediately before the
-  write, because things can change after a human signs off (section 7, TOCTOU row).
+- **Input:** 💼 **AI Internship Preparation**, i.e. *"I'm a third-year CSE student interested in AI.
+  Find internships I'm eligible for, identify my skill gaps, find relevant workshops that don't conflict
+  with my classes, and create a preparation plan."*
+- **Expect:** Mission progress *Academic Schedule → Academic Exams → Career Analysis → Event Matching*,
+  all VERIFIED. In the plan, T4 *uses results from T1, T2, T3*.
+- **Point out:**
+  - T4: *"… checked for schedule conflicts against 4 timetable slots and 4 exams; matched to your skill
+    gaps."*
+  - T3: eligibility is calculated from current records, and the skill gaps are Cloud Computing (AWS),
+    Docker, Kubernetes, Node.js and React.
+  - Tech Talk: Cloud Native Systems is flagged as clashing with CS302.
+- **Live mode alternative:** *"Help me prepare for AI internships without missing important classes."*
 
-### Demo 4: Campus grievance intelligence
+### 4. Candidate selection + registration (2 min)
 
-- **Goal:** *"Check my complaints and tell me whether any are overdue."* (or the 🏢 button)
-- **Expected:**
-  - A single Campus Services task, VERIFIED, status COMPLETED.
-  - Her 3 cases with SLA status:
-    - CASE-0001 hostel: response past due.
-    - CASE-0002 IT helpdesk: **OVERDUE**, resolution past due.
-    - CASE-0003 fees: **OVERDUE**, response and resolution past due.
-  - "Overdue case(s) requiring attention: CASE-0001, CASE-0002, CASE-0003."
-  - Citation: `grievance-sla-policy`, section *Escalation*.
-  - The SLA deadlines and breach flags are in the task's structured facts, computed by the
-    deterministic SLA rule.
-- **Staff view:** as the Campus Administrator, **Campus Operations** shows open and overdue counts and
-  per-case SLA status across all students.
+- **Input:** 🗓️ **Choose an Event & Register**, i.e. *"Find a suitable event, check my schedule and
+  prepare my registration."*
+- **Expect:**
+  - Status **USER SELECTION REQUIRED** with *"CampusNexus found suitable options. Choose the event you
+    want to register for."*
+  - Progress: Academic Schedule, Academic Exams, Event Discovery, Schedule Check (all VERIFIED), then
+    Student Selection **WAITING**.
+  - **Choose an event**: *"2 of 14 events can be selected."* Competitive Coding Contest and Photography
+    Contest Exhibition show 🟢 *No class/exam conflict · Registration open* with **Select this event**.
+    Blocked cards show why, with the button disabled: Hackathon Kickoff Session *"Clashes with CS301
+    class"*, Robotics Expo (CS302 exam), Startup Pitch Night (full), the AI workshop (already
+    registered). Six events not yet open are grouped at the bottom.
+- **Point out:** the agent recommends and the student chooses. The statuses come from deterministic
+  registration rules applied to the verified timetable and exams.
+- **Select Competitive Coding Contest.**
+  - *"Selected: Competitive Coding Contest"*, then **Selected → Pre-check VERIFIED → Approval
+    required**.
+  - Status **WAITING FOR APPROVAL**.
+  - Same mission, no LLM call.
 
-### Demo 5: Choose an event, then approve (Phase 13)
+### 5. Action approval (1 min)
 
-This demo shows three separate roles: **the AI recommends, the student selects, an approver approves.**
+- Switch **Viewing as** to **Campus Administrator: Priya Desai** and open **Action Center**.
+- **Point out** the card *"Register for event: Competitive Coding Contest"*:
+  - Student STU-DEMO-001, **Deterministic pre-check VERIFIED**.
+  - *"Target source: Selected by the student in Mission Workspace."*
+  - *"✔ Checks passed: student record, event exists, not already registered, registration open, before
+    deadline, seats available, no class/exam conflict."*
+  - The schedule note with 4 class slots and 4 exams.
+- Click **✅ Approve**. The confirmation says the action has **not run yet**.
 
-> Checked by the automated UI test (`tests/test_phase13_api_ui.py`, Streamlit AppTest against the real
-> API) and by `python scripts/demo_phase13.py`. It has not yet been rehearsed by hand in a browser against
-> the reset demo database. Walk through it once before presenting.
+### 6. Verified execution (1 min)
 
-- **Goal:** the 🗓️ **Choose an event & register** button, i.e. *"Find a suitable event, check my
-  schedule and prepare my registration."*
-- **Expected after the mission runs:**
-  - Status COMPLETED. The plan has T1 Academic (timetable), T2 Academic (exams) and T3 Events, with no
-    Action task. No approval exists.
-  - A **Choose an event** section lists the candidate events. **Competitive Coding Contest** and
-    **Photography Contest Exhibition** show 🟢 *No schedule conflict · Registration open* with an
-    enabled **Select this event** button.
-  - Every other candidate shows 🔴 and the reason, with a disabled **Unavailable** button. Examples:
-    Hackathon Kickoff Session *"Conflicts with CS301 class (Mon 10:00-11:00)"*, Robotics Expo (CS302
-    exam), Startup Pitch Night (full), the AI workshop (already registered).
-  - These statuses come from the deterministic registration rules applied to T1/T2's verified timetable
-    and exams. The Events Agent's text is not used.
-- **Select Competitive Coding Contest.** The same mission continues. No new mission is created and the
-  LLM is not called:
-  - *"Selected: Competitive Coding Contest"*, then **Selected → Pre-check VERIFIED → Approval required**.
-  - Status NEEDS APPROVAL. A new T4 Action Agent task *uses results from T1, T2, T3*.
-- **Action Center** (as the Campus Administrator): the card shows *"Target: Selected by the student in
-  Mission Workspace."* Approve it, then return and **Resume after approval**.
-- **Expected after resume:** COMPLETED, ✅ "Action 'register_event' executed and verified successfully",
-  exactly one new registration row.
-- **Optional:**
-  - Before approving, select **Photography Contest Exhibition** instead. The first request is replaced
-    (it can no longer be approved) and a new approval for the new event appears.
-  - **🔄 Refresh availability** re-checks capacity, deadlines, registrations, timetable and exams
-    without calling the LLM.
+- Switch back to **Student: Aditi Rao** → **Mission Workspace** → **🔄 Resume after approval**.
+- **Expect:**
+  - COMPLETED, with an **ACTION VERIFIED** card: *"Registration successful · Competitive Coding
+    Contest"*, *Pre-execution check VERIFIED · Database write SUCCESS · Postcondition check VERIFIED*.
+  - Progress ends in *Approval APPROVED → Execution VERIFIED*.
+- **Point out:** the preconditions were checked again against current data right before the write, and
+  the database was re-read afterwards. Exactly one registration row exists.
+
+### 7. Campus Operations (45 s)
+
+- As **Campus Administrator**, open **Campus Operations**.
+- **Point out:**
+  - The metric cards (open grievances, open & SLA-breached, pending approvals, total cases).
+  - **Breached items (needs attention)**: open cases past SLA, with their due times.
+  - The full case list with priority, status and SLA state. SLA breaches are computed deterministically.
+
+### 8. Optional failure/safety example (1 min)
+
+- **Input:** *"Find the workshop titled 'Tech Talk: Cloud Native Systems', verify there are no conflicts
+  with my classes or exams, and register me for it."*
+- **Expect:** FAILED before any approval. The pre-check finds the CS302 class clash, no approval is
+  requested and nothing is written. The ⛔ **ACTION BLOCKED** card says *"Nothing was written"*.
+- Also safe to show: *"Book me a flight to Goa for the holidays."* The mission is refused with the list
+  of what CampusNexus can do. More options are in section 7.
 
 ## 6. Approval procedure
 
@@ -244,12 +241,12 @@ already-decided card is refused (HTTP 409).
 
 | Show | How | Expected |
 |---|---|---|
-| Duplicate prevention | Run Scenario 4 again after it completed. | FAILED: "Student already has a registration for this event." |
+| Duplicate prevention | After step 6, type *"Find the workshop titled 'Competitive Coding Contest', verify there are no conflicts with my classes or exams, and register me for it."* | FAILED: "Student already has a registration for this event." |
 | **Judges' failure demo:** known conflict | Type *"Find the workshop titled 'Tech Talk: Cloud Native Systems', verify there are no conflicts with my classes or exams, and register me for it."* | The pre-check uses her timetable/exams **before** approval and finds the CS302 class clash. **No approval is ever requested** and nothing is written. Status FAILED with *"Execution stopped because the same verified failure occurred again without new information."* T4's card reads *"same result on 2 attempts"* (the one replan did not change anything). |
 | Schedule changes after approval (TOCTOU) | Not doable from the UI. Run `python scripts/demo_phase10.py` (scenario C) or `eval/action_scenarios.py`. | VERIFIED at approval; an exam is then rescheduled onto the event; the execution-time recheck blocks the write (FAILED, zero rows). |
 | Double approval | Click approve on an already-decided card (or repeat the API call). | HTTP 409. No second decision is recorded. |
 | Unsupported goal | *"Book me a flight to Goa for the holidays."* | FAILED with "CampusNexus can't help with this goal: …" and the list of what it can do. No task runs. |
-| Missing detail | *"Find a suitable event, check my schedule and prepare my registration."* | Lists the candidate events with their deterministic status and waits for the student to select one (Demo 5). It never picks an event for the student. Selecting an unsafe event is refused with the reason, and no approval is created. |
+| Missing detail | *"Find a suitable event, check my schedule and prepare my registration."* | Lists the candidate events with their deterministic status and waits for the student to select one (section 5, step 4). It never picks an event for the student. Selecting an unsafe event is refused with the reason, and no approval is created. |
 | Restart persistence | Leave a mission waiting for approval, restart the API, then approve and resume. | Completes normally. State is read from the database, not from memory. |
 
 In the registration missions, the Events task (T1) says **"schedule conflicts NOT checked in this
@@ -266,7 +263,7 @@ schedule data. The conflict check is done by T4's pre-check, using T2 and T3's v
 | An agent task FAILED with an `LLMProviderError` message | A live intent or response call failed for that task. Other tasks are unaffected. | As above. |
 | UI: "did not respond in time" | Slow live calls exceeded the UI wait (default 300 s, `CAMPUSNEXUS_UI_MISSION_TIMEOUT_SECONDS`). | The mission may still finish server-side. Check the Action Center, or reopen it by ID, **before** resubmitting. |
 | Sidebar: "Database is not seeded" or "Policy store is empty" | The API was pointed at the wrong or empty paths. | Check the env vars in terminal 1. Re-run `reset_demo_env.py`. |
-| Scenario 4 fails as a duplicate at its first run | Demo data is left over from a rehearsal. | Stop both apps, run `reset_demo_env.py`, restart. |
+| The registration fails as a duplicate at its first run | Demo data is left over from a rehearsal. | Stop both apps, run `reset_demo_env.py`, restart. |
 | Evidence expanders say "No policy evidence" | Embedding provider mismatch between ingest and API. | Use the same `CAMPUSNEXUS_EMBEDDING_PROVIDER` for both, then rebuild. |
 
 ## 9. Live-LLM validation (run before presenting in live mode)
@@ -301,20 +298,18 @@ four things:
 Supported models: `claude-sonnet-5` (default), `claude-opus-5`, `claude-haiku-4-5`. Models that reject
 forced tool calls or disabled thinking are refused at startup with a clear message.
 
-## 10. Screenshot checklist (capture manually in the browser)
+## 10. Screenshot checklist (capture in the browser)
 
-Take these on a freshly reset environment (`start_demo.ps1 -Reset`), in mock mode, with a 1440 px or
-wider window. Keep the sidebar visible so the identity and the **🧪 Offline mock LLM** label appear in
-every shot. Do not edit or composite the screenshots.
+Take these on a freshly reset environment (`start_demo.ps1 -Reset`), with a window 1440 px or wider and the
+sidebar visible so the identity and mode label are in every shot. Follow the section 5 order; each state
+below appears on the way. Do not edit or composite the screenshots.
 
 | # | Screen | Identity | State to capture |
 |---|---|---|---|
-| 1 | **Dashboard** | Student: Aditi Rao | Right after startup, before any mission. Show the title/tagline, the identity strip, **Attendance Overview** with the Operating Systems shortage, and **Existing Grievances**. |
-| 2 | **Mission Workspace: multi-agent plan** | Student: Aditi Rao | After Demo 2 completes. Scroll so **Structured Execution Plan** shows T1–T4 with "T4 … uses results from T1, T2, T3" and the COMPLETED badge, plus the **Participating agents** line. |
-| 3 | **Evidence + verification** | Student: Aditi Rao | Same mission, or Demo 1. Expand one agent result (a VERIFIED badge, readable answer and structured facts) and one **Evidence & Trust** citation group (document, section, snippet). |
-| 4 | **Action Center: pending approval** | Campus Administrator | After Demo 3 is proposed, before clicking anything. Show the card with the action summary, tool, target, the **Deterministic pre-check** badge and its note, the evidence expander (opened), and the **Approve / Reject** buttons. |
-| 5 | **Completed registration** | Student: Aditi Rao | After approve → **Resume after approval**. Show the COMPLETED status, the ✅ **Action Result** "executed and verified successfully", and T2 *run 1 of 2: WAITING FOR APPROVAL* / *run 2 of 2: VERIFIED*. Optionally a second shot of the opened **Mission timeline**. |
-| 6 | **Campus Operations / SLA** | Campus Administrator | Any time after startup. The metric cards (Open Grievances, Overdue Cases, Pending Approvals) and the **Case Priority & SLA Status** list with the overdue cases. |
-
-If you also want the failure demo on camera, capture the Tech Talk mission after resume: FAILED, with
-the ⛔ Action Result.
+| A | Dashboard | Student | Before any mission: summary cards, attendance risk, grievances. |
+| B | Multi-agent Mission Workspace | Student | After step 3: Mission progress (four VERIFIED stages) and the plan with "T4 … uses results from T1, T2, T3". |
+| C | Evidence / verification | Student | After step 2: T3 expanded (✔ summary + sources) and the opened Evidence & trust group. |
+| D | Candidate selection | Student | After step 4, before selecting: eligible and conflicting cards side by side. |
+| E | Action Center | Administrator | After selecting: the card with "Target source: Selected by the student in Mission Workspace". |
+| F | Completed action | Student | After resume: the ACTION VERIFIED card with Postcondition check VERIFIED. |
+| G | Campus Operations | Administrator | Metric cards and Breached items. |

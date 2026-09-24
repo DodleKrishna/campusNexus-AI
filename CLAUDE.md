@@ -232,6 +232,38 @@ across a component boundary. Free text is allowed only in the final user-facing 
   can never run. After approval or execution the selection is locked. Only the mission's own student may
   select (staff get 403). Refreshing candidates never calls the LLM.
 
+## Demo UI (Phase 14)
+
+- UI readability logic lives in `streamlit_app/presenters.py`: pure functions over API payloads, never
+  computing a rule or inventing a status. The Streamlit sections only render.
+- Never present mock output as live AI (the sidebar mode comes from `/health`), and never replace a
+  live-provider failure with mock output. An outage is shown as PROVIDER UNAVAILABLE from structured audit
+  events.
+- In `streamlit_app/theme.py` the injected CSS must have no blank lines (a blank line ends the HTML block
+  and the CSS renders as text).
+
+## React App, Authentication & Agent Chat (Phase 15)
+
+- `frontend/` (React + Vite + TypeScript + Tailwind + TanStack Query) is the primary UI. `streamlit_app/`
+  stays as a debug console. The browser calls `/api/*`, which Vite proxies to FastAPI, so no CORS is needed.
+  All backend calls go through `frontend/src/api/client.ts`.
+- Auth: `auth_accounts` (`app/db/models/auth.py`) stores bcrypt hashes only. JWTs are signed with
+  `CAMPUSNEXUS_JWT_SECRET` (unset = random per process) and expire after `CAMPUSNEXUS_JWT_TTL_MINUTES`.
+  `app/api/auth_deps.py` provides `require_authenticated_user`, `require_roles`, `current_student` and
+  `current_faculty`. `/me/*` and `/agents/*` take the student only from the token, never from the client.
+  The `X-Demo-Identity` path is unchanged for Streamlit and the older tests.
+- Dev accounts (`student|faculty|hod|admin@campusnexus.local`) are seeded by `reset_demo_env.py` and
+  `seed_data.py`. The password comes from `CAMPUSNEXUS_DEMO_PASSWORD`, or is generated into a git-ignored
+  `data/**/dev_credentials.txt`. Never commit a password.
+- Agent chat (`POST /agents/{key}/query`) reaches only the four read-only specialists, through
+  `SpecialistGateway`. The Action Agent is unreachable from chat.
+- The Enquiry Agent (`app/agents/enquiry/`, added by explicit user decision) is read-only. The LLM only
+  plans (`LLMProvider.plan_enquiry`, structured `EnquiryPlan`). The answer is synthesized in code from
+  VERIFIED specialist results only. An action request gets a pointer to its workflow, never an execution.
+  Live class-start status does not exist yet; say so rather than infer it.
+- Attendance standing (`app/rules/attendance_standing.py`) derives only from `compute_attendance`. The
+  frontend never calculates eligibility.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -369,6 +401,15 @@ python scripts/demo_phase10.py
 # refused -> student selects Competitive Coding Contest (USER_SELECTION) -> same mission proposes ->
 # one approval -> approve -> resume -> exactly one verified registration; no LLM call after discovery.
 python scripts/demo_phase13.py
+
+# Phase 15 React app: backend on the demo DB, then the Vite dev server (http://127.0.0.1:5173).
+# Sign-in password: data/demo/dev_credentials.txt (or $env:CAMPUSNEXUS_DEMO_PASSWORD before the reset).
+python scripts/reset_demo_env.py
+$env:CAMPUSNEXUS_DB_PATH = "data/demo/campusnexus_demo.db"; $env:CAMPUSNEXUS_VECTOR_STORE_PATH = "data/demo/chroma"; $env:CAMPUSNEXUS_EMBEDDING_PROVIDER = "onnx_minilm"
+uvicorn app.api.main:app --host 127.0.0.1 --port 8000
+cd frontend; npm install; npm run dev
+# Frontend checks
+cd frontend; npm run typecheck; npm run lint; npm test; npm run build
 
 # Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
 # resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,

@@ -14,8 +14,13 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+# `streamlit run streamlit_app/app.py` puts streamlit_app/ first on sys.path, so a
+# bare `import app` would find this very file instead of the backend `app`
+# package. The repo root must come first, and a wrongly cached `app` module
+# (a file, not a package) is dropped so the next import resolves correctly.
+sys.path[:] = [str(REPO_ROOT)] + [p for p in sys.path if Path(p or ".").resolve() != REPO_ROOT]
+if "app" in sys.modules and not hasattr(sys.modules["app"], "__path__"):
+    del sys.modules["app"]
 
 import streamlit as st
 
@@ -27,6 +32,8 @@ from streamlit_app.sections import action_center, campus_operations, dashboard, 
 
 st.set_page_config(page_title="CampusNexus AI", page_icon="🎓", layout="wide")
 theme.inject_theme()
+
+_PROVIDER_NAMES = {"groq": "Groq", "anthropic": "Anthropic"}
 
 _IDENTITY_LABELS = {
     "student-demo": "Student — Aditi Rao (STU-DEMO-001)",
@@ -84,10 +91,23 @@ def _render_runtime_status(api: ApiClient) -> None:
         return
 
     llm = health.get("llm") or {}
+    configured = health.get("live_ai_configured") or {}
     if llm.get("live"):
-        st.success(f"🧠 Live LLM: {llm.get('provider')} · `{llm.get('model')}`")
+        provider = _PROVIDER_NAMES.get(str(llm.get("provider")), str(llm.get("provider")))
+        st.markdown(
+            f'<div class="cn-mode cn-mode-live"><b>LIVE AI MODE</b><br>Provider: {provider}<br>Model: {llm.get("model")}</div>',
+            unsafe_allow_html=True,
+        )
+        st.caption("Plans and wording come from the live model; every rule result is still computed deterministically.")
     else:
-        st.info("🧪 Offline mock LLM: deterministic planning and wording, no AI model is called.")
+        st.markdown(
+            '<div class="cn-mode cn-mode-demo"><b>DETERMINISTIC DEMO MODE</b><br>Offline planner, no external AI is called.</div>',
+            unsafe_allow_html=True,
+        )
+        if configured.get("groq") or configured.get("anthropic"):
+            st.caption("A live AI key is configured, but this API was started in demo mode. Nothing switches automatically.")
+        else:
+            st.caption("Live AI is not configured (no GROQ_API_KEY). Demo mode runs fully offline and is fully supported.")
     if not (health.get("database") or {}).get("seeded", True):
         st.warning("Database is not seeded. Run `python scripts/reset_demo_env.py`.")
     if not (health.get("policy_store") or {}).get("available", True):
@@ -96,10 +116,13 @@ def _render_runtime_status(api: ApiClient) -> None:
 
 with st.sidebar:
     st.divider()
-    page = st.radio("Navigate", pages)
+    if st.session_state.get("cn_page") not in pages:
+        st.session_state["cn_page"] = pages[0]
+    page = st.radio("Navigate", pages, key="cn_page")
     st.divider()
     _render_runtime_status(client)
     st.caption(f"Signed in as **{_IDENTITY_LABELS.get(selected_key, selected_key)}**")
+    st.toggle("Show technical details", key=mission_workspace.DEBUG_KEY, help="Raw structured facts and document ids, for developers and judges.")
 
 theme.render_hero("CampusNexus AI", "From Campus Goals to Verified Actions.")
 st.caption(

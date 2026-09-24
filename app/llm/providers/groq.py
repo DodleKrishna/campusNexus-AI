@@ -56,6 +56,8 @@ from app.llm.providers.anthropic_provider import (
     _SYSTEM_RESPONSE_PROMPT,
     _SYSTEM_SERVICES_INTENT_PROMPT,
     _SYSTEM_SERVICES_RESPONSE_PROMPT,
+    _SYSTEM_ENQUIRY_PROMPT,
+    _ENQUIRY_TOOL_NAME,
     _CAREER_INTENT_TOOL_NAME,
     _EVENTS_INTENT_TOOL_NAME,
     _INTENT_TOOL_NAME,
@@ -64,6 +66,7 @@ from app.llm.providers.anthropic_provider import (
     _proposal_to_plan,
 )
 from app.schemas.academic import AcademicIntentResult, AcademicResponseContext, CourseSummary
+from app.schemas.agent_chat import EnquiryPlan
 from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
@@ -489,6 +492,13 @@ class GroqLLMProvider(LLMProvider):
     # ------------------------------------------------------------------
     # Mission Orchestrator
     # ------------------------------------------------------------------
+
+    def plan_enquiry(self, query: str) -> EnquiryPlan:
+        # Same forced-function-call path, concurrency limit and retry handling as every other call.
+        return self._structured(
+            max_tokens=_PLAN_MAX_TOKENS, system=_SYSTEM_ENQUIRY_PROMPT, content=f"Student question: {query}",
+            tool_name=_ENQUIRY_TOOL_NAME, description="Record which specialists to consult.", schema_cls=EnquiryPlan,
+        )
 
     def plan_mission(
         self, mission_id: str, goal: str, *, supported_agents: List[AgentName]

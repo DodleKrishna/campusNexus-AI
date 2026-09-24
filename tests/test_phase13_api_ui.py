@@ -281,7 +281,7 @@ def test_action_center_shows_the_student_selected_the_target(offline_transport) 
     at.sidebar.selectbox[0].set_value("admin-demo").run(timeout=30)
     at.sidebar.radio[0].set_value("Action Center").run(timeout=30)
     assert not at.exception
-    assert any(c.value == "Target: Selected by the student in Mission Workspace." for c in at.caption)
+    assert any(c.value == "Target source: Selected by the student in Mission Workspace." for c in at.caption)
 
 
 # ---------------------------------------------------------------------------
