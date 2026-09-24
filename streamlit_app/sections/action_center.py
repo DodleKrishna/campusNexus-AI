@@ -15,9 +15,18 @@ from streamlit_app import theme
 from streamlit_app.api_client import ApiClient, ApiError, ApiUnavailableError
 
 
+_FLASH_KEY = "cn_action_center_flash"
+
+
 def render(client: ApiClient, can_decide: bool) -> None:
     st.subheader("Action Center")
     st.caption("Every pending action requires an explicit human decision -- nothing executes automatically.")
+
+    # A decision triggers st.rerun(); the outcome message is carried across
+    # that rerun here so it is actually seen, instead of vanishing instantly.
+    flash = st.session_state.pop(_FLASH_KEY, None)
+    if flash is not None:
+        getattr(st, flash[0])(flash[1])
 
     try:
         approvals = client.list_pending_approvals()
@@ -43,6 +52,7 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
 
     with st.container(border=True):
         st.markdown(f"**{approval['action_summary']}**")
+        st.caption(f"Mission `{approval['mission_id']}` · requested {approval['created_at']}")
         info_cols = st.columns(4)
         info_cols[0].markdown(f"Tool  \n`{approval.get('tool_name') or 'n/a'}`")
         info_cols[1].markdown(f"Target resource  \n`{approval.get('target_resource') or 'n/a'}`")
@@ -76,15 +86,26 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
 def _decide(client: ApiClient, approval_id: str, decision: str, reason: str, decided_key: str) -> None:
     st.session_state[decided_key] = decision  # set *before* the call: guards the very next rerun's click race
     try:
-        client.decide_approval(approval_id, decision, reason or None)
-        st.success(f"Action {decision}d.")
+        result = client.decide_approval(approval_id, decision, reason or None)
+        if decision == "approve":
+            st.session_state[_FLASH_KEY] = (
+                "success",
+                "✅ Approved. The action has **not run yet**: open mission "
+                f"`{result['mission_id']}` in the Mission Workspace and click **Resume after approval**. The "
+                "preconditions are re-checked against current data before it executes, then verified afterwards.",
+            )
+        else:
+            st.session_state[_FLASH_KEY] = (
+                "info",
+                f"❌ Rejected. Nothing was executed. Resuming mission `{result['mission_id']}` will record the rejection.",
+            )
     except ApiUnavailableError as exc:
         st.session_state.pop(decided_key, None)
-        st.error(f"⚠️ {exc}")
+        st.session_state[_FLASH_KEY] = ("error", f"⚠️ {exc}")
     except ApiError as exc:
         if exc.status_code == 409:
-            st.warning("This action was already decided -- no duplicate decision was submitted.")
+            st.session_state[_FLASH_KEY] = ("warning", "This action was already decided, so no duplicate decision was submitted.")
         else:
             st.session_state.pop(decided_key, None)
-            st.error(f"Decision failed ({exc.status_code}): {exc.detail}")
+            st.session_state[_FLASH_KEY] = ("error", f"Decision failed ({exc.status_code}): {exc.detail}")
     st.rerun()

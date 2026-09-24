@@ -107,6 +107,7 @@ class MissionOrchestrator:
             "as_of": as_of,
             "plan": None,
             "validation_errors": [],
+            "planning_error": None,
             "task_status": {},
             "ready_task_ids": [],
             "agent_results": {},
@@ -162,6 +163,7 @@ class MissionOrchestrator:
             "as_of": None,
             "plan": plan,
             "validation_errors": [],
+            "planning_error": None,
             "task_status": task_status,
             "ready_task_ids": [],
             "agent_results": agent_results,
@@ -222,7 +224,11 @@ class MissionOrchestrator:
 
         graph.add_edge(START, "load_context")
         graph.add_edge("load_context", "generate_plan")
-        graph.add_edge("generate_plan", "validate_plan")
+        graph.add_conditional_edges(
+            "generate_plan",
+            self._route_after_planning,
+            {"finalize": "finalize", "validate_plan": "validate_plan"},
+        )
         graph.add_conditional_edges(
             "validate_plan",
             self._route_after_validate,
@@ -239,7 +245,11 @@ class MissionOrchestrator:
             self._route_after_update,
             {"finalize": "finalize", "replan": "replan", "schedule_ready_tasks": "schedule_ready_tasks"},
         )
-        graph.add_edge("replan", "validate_plan")
+        graph.add_conditional_edges(
+            "replan",
+            self._route_after_planning,
+            {"finalize": "finalize", "validate_plan": "validate_plan"},
+        )
         graph.add_edge("finalize", END)
 
         return graph.compile(checkpointer=build_checkpointer())
@@ -281,13 +291,41 @@ class MissionOrchestrator:
     def _generate_plan(self, state: OrchestratorState) -> dict:
         if state.get("plan") is not None:
             return {}  # resuming, or a replan already produced one this round
-        plan = generate_plan(
-            self._llm_provider,
-            state["mission_id"],
-            state["original_goal"],
-            supported_agents=self._registry.supported_agents(),
-        )
+        try:
+            plan = generate_plan(
+                self._llm_provider,
+                state["mission_id"],
+                state["original_goal"],
+                supported_agents=self._registry.supported_agents(),
+            )
+        except Exception as exc:  # noqa: BLE001 -- a planner failure fails the mission explicitly, never crashes it mid-PLANNING
+            return self._record_planning_failure(state, exc)
         return {"plan": plan}
+
+    def _record_planning_failure(self, state: OrchestratorState, exc: Exception) -> dict:
+        """Persist a planner failure as a FAILED mission with an audit event.
+
+        Without this, an exception from the planner (e.g. the live LLM being
+        unreachable) would escape ``graph.invoke`` and leave the persisted
+        mission stuck in PLANNING with no explanation. No fallback plan is
+        ever substituted -- the mission simply fails, visibly.
+        """
+        message = f"{type(exc).__name__}: {exc}"
+        session = self._session_factory()
+        try:
+            context = ContextService(session)
+            context.append_audit_event(
+                event_id=_event_id(),
+                mission_id=state["mission_id"],
+                event_type="plan_generation_failed",
+                actor="mission_orchestrator",
+                message=f"Planner failed: {message}",
+                metadata={"provider": getattr(self._llm_provider, "name", "unknown")},
+            )
+            context.update_mission_status(state["mission_id"], MissionStatus.FAILED)
+        finally:
+            session.close()
+        return {"planning_error": message, "mission_status": MissionStatus.FAILED}
 
     def _validate_plan(self, state: OrchestratorState) -> dict:
         plan = state["plan"]
@@ -304,7 +342,7 @@ class MissionOrchestrator:
                     event_type="plan_invalid",
                     actor="mission_orchestrator",
                     message="Generated plan failed validation.",
-                    metadata={"errors": result.errors},
+                    metadata={"errors": result.errors, "unsupported_requests": list(plan.unsupported_requests)},
                 )
                 context.update_mission_status(state["mission_id"], MissionStatus.FAILED)
                 return {"validation_errors": result.errors, "mission_status": MissionStatus.FAILED}
@@ -517,12 +555,15 @@ class MissionOrchestrator:
         finally:
             session.close()
 
-        new_plan = generate_plan(
-            self._llm_provider,
-            state["mission_id"],
-            state["original_goal"],
-            supported_agents=self._registry.supported_agents(),
-        )
+        try:
+            new_plan = generate_plan(
+                self._llm_provider,
+                state["mission_id"],
+                state["original_goal"],
+                supported_agents=self._registry.supported_agents(),
+            )
+        except Exception as exc:  # noqa: BLE001 -- see _record_planning_failure
+            return self._record_planning_failure(state, exc)
         task_status = dict(state.get("task_status", {}))
         for task_id, status in list(task_status.items()):
             if status == TaskStatus.FAILED:
@@ -549,22 +590,44 @@ class MissionOrchestrator:
 
     @staticmethod
     def _summarize(state: OrchestratorState) -> str:
-        if state.get("validation_errors"):
-            return "Mission failed: plan validation errors -- " + "; ".join(state["validation_errors"])
-        responses = state.get("responses", {})
-        if not responses:
-            return f"Mission ended with status {state['mission_status'].value}."
         plan = state.get("plan")
+        responses = state.get("responses", {})
+        unsupported = list(plan.unsupported_requests) if plan is not None else []
         # Iterate the plan's declared task order (not a lexical sort of task
         # ids) so a synthesized multi-agent result reads in the mission's
         # actual sequence -- matters once task ids exceed one digit, and is
         # the more correct ordering either way.
         ordered_task_ids = [task.task_id for task in plan.tasks] if plan is not None else sorted(responses)
-        return " ".join(responses[task_id] for task_id in ordered_task_ids if task_id in responses)
+        # Skip a task's answer when an earlier task's answer already contains
+        # it verbatim (e.g. an eligibility answer that already states the
+        # recovery path), so the synthesis doesn't repeat itself.
+        parts: List[str] = []
+        for task_id in ordered_task_ids:
+            answer = (responses.get(task_id) or "").strip()
+            if answer and not any(answer in earlier for earlier in parts):
+                parts.append(answer)
+        gathered = " ".join(parts)
+
+        if state.get("planning_error"):
+            text = f"Mission failed: the planner could not produce a usable plan ({state['planning_error']})."
+            return f"{text} Results gathered before the failure: {gathered}" if gathered else f"{text} No task was executed."
+        if state.get("validation_errors"):
+            if plan is not None and not plan.tasks and unsupported:
+                return "CampusNexus can't help with this goal: " + " ".join(unsupported)
+            return "Mission failed: plan validation errors -- " + "; ".join(state["validation_errors"])
+
+        text = gathered or f"Mission ended with status {state['mission_status'].value}."
+        if unsupported:
+            text += " Not handled by this mission: " + " ".join(unsupported)
+        return text
 
     # ------------------------------------------------------------------
     # Conditional routing
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _route_after_planning(state: OrchestratorState) -> str:
+        return "finalize" if state.get("planning_error") else "validate_plan"
 
     @staticmethod
     def _route_after_validate(state: OrchestratorState) -> str:

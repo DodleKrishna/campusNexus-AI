@@ -42,6 +42,11 @@ class KnowledgeService:
     def __init__(self, *, retriever: PolicyRetriever) -> None:
         self._retriever = retriever
 
+    def indexed_chunk_count(self) -> int:
+        """Readiness check: 0 means the policy corpus was never ingested, so
+        every evidence lookup would come back empty."""
+        return self._retriever.indexed_chunk_count()
+
     def search(
         self,
         query: str,

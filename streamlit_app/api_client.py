@@ -14,11 +14,17 @@ async-only); ``TestClient`` is what actually bridges that, and it's a real
 """
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_BASE_URL = os.environ.get("CAMPUSNEXUS_API_URL") or "http://127.0.0.1:8000"
+# Planning + executing a mission makes several sequential LLM calls in live
+# mode (planner, then each agent's classify/respond pair), so mission
+# create/resume get a far longer budget than ordinary reads. A timeout here
+# only means the *UI* stopped waiting -- the mission keeps running server-side.
+MISSION_TIMEOUT_SECONDS = float(os.environ.get("CAMPUSNEXUS_UI_MISSION_TIMEOUT_SECONDS") or 300)
 
 _default_http_client: Optional[httpx.Client] = None
 
@@ -73,7 +79,10 @@ class ApiClient:
         except httpx.ConnectError as exc:
             raise ApiUnavailableError(f"Could not reach the CampusNexus API at {self._client.base_url}.") from exc
         except httpx.TimeoutException as exc:
-            raise ApiUnavailableError("The CampusNexus API did not respond in time.") from exc
+            raise ApiUnavailableError(
+                "The CampusNexus API did not respond in time. If a mission was running it may still finish "
+                "server-side -- check the Action Center or re-open it before re-submitting the same goal."
+            ) from exc
 
         if response.status_code >= 400:
             try:
@@ -86,6 +95,9 @@ class ApiClient:
         return response.json()
 
     # ------------------------------------------------------------------
+
+    def get_health(self) -> Dict[str, Any]:
+        return self._request("GET", "/health")
 
     def list_demo_students(self) -> List[Dict[str, Any]]:
         return self._request("GET", "/demo/students")
@@ -100,7 +112,7 @@ class ApiClient:
         body: Dict[str, Any] = {"goal": goal}
         if student_id is not None:
             body["student_id"] = student_id
-        return self._request("POST", "/missions", json=body)
+        return self._request("POST", "/missions", json=body, timeout=MISSION_TIMEOUT_SECONDS)
 
     def get_mission(self, mission_id: str) -> Dict[str, Any]:
         return self._request("GET", f"/missions/{mission_id}")
@@ -112,7 +124,7 @@ class ApiClient:
         return self._request("GET", f"/missions/{mission_id}/evidence")
 
     def resume_mission(self, mission_id: str) -> Dict[str, Any]:
-        return self._request("POST", f"/missions/{mission_id}/resume")
+        return self._request("POST", f"/missions/{mission_id}/resume", timeout=MISSION_TIMEOUT_SECONDS)
 
     def list_pending_approvals(self) -> List[Dict[str, Any]]:
         return self._request("GET", "/approvals/pending")

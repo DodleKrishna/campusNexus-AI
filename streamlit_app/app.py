@@ -71,10 +71,34 @@ pages = ["Dashboard", "Mission Workspace", "Action Center"]
 if is_staff:
     pages.append("Campus Operations")
 
+def _render_runtime_status(api: ApiClient) -> None:
+    """Show the backend's *actual* LLM mode and readiness (GET /health), so
+    deterministic mock output is never presented as live AI output."""
+    try:
+        health = api.get_health()
+    except ApiUnavailableError:
+        st.error("API offline. Start it with `uvicorn app.api.main:app --port 8000`.")
+        return
+    except ApiError as exc:
+        st.warning(f"API health check failed ({exc.status_code}).")
+        return
+
+    llm = health.get("llm") or {}
+    if llm.get("live"):
+        st.success(f"🧠 Live LLM: {llm.get('provider')} · `{llm.get('model')}`")
+    else:
+        st.info("🧪 Offline mock LLM: deterministic planning and wording, no AI model is called.")
+    if not (health.get("database") or {}).get("seeded", True):
+        st.warning("Database is not seeded. Run `python scripts/reset_demo_env.py`.")
+    if not (health.get("policy_store") or {}).get("available", True):
+        st.warning("Policy store is empty, so answers will have no evidence citations. Run `python scripts/reset_demo_env.py`.")
+
+
 with st.sidebar:
     st.divider()
     page = st.radio("Navigate", pages)
     st.divider()
+    _render_runtime_status(client)
     st.caption(f"Signed in as **{_IDENTITY_LABELS.get(selected_key, selected_key)}**")
 
 theme.render_hero("CampusNexus AI", "From Campus Goals to Verified Actions.")

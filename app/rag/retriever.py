@@ -147,6 +147,10 @@ class PolicyRetriever:
         self._semantic_weight = semantic_weight
         self._keyword_weight = keyword_weight
 
+    def indexed_chunk_count(self) -> int:
+        """How many chunks the underlying store holds (0 = nothing ingested)."""
+        return self._vector_store.count()
+
     def _where(self, query: RetrievalQuery) -> Optional[Dict[str, Any]]:
         return build_where(
             {

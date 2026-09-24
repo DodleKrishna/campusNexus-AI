@@ -1,0 +1,8 @@
+# Phase 9: keep the local demo UI local. Streamlit otherwise binds to every
+# network interface, exposing a UI with a no-authentication identity switcher
+# to the LAN. Override deliberately with --server.address if ever needed.
+[server]
+address = "127.0.0.1"
+
+[browser]
+gatherUsageStats = false

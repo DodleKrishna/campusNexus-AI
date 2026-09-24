@@ -124,6 +124,17 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - Do not deploy `app/api/`/`streamlit_app/` publicly as-is — see `docs/ARCHITECTURE.md`'s Phase 8 trust-boundary
   note for what a real deployment still needs (authentication/SSO, HTTPS, rate limiting).
 
+## LLM Failure Handling & Demo Readiness (Phase 9)
+
+- Every real-provider failure (missing key/SDK, transport/auth error, truncated or refused response, missing
+  or invalid structured output) raises `app.llm.base.LLMProviderError`. Never catch it by substituting the
+  mock provider or a default answer -- a failed planner call fails the mission visibly (a
+  `plan_generation_failed` audit event), and a failed agent call fails that task.
+- A planner must not invent functionality: parts of a goal no registered agent/tool can handle go in
+  `MissionPlan.unsupported_requests`, and Action Agent tasks only ever carry allowlisted `constraints`
+  (the provider's `_ActionSpec`), never values the student did not state.
+- Demo runs use the isolated `data/demo/` environment (`scripts/reset_demo_env.py`), never the dev DB.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -228,6 +239,18 @@ uvicorn app.api.main:app --reload --port 8000
 # Start the Streamlit demo UI (a separate process/terminal; talks to the FastAPI
 # backend over HTTP at http://127.0.0.1:8000 by default -- start the API first).
 streamlit run streamlit_app/app.py
+
+# Phase 9 demo tooling (see docs/DEMO_GUIDE.md for the full runbook).
+# Rebuild the isolated demo DB + policy store under data/demo/ (never touches
+# data/campusnexus.db); then point the API at it via CAMPUSNEXUS_DB_PATH /
+# CAMPUSNEXUS_VECTOR_STORE_PATH as the script prints.
+python scripts/reset_demo_env.py
+# Readiness check in the API's shell (DB, policy store, LLM mode, running API);
+# exits non-zero if anything must be fixed. --live-call spends one real request.
+python scripts/demo_preflight.py
+# Validate the real Anthropic provider's structured intents/plans (--e2e for full
+# missions on a throwaway DB). Exits 2 (UNAVAILABLE) without ANTHROPIC_API_KEY.
+python scripts/check_live_llm.py
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see

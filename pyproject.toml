@@ -29,7 +29,8 @@ dev = [
 # used by the entire test suite, the demo runner, and eval -- never imports
 # this package (see app/llm/providers/anthropic_provider.py's lazy import).
 llm = [
-    "anthropic>=0.40,<1",
+    # >=0.49: the provider always sends an explicit ``thinking`` config.
+    "anthropic>=0.49,<1",
 ]
 # Phase 8: the FastAPI application layer + Streamlit demo UI. Kept as a
 # separate extra so a pure-backend/test install (`pip install -e ".[dev]"`)

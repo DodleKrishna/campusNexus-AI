@@ -66,6 +66,7 @@ def _mission_response(session: Session, mission: Mission) -> MissionResponse:
             facts={k: v for k, v in (r.facts or {}).items() if k != "_response_text"},
             errors=list(r.errors or []),
             evidence=[Evidence.model_validate(e) for e in (r.evidence or [])],
+            response_text=str((r.facts or {}).get("_response_text") or ""),
         )
         for r in runs
     ]

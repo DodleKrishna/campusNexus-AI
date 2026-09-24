@@ -688,6 +688,96 @@ resumption never double-registers.
   processes must be started separately for a live demo (`uvicorn app.api.main:app` then
   `streamlit run streamlit_app/app.py`).
 
+## Live-LLM Validation & Demo Readiness (Phase 9)
+
+No architecture change. No new agents, components, enum values or endpoints; the changes harden
+existing paths. The presenter runbook is `docs/DEMO_GUIDE.md`.
+
+### Real LLM provider (`app/llm/providers/anthropic_provider.py`)
+
+- **Thinking and output budget.** Every request sets `thinking={"type": "disabled"}`. On the default model
+  (`claude-sonnet-5`), omitting `thinking` runs adaptive thinking, and `max_tokens` caps thinking and output
+  together. The previous 256/512-token budgets could therefore truncate before the forced tool call
+  finished. Budgets are now 1024 (classify/respond) and 4096 (plan).
+- **One error type.** `stop_reason` of `max_tokens` or `refusal`, a missing or invalid tool call, an empty
+  response, a transport or authentication failure, a missing key, or a missing SDK all raise
+  `app.llm.base.LLMProviderError`. Nothing substitutes a mock or default answer.
+- **Model gate.** Models that reject forced `tool_choice` or disabled thinking (Fable, Mythos,
+  `claude-opus-5-5`) are refused at construction.
+- **Configuration.** Client timeout is `CAMPUSNEXUS_LLM_TIMEOUT_SECONDS` (default 60), with 2 SDK retries.
+- **Planner prompt.** It now describes what each *registered* agent can do (`AGENT_CAPABILITIES`) and which
+  facts flow along dependencies. For example, Events can only check clashes when it depends on Academic
+  timetable and exam tasks. The prompt tells the model never to invent action parameters.
+- **Action tasks.** Action Agent tasks carry a typed, allowlisted `action` (`_ActionSpec`: `tool_name`
+  limited to the three registered write tools) that becomes `MissionTask.constraints`. Before this, a
+  live plan could never give the Action Agent its required `tool_name`, so every live action mission
+  failed.
+- **No silent repair.** A dangling or duplicate dependency index is no longer dropped. It becomes a
+  dangling or duplicate task id, which `app.graph.validator` rejects explicitly.
+- **Test seam.** A `client=` constructor argument lets tests run the exact provider code against a fake,
+  or against the real SDK pointed at a local stub server (`tests/test_anthropic_provider.py`).
+
+`LLMProvider` gains `is_live` / `model_name` descriptors, surfaced by `GET /health` and the UI, so mock
+output is never presented as live AI output.
+
+### Unsupported goals (`MissionPlan.unsupported_requests`, additive)
+
+A planner states the parts of a goal no registered agent or tool can handle, instead of inventing a
+task. A plan with zero tasks and a note still fails validation, so nothing is dispatched, but the final
+result reads "CampusNexus can't help with this goal: …". A partially supported plan runs normally and
+appends "Not handled by this mission: …". The mock planner uses this too, for off-topic goals and for
+"register me" goals that name no event: it discovers conflict-free events and never picks one.
+
+### Orchestrator failure handling (`app/graph/orchestrator.py`)
+
+A planner exception, in `generate_plan` or in `replan`, is now caught. It is recorded as a
+`plan_generation_failed` audit event and routed straight to `finalize` with status FAILED
+(`OrchestratorState.planning_error`). Before this, it escaped `graph.invoke` and left the persisted
+mission stuck in PLANNING, and `POST /missions` returned a bare 500. Synthesis also skips a task's
+answer when an earlier answer already contains it verbatim.
+
+### Mock provider (offline stand-in)
+
+Routing is generic by domain vocabulary, never by specific sentences:
+
+- internship preparation → the Academic + Career → Events mission;
+- skill-driven workshops → Career → Events;
+- clash-aware events → Academic timetable/exams → Events;
+- complaints → Campus Services;
+- internships/jobs → Career;
+- nothing recognisable → explicit decline;
+- an academic-only registry keeps the original fallback.
+
+Recovery phrasing ("recover", "catch up", "how many more classes") classifies as attendance recovery.
+Event rendering no longer labels an unchecked event as "no schedule conflicts". The live events prompt
+has the same rule.
+
+### Demo environment and tooling
+
+- `scripts/reset_demo_env.py` rebuilds `data/demo/` (a separate DB and Chroma store, gitignored). It
+  refuses to delete anything else and never touches `data/campusnexus.db`.
+- `scripts/demo_preflight.py` checks the DB (seeded, demo student, seed dates still in the future),
+  policy store and retrieval, LLM mode (optionally one live call) and a running API's `/health`.
+- `scripts/check_live_llm.py` validates the real provider's structured intents and plans (plus `--e2e`
+  missions on a throwaway DB). Without a key it exits 2 (UNAVAILABLE) rather than faking results.
+- `GET /health` additionally reports `ready`, `database.seeded`, `policy_store.chunks` and `llm`.
+  `AgentRunView.response_text` exposes each agent's already-persisted user-facing answer.
+- `.streamlit/config.toml` binds the UI to 127.0.0.1. Streamlit's default binds every interface, which
+  exposed the no-auth identity switcher to the LAN.
+
+### Known limitations
+
+- Live-LLM behaviour is validated structurally (schemas plus the deterministic validator), but plan
+  quality, intent accuracy and latency still have to be measured with a real key
+  (`scripts/check_live_llm.py`). Prompt wording has not been tuned against real outputs.
+- The mock's registration plan has no Academic dependency, so propose-time conflict data is absent
+  and the approval card shows NEEDS_REVIEW. The execution-time recheck still catches the clash, and
+  `eval/action_scenarios.py` relies on that path.
+- A deterministic task failure is replanned up to `max_replans` times with the same outcome, so the UI
+  shows each run.
+- `POST /missions` still blocks for the whole mission. Live mode makes roughly 2 calls per task plus 1
+  for the plan, and the UI waits up to 300 s.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

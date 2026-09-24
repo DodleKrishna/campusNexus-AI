@@ -72,6 +72,7 @@ def create_app(
     fastapi_app.state.orchestrator = orchestrator
     fastapi_app.state.tool_gateway = tool_gateway
     fastapi_app.state.knowledge_service = knowledge_service
+    fastapi_app.state.llm_provider = llm_provider
 
     fastapi_app.include_router(health.router)
     fastapi_app.include_router(students.router)

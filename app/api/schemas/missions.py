@@ -33,6 +33,9 @@ class AgentRunView(BaseModel):
     facts: Dict[str, JsonValue] = {}
     errors: List[str] = []
     evidence: List[Evidence] = []
+    # Phase 9 (additive): the agent's own user-facing answer for this task,
+    # generated from its verified facts -- previously persisted but hidden.
+    response_text: str = ""
 
 
 class ApprovalSummaryView(BaseModel):

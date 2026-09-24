@@ -23,7 +23,7 @@ CLAUDE.md allows free text:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 
 from app.schemas.academic import AcademicIntentResult, AcademicResponseContext, CourseSummary
 from app.schemas.career import CareerIntentResult, CareerResponseContext
@@ -33,10 +33,30 @@ from app.schemas.mission import MissionPlan
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
 
 
+class LLMProviderError(RuntimeError):
+    """A provider call failed or returned output that cannot be trusted.
+
+    Covers configuration problems (missing credentials/SDK), transport
+    failures (auth, rate limit, network, timeout), and unusable responses
+    (truncated, refused, missing the expected structured tool call, failing
+    Pydantic validation). Callers must surface it as a failure -- never
+    substitute a mock/default answer in its place.
+    """
+
+
 class LLMProvider(ABC):
     """A swappable LLM backend for the Academic Agent and the Mission Orchestrator."""
 
     name: str
+    # True only for a provider that calls a real model over the network --
+    # surfaced by GET /health and the UI so a demo never presents
+    # deterministic mock output as live AI output.
+    is_live: bool = False
+
+    @property
+    def model_name(self) -> Optional[str]:
+        """The concrete model id in use, or None for an offline provider."""
+        return None
 
     @abstractmethod
     def classify_academic_intent(

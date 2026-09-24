@@ -89,11 +89,16 @@ def _extract_shared_subject(goal: str) -> Optional[str]:
     return match.group(1) if match else None
 
 
+_RECOVERY_PHRASES = ("how many classes", "how many more classes", "need to attend", "classes do i need")
+_RECOVERY_WORDS = ("recover", "catch up", "make up my attendance", "improve my attendance")
+
+
 def _classify(query: str) -> AcademicIntent:
     q = query.lower()
     if "exam" in q and any(keyword in q for keyword in _EXAM_ELIGIBILITY_KEYWORDS):
         return AcademicIntent.EXAM_ELIGIBILITY
-    if ("how many classes" in q or "need to attend" in q) and "attend" in q:
+    recovery_phrase = any(phrase in q for phrase in _RECOVERY_PHRASES) and ("attend" in q or "need" in q)
+    if recovery_phrase or any(word in q for word in _RECOVERY_WORDS):
         return AcademicIntent.ATTENDANCE_RECOVERY
     if "timetable" in q or "class schedule" in q or "schedule of classes" in q:
         return AcademicIntent.TIMETABLE
@@ -113,7 +118,52 @@ _CAREER_PREP_AGENTS = frozenset(
 
 def _is_career_prep_goal(goal: str) -> bool:
     q = goal.lower()
-    return "internship" in q and "skill gap" in q and ("workshop" in q or "event" in q)
+    if "internship" not in q:
+        return False
+    if "skill gap" in q and ("workshop" in q or "event" in q):
+        return True
+    # "Prepare for AI internships without missing classes" -- preparing for
+    # internships around the student's timetable is the same Academic +
+    # Career -> Events collaboration, just phrased without naming each step.
+    return "prepar" in q or ("workshop" in q and "skill" in q)
+
+
+# Generic domain vocabulary for the fallback router below: a goal is routed to
+# the specialist whose domain it mentions, and is declined outright (with an
+# explanation) when it mentions none -- rather than being forced onto the
+# Academic Agent, which would answer an unrelated goal with a confusing
+# "couldn't find that course" message.
+_EVENTS_WORDS = ("workshop", "event", "hackathon", "seminar", "club", "competition", "contest", "webinar", "bootcamp")
+_CAREER_WORDS = ("internship", "job", "placement", "career", "resume", "recruit", "opportunit")
+_SERVICES_WORDS = ("complaint", "grievance", "hostel", "ticket", "sla", "helpdesk", "my cases", "my case")
+_ACADEMIC_WORDS = (
+    "attend", "exam", "class", "course", "timetable", "grade", "gpa", "marks", "schedule", "semester",
+    "polic", "eligib", "lecture", "credit", "subject", "academic", "syllabus",
+)
+_CONFLICT_WORDS = ("clash", "conflict", "without missing", "fit my", "around my", "don't miss", "schedule", "timetable")
+_REGISTRATION_WORDS = ("regist", "sign me up", "sign up", "enrol me", "enroll me")
+
+# Objectives built only from app/agents/events/agent.py's relevance
+# stopwords, so the Events Agent filters by upstream skill gaps (or not at
+# all) rather than by incidental filler words in the student's phrasing.
+_EVENTS_DISCOVERY_OBJECTIVE = "Find events and workshops"
+_EVENTS_SKILL_OBJECTIVE = "Find workshops related to my skill gaps"
+_NO_CONFLICT_SUFFIX = " that don't conflict with my classes and exams"
+
+_UNSUPPORTED_GOAL_NOTE = (
+    "This goal doesn't match anything CampusNexus can do. Supported: academics (attendance, exam eligibility, "
+    "timetable, exam schedule, academic policy), careers (eligible internships, skill gaps, application status), "
+    "campus events and workshops, campus complaints and their SLA status, and approval-gated actions "
+    "(event registration, personal calendar entries, filing a campus complaint)."
+)
+_UNNAMED_EVENT_NOTE = (
+    "Registration was not prepared: no specific event was named. Pick one of the conflict-free events listed "
+    "and ask to register for it by its exact title, and the registration will be prepared for approval."
+)
+
+
+def _mentions(goal_lower: str, words: tuple) -> bool:
+    return any(word in goal_lower for word in words)
 
 
 def _is_campus_services_goal(goal: str) -> bool:
@@ -259,6 +309,79 @@ def _build_career_prep_plan(mission_id: str, goal: str) -> MissionPlan:
     return MissionPlan(mission_id=mission_id, goal=goal, tasks=[timetable_task, exam_task, career_task, events_task])
 
 
+def _build_events_plan(
+    mission_id: str,
+    goal: str,
+    *,
+    with_career: bool,
+    with_schedule: bool,
+    unsupported_requests: Optional[List[str]] = None,
+) -> MissionPlan:
+    """Events discovery, optionally fed by Career skill gaps and/or Academic
+    timetable + exam facts (the only way the Events Agent can check clashes)."""
+    tasks: List[MissionTask] = []
+
+    def _add(agent: AgentName, objective: str, *, deps: Optional[List[str]] = None, evidence: bool = True) -> str:
+        task_id = f"{mission_id}-task-{len(tasks) + 1}"
+        tasks.append(
+            MissionTask(
+                task_id=task_id, mission_id=mission_id, agent=agent, objective=objective,
+                dependencies=list(deps or []), requires_evidence=evidence,
+            )
+        )
+        return task_id
+
+    upstream: List[str] = []
+    if with_schedule:
+        upstream.append(_add(AgentName.ACADEMIC_AGENT, "What is my timetable?", evidence=False))
+        upstream.append(_add(AgentName.ACADEMIC_AGENT, "When are my exams?", evidence=False))
+    if with_career:
+        upstream.append(_add(AgentName.CAREER_AGENT, "Find internships I'm eligible for and identify my skill gaps"))
+    objective = _EVENTS_SKILL_OBJECTIVE if with_career else _EVENTS_DISCOVERY_OBJECTIVE
+    if with_schedule:
+        objective += _NO_CONFLICT_SUFFIX
+    _add(AgentName.EVENTS_OPPORTUNITY_AGENT, objective, deps=upstream)
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=tasks, unsupported_requests=list(unsupported_requests or []))
+
+
+def _build_single_agent_plan(mission_id: str, goal: str, agent: AgentName) -> MissionPlan:
+    task = MissionTask(
+        task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=agent,
+        objective=goal, dependencies=[], requires_evidence=True,
+    )
+    return MissionPlan(mission_id=mission_id, goal=goal, tasks=[task])
+
+
+def _route_by_domain(mission_id: str, goal: str, supported: set) -> Optional[MissionPlan]:
+    """Generic keyword routing for goals none of the specific shapes matched.
+
+    Returns None to fall through to the Academic clause-splitting path.
+    """
+    q = goal.lower()
+    events_ok = AgentName.EVENTS_OPPORTUNITY_AGENT in supported
+    career_ok = AgentName.CAREER_AGENT in supported
+    schedule_ok = AgentName.ACADEMIC_AGENT in supported
+
+    if events_ok and _mentions(q, _EVENTS_WORDS):
+        with_schedule = schedule_ok and _mentions(q, _CONFLICT_WORDS)
+        if _mentions(q, _REGISTRATION_WORDS):
+            # Registration wanted but no event named (a named one is caught by
+            # _is_event_registration_goal): discover candidates, never pick one.
+            return _build_events_plan(
+                mission_id, goal, with_career=False, with_schedule=schedule_ok,
+                unsupported_requests=[_UNNAMED_EVENT_NOTE],
+            )
+        with_career = career_ok and "skill" in q
+        return _build_events_plan(mission_id, goal, with_career=with_career, with_schedule=with_schedule)
+    if career_ok and _mentions(q, _CAREER_WORDS):
+        return _build_single_agent_plan(mission_id, goal, AgentName.CAREER_AGENT)
+    if AgentName.CAMPUS_SERVICES_AGENT in supported and _mentions(q, _SERVICES_WORDS):
+        return _build_single_agent_plan(mission_id, goal, AgentName.CAMPUS_SERVICES_AGENT)
+    if len(supported) > 1 and not _mentions(q, _ACADEMIC_WORDS):
+        return MissionPlan(mission_id=mission_id, goal=goal, tasks=[], unsupported_requests=[_UNSUPPORTED_GOAL_NOTE])
+    return None
+
+
 def _build_campus_services_plan(mission_id: str, goal: str) -> MissionPlan:
     task = MissionTask(
         task_id=f"{mission_id}-task-1", mission_id=mission_id, agent=AgentName.CAMPUS_SERVICES_AGENT,
@@ -329,6 +452,9 @@ class MockLLMProvider(LLMProvider):
             return _build_career_prep_plan(mission_id, goal)
         if _is_campus_services_goal(goal) and AgentName.CAMPUS_SERVICES_AGENT in supported:
             return _build_campus_services_plan(mission_id, goal)
+        routed = _route_by_domain(mission_id, goal, supported)
+        if routed is not None:
+            return routed
 
         agent = AgentName.ACADEMIC_AGENT
         if agent not in supported_agents:
@@ -614,18 +740,30 @@ class MockLLMProvider(LLMProvider):
         if not context.assessments:
             return "I couldn't find any relevant upcoming events."
 
-        conflict_free = [a for a in context.assessments if not a.timetable_conflicts and not a.exam_conflicts]
+        # "No conflicts found" is only a claim when a check actually ran
+        # against the student's timetable/exams; otherwise say it wasn't checked.
+        unchecked = [a for a in context.assessments if not a.conflict_check_performed]
+        conflict_free = [
+            a for a in context.assessments
+            if a.conflict_check_performed and not a.timetable_conflicts and not a.exam_conflicts
+        ]
         conflicted = [a for a in context.assessments if a.timetable_conflicts or a.exam_conflicts]
         lines: List[str] = []
 
+        def _line(a) -> str:
+            if a.already_registered:
+                note = f" (you're already registered -- {a.registration_status})"
+            else:
+                note = f" ({a.availability.value})"
+            return f"- {a.event.title} on {a.event.start_at.isoformat()} at {a.event.location}{note}"
+
         if conflict_free:
             lines.append("Events with no schedule conflicts:")
-            for a in conflict_free:
-                if a.already_registered:
-                    note = f" (you're already registered -- {a.registration_status})"
-                else:
-                    note = f" ({a.availability.value})"
-                lines.append(f"- {a.event.title} on {a.event.start_at.isoformat()} at {a.event.location}{note}")
+            lines.extend(_line(a) for a in conflict_free)
+
+        if unchecked:
+            lines.append("Matching events (schedule conflicts NOT checked: no timetable/exam data was provided):")
+            lines.extend(_line(a) for a in unchecked)
 
         if conflicted:
             lines.append("Events that conflict with your academic schedule:")

@@ -29,6 +29,9 @@ class OrchestratorState(TypedDict, total=False):
 
     plan: Optional[MissionPlan]
     validation_errors: List[str]
+    # Set when the planner itself raised (e.g. the live LLM was unreachable or
+    # returned an unusable plan) -- routes straight to finalize as FAILED.
+    planning_error: Optional[str]
 
     task_status: Dict[str, TaskStatus]
     ready_task_ids: List[str]

@@ -50,6 +50,11 @@ class MissionPlan(BaseModel):
     mission_id: NonBlankStr
     goal: NonBlankStr
     tasks: List[MissionTask] = Field(default_factory=list)
+    # Phase 9 addition (additive): parts of the goal the planner could not map
+    # onto any supported agent/tool, stated plainly rather than invented as a
+    # task. A plan with no tasks and a non-empty list is a clear "can't help
+    # with this" -- the validator still rejects it, so nothing is dispatched.
+    unsupported_requests: List[NonBlankStr] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     version: int = Field(default=1, ge=1)
 

@@ -31,3 +31,6 @@ data/chroma/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Phase 9: isolated demonstration environment (scripts/reset_demo_env.py)
+data/demo/
