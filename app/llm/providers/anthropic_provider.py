@@ -158,7 +158,8 @@ _SYSTEM_PLAN_PROMPT = (
     "missing in `unsupported_requests`. For example, a student who wants to register but has not named an exact "
     "event gets NO action_agent task: plan an Academic timetable task, an Academic exam-schedule task, and an "
     "events task that depends on both (so the candidates are checked for clashes), and state in "
-    "`unsupported_requests` that the student must choose one event by its exact title. An action_agent task whose "
+    "`unsupported_requests` that the student must choose one event by its exact title, and list the action's tool "
+    "in `selection_required_actions`. An action_agent task whose "
     "target the student did not name word-for-word is refused before it runs.\n"
     "5. If part of the goal is outside every supported agent's capabilities, do not create a task for it; add a "
     "short plain-language explanation to `unsupported_requests`. If nothing in the goal is supported, return "
@@ -237,6 +238,15 @@ class _PlanProposal(BaseModel):
         default_factory=list,
         description="Plain-language notes on any part of the goal that no supported agent/tool can handle.",
     )
+    selection_required_actions: List[Literal["register_event", "create_calendar_event"]] = Field(
+        default_factory=list,
+        description=(
+            "Action tools the student asked for (e.g. register for an event) without naming the exact target "
+            "resource, so no action_agent task was planned for them and the student must select one first. "
+            "Leave empty when the student named the target, asked only for information or recommendations, "
+            "or asked for something no tool supports."
+        ),
+    )
 
 
 def _task_id(mission_id: str, index: int) -> str:
@@ -263,7 +273,10 @@ def _proposal_to_plan(mission_id: str, goal: str, proposal: _PlanProposal) -> Mi
         for t in proposal.tasks
     ]
     notes = [note.strip() for note in proposal.unsupported_requests if note and note.strip()]
-    return MissionPlan(mission_id=mission_id, goal=goal, tasks=tasks, unsupported_requests=notes)
+    return MissionPlan(
+        mission_id=mission_id, goal=goal, tasks=tasks, unsupported_requests=notes,
+        selection_required_actions=list(dict.fromkeys(proposal.selection_required_actions)),
+    )
 
 
 def _check_model_compatible(model: str) -> None:

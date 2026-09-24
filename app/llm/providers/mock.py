@@ -353,6 +353,7 @@ def _build_events_plan(
     with_career: bool,
     with_schedule: bool,
     unsupported_requests: Optional[List[str]] = None,
+    selection_required_actions: Optional[List[str]] = None,
 ) -> MissionPlan:
     """Events discovery, optionally fed by Career skill gaps and/or Academic
     timetable + exam facts (the only way the Events Agent can check clashes)."""
@@ -378,7 +379,10 @@ def _build_events_plan(
     if with_schedule:
         objective += _NO_CONFLICT_SUFFIX
     _add(AgentName.EVENTS_OPPORTUNITY_AGENT, objective, deps=upstream)
-    return MissionPlan(mission_id=mission_id, goal=goal, tasks=tasks, unsupported_requests=list(unsupported_requests or []))
+    return MissionPlan(
+        mission_id=mission_id, goal=goal, tasks=tasks, unsupported_requests=list(unsupported_requests or []),
+        selection_required_actions=list(selection_required_actions or []),
+    )
 
 
 def _build_single_agent_plan(mission_id: str, goal: str, agent: AgentName) -> MissionPlan:
@@ -406,7 +410,7 @@ def _route_by_domain(mission_id: str, goal: str, supported: set) -> Optional[Mis
             # _is_event_registration_goal): discover candidates, never pick one.
             return _build_events_plan(
                 mission_id, goal, with_career=False, with_schedule=schedule_ok,
-                unsupported_requests=[_UNNAMED_EVENT_NOTE],
+                unsupported_requests=[_UNNAMED_EVENT_NOTE], selection_required_actions=["register_event"],
             )
         with_career = career_ok and "skill" in q
         return _build_events_plan(mission_id, goal, with_career=with_career, with_schedule=with_schedule)

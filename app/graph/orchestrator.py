@@ -138,6 +138,29 @@ def unconfirmed_action_targets(plan: MissionPlan, goal: str) -> Dict[str, Target
     return unconfirmed
 
 
+def unselected_declared_actions(plan: MissionPlan, goal: str) -> List[str]:
+    """Tools the planner declared as awaiting the student's selection
+    (``selection_required_actions``) for which the plan holds no action task
+    with a confirmed target -- a named target always wins over the declaration."""
+    unconfirmed = unconfirmed_action_targets(plan, goal)
+    confirmed_tools = {
+        str(task.constraints.get("tool_name") or "")
+        for task in plan.tasks
+        if task.agent == AgentName.ACTION_AGENT and task.task_id not in unconfirmed
+    }
+    return [tool for tool in plan.selection_required_actions if tool not in confirmed_tools]
+
+
+def user_selection_required(plan: Optional[MissionPlan], goal: str) -> bool:
+    """True when an action the student asked for cannot proceed until they
+    select its target: an action task was refused by target provenance, or the
+    planner declared the action without a target. Structured state only --
+    never the final response's prose."""
+    if plan is None:
+        return False
+    return bool(unconfirmed_action_targets(plan, goal)) or bool(unselected_declared_actions(plan, goal))
+
+
 def _task_identity(task: MissionTask) -> tuple:
     return (task.agent, task.objective, tuple(task.dependencies), repr(sorted(task.constraints.items())))
 
@@ -520,6 +543,25 @@ class MissionOrchestrator:
                     "No proposal or approval was created; the student must select the target explicitly."
                 ),
                 metadata={"target_provenance": provenance.model_dump(mode="json"), "user_selection_required": True},
+            )
+        recorded = {
+            (e.event_metadata or {}).get("tool_name")
+            for e in context.list_audit_events(state["mission_id"])
+            if e.event_type == "action_target_unconfirmed" and (e.event_metadata or {}).get("source") == "planner"
+        }
+        for tool_name in unselected_declared_actions(plan, state["original_goal"]):
+            if tool_name in recorded:
+                continue
+            context.append_audit_event(
+                event_id=_event_id(),
+                mission_id=state["mission_id"],
+                event_type="action_target_unconfirmed",
+                actor="mission_orchestrator",
+                message=(
+                    f"Action {tool_name} was not planned: the student has not selected its target. "
+                    "No proposal or approval was created; the student must select the target explicitly."
+                ),
+                metadata={"tool_name": tool_name, "source": "planner", "user_selection_required": True},
             )
         return task_status
 

@@ -70,7 +70,7 @@ from typing import Any, Callable, Dict, List, Optional
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-from app.graph.orchestrator import unconfirmed_action_targets
+from app.graph.orchestrator import unconfirmed_action_targets, user_selection_required
 from app.graph.registry import AgentRegistry
 from app.graph.validator import validate_plan
 from app.llm.base import LLMProviderError
@@ -591,6 +591,7 @@ def _mission_record(session_factory, state, llm_calls: List[Dict[str, Any]], dis
         "tool_calls": tool_calls,
         "errors": state.get("errors", []),
         "final_result": state.get("final_result"),
+        "user_selection_required": user_selection_required(plan, state["original_goal"]),
     }
 
 
@@ -677,7 +678,7 @@ def evaluate_e2e(record: Dict[str, Any], expected: str, extra_check: Optional[st
     return {
         "outcome_label": label,
         "replans": sum(1 for e in record["audit"] if e["event_type"] == "replan_triggered"),
-        "user_selection_required": bool(selection_events),
+        "user_selection_required": bool(record.get("user_selection_required")) or bool(selection_events),
         "problems": problems,
         "pass": not problems,
     }

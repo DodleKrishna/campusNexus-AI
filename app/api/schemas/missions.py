@@ -70,6 +70,9 @@ class MissionResponse(BaseModel):
     stale_approvals: List[ApprovalSummaryView] = []
     final_result: Optional[str] = None
     execution_stop: Optional[ExecutionStopView] = None
+    # Post-12C (additive): an action the student asked for is waiting for them
+    # to select its target (derived from the latest plan, never from prose).
+    user_selection_required: bool = False
     created_at: datetime
     updated_at: datetime
 

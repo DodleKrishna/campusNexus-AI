@@ -7,7 +7,7 @@ schedule/replan without duplicating task state.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -55,6 +55,10 @@ class MissionPlan(BaseModel):
     # task. A plan with no tasks and a non-empty list is a clear "can't help
     # with this" -- the validator still rejects it, so nothing is dispatched.
     unsupported_requests: List[NonBlankStr] = Field(default_factory=list)
+    # Post-12C addition (additive): action tools the student asked for without
+    # selecting the target resource, so no action task was planned for them.
+    # Structured so ``user_selection_required`` never has to read prose.
+    selection_required_actions: List[Literal["register_event", "create_calendar_event"]] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     version: int = Field(default=1, ge=1)
 

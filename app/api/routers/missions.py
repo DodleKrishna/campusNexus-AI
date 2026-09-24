@@ -29,7 +29,7 @@ from app.db.repositories.missions import (
     list_approvals_for_step,
     list_pending_approvals,
 )
-from app.graph.orchestrator import DUPLICATE_FAILURE_MESSAGE, MissionOrchestrator
+from app.graph.orchestrator import DUPLICATE_FAILURE_MESSAGE, MissionOrchestrator, user_selection_required
 from app.schemas.enums import ApprovalStatus, UserRole
 from app.schemas.evidence import Evidence
 from app.services.context import ContextService
@@ -101,6 +101,7 @@ def _mission_response(session: Session, mission: Mission) -> MissionResponse:
         mission_id=mission.mission_id, goal=mission.original_goal, status=mission.status.value,
         plan=plan_view, agent_results=agent_results, pending_approvals=pending_views, stale_approvals=stale_views,
         final_result=mission.final_result, execution_stop=_execution_stop(context, mission.mission_id),
+        user_selection_required=user_selection_required(plan, mission.original_goal),
         created_at=mission.created_at, updated_at=mission.updated_at,
     )
 
