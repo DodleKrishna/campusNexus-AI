@@ -981,6 +981,105 @@ without a reseed.
 - Approval chains are ordered by `created_at` (microsecond UTC timestamps), the same ordering
   `get_latest_approval_for_step` already used.
 
+## Live Runtime Correctness (Phase 12B)
+
+The first real Groq E2E run (`openai/gpt-oss-120b`) found four defects that the mock planner never
+triggered, because the mock writes short, stopword-only objectives and always quotes action targets.
+
+### Intent definitions travel in the tool schema
+
+`AcademicIntentResult.intent` and `CareerIntentResult.intent` carry field descriptions
+(`ACADEMIC_INTENT_DEFINITIONS`, `CAREER_INTENT_DEFINITIONS`). Both real providers build their structured-output
+tool from `model_json_schema()`, so the definitions reach the model where it picks the label.
+
+- `attendance_status` is the current figure only. A question asking how many more classes are needed, or
+  how to reach or recover the threshold, is `attendance_recovery`.
+- Identifying skill gaps or missing skills is `opportunity_discovery`, because gaps are computed against
+  open opportunities. The live planner wrote "Identify my missing technical skills…", the model returned
+  `unknown`, and the `CareerVerifier` correctly failed it. The verifier is unchanged.
+
+### Events: relevance must be traceable to a term or a skill gap
+
+- Generic request words ("campus", "student", "suitable", "missing", "technical"…) are relevance stopwords.
+  Before this change, "Blood Donation Camp" matched a live objective only because its organizer is the
+  *Student* Welfare Office.
+- `EventAssessment.matched_terms` and `matched_skill_gaps` (additive) record why each event was returned.
+- Upstream `skill_gaps` are parsed strictly. A missing key means plain discovery. A list, possibly empty,
+  turns on skill-gap matching, where an empty criterion set matches nothing instead of everything. Any
+  other shape is malformed.
+- The Career Agent publishes `skill_gaps` (possibly `[]`) whenever it evaluated opportunities, so the Events
+  Agent can tell "no gaps" apart from "no Career input".
+- New `EventsVerifier` checks. All of them add strictness, and no existing check changed severity:
+  - `skill_gaps_well_formed` FAILS when the upstream gaps are malformed.
+  - `relevance_traceable` FAILS when an event is returned under an active filter without a matching term.
+  - `skill_gap_matches_consistent` FAILS when an event claims a gap that was not in the upstream list.
+- An empty result is still NEEDS_REVIEW, as before, but its issue is grounded ("No upcoming event matches
+  the skill gaps: …"). It is never FAILED and nothing is fabricated.
+
+### Action targets must be named by the student
+
+`app/rules/action_preconditions.py::resolve_target_provenance` is a pure rule. An action's target resource
+(`register_event.event_title`, or `create_calendar_event.source_event_title` when present) must appear in
+the student's goal as a whole-word phrase, ignoring case and punctuation. The result is a
+`TargetProvenance` whose `source` is one of four values:
+
+- `user_goal`: the target appears in the goal.
+- `caller_supplied`: no goal was passed. This is the explicit edit path (`ActionAgent.propose_edit`).
+- `not_required`: the tool has no external target. `create_campus_case` is routed by category.
+- `unconfirmed`: none of the above.
+
+A planner's pick, the top search result and an event id are never `user_goal`.
+
+The rule is enforced in two layers:
+
+1. **Orchestrator gate** (`_validate_plan` → `_skip_unconfirmed_action_targets`). An unconfirmed action
+   task is marked SKIPPED before anything is dispatched, and an `action_target_unconfirmed` audit event is
+   written with `user_selection_required: true`. Its read-only upstream tasks still run, so candidates are
+   found and conflict-checked. The mission ends COMPLETED. This reuses the existing "discovery plus a note"
+   outcome rather than adding a new status. No proposal, tool call or approval is ever created.
+2. **Action Agent** (`_propose`). It re-derives provenance from `facts["mission_goal"]`, which the dispatcher
+   sets from the Orchestrator and re-applies after merging upstream facts, so no agent can override it. The
+   agent refuses an unconfirmed target with a FAILED pre-check. Every proposal records `target_provenance`
+   in its facts and its `supporting_facts`. The approval fingerprint is unchanged.
+
+### Replans and final synthesis
+
+- Task ids are positional, so a replan can put a different task under an existing id. In the live run a
+  "timetable" task inherited an events search's COMPLETED result. `redefined_task_ids` now compares
+  agent, objective, dependencies and constraints. A redefined task, and everything downstream of it, is
+  reset to PENDING, loses its stale result, has its step row updated, and gets a `task_redefined` audit
+  event. A pending or failed task that is missing from the new plan becomes SKIPPED (`task_superseded`).
+  Identical completed tasks are still kept.
+- `_summarize` includes only tasks that ran under the current plan (COMPLETED/BLOCKED/FAILED). When a
+  selection is required, or the plan has unsupported notes and no confirmed registration, Events answers
+  are labelled **Candidate events (recommendations only -- none has been selected for you, registered, or
+  sent for approval)** and a **User selection required** note is appended. The note is rebuilt
+  deterministically from the plan and goal, so it survives resume.
+
+### Live evaluation (`scripts/check_live_llm.py`)
+
+- Plan checks fail an unconfirmed action target. They also require the unnamed-registration goal to explain
+  the missing selection, and the named one to carry a register_event task with the Phase 10 dependencies.
+- Each E2E scenario is judged against its correct outcome: COMPLETED, SAFE REFUSAL, SAFE CLARIFICATION /
+  USER SELECTION REQUIRED, or AWAITING APPROVAL. A refusal or a clarification is a pass. On every scenario
+  it is a failure if any tool call executed, or if an approval exists for anything but a named target.
+  Structured checks and E2E outcomes are counted separately.
+- Every run records a full trace: plan, dependencies, each AgentMessage as received, AgentResults,
+  evidence, verification checks, audit trail, approvals and tool calls. It also records latency per LLM
+  call by component (Planner/Academic/Career/Events/Services) and per agent task, including the LLM-free
+  Action Agent. `--affected` re-runs only the three scenarios above. `--pause` spaces missions out under a
+  per-minute token limit.
+
+### Known limitations
+
+- An empty events result still pauses a mission as NEEDS_REVIEW (task BLOCKED, mission NEEDS_APPROVAL),
+  as it did before. That is the pre-existing read-only semantics, deliberately left unchanged here.
+- The provenance rule is a literal whole-phrase match. "Register me for the coding contest" does not
+  confirm "Competitive Coding Contest", so it becomes a user-selection outcome, which is the safe
+  direction. There is no UI selection flow yet: the student names the event in a new request.
+- Relevance matching is still keyword overlap. Stopwords remove planner filler but cannot anticipate every
+  phrasing.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

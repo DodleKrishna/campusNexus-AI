@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import utc_now
 from app.graph.checkpoint import build_checkpointer
-from app.graph.dispatcher import build_task_input_facts, dispatch_ready_tasks
+from app.graph.dispatcher import MISSION_GOAL_KEY, build_task_input_facts, dispatch_ready_tasks
 from app.graph.failures import all_failures_repeated, failure_fingerprint
 from app.graph.planner import generate_plan
 from app.graph.registry import AgentRegistry
@@ -40,8 +40,18 @@ from app.graph.scheduler import compute_ready_and_blocked, has_blocked_tasks, ha
 from app.graph.state import OrchestratorState
 from app.graph.validator import validate_plan
 from app.llm.base import LLMProvider
+from app.rules.action_preconditions import resolve_target_provenance
+from app.schemas.action import TargetProvenance
 from app.schemas.agent import AgentResult
-from app.schemas.enums import AgentResultStatus, MissionStatus, TaskStatus, UserRole, VerificationPhase, VerificationStatus
+from app.schemas.enums import (
+    AgentName,
+    AgentResultStatus,
+    MissionStatus,
+    TaskStatus,
+    UserRole,
+    VerificationPhase,
+    VerificationStatus,
+)
 from app.schemas.evidence import Evidence
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.verification import VerificationResult
@@ -80,6 +90,65 @@ def _task_by_id(plan: MissionPlan, task_id: str) -> MissionTask:
 
 
 DUPLICATE_FAILURE_MESSAGE = "Execution stopped because the same verified failure occurred again without new information."
+
+# Phase 12B: statuses whose stored response belongs to the current plan. A
+# PENDING/SKIPPED task has not run under it, so any response on record for
+# its id is from an earlier plan (or never existed) and is never shown.
+_SUMMARIZED_STATUSES = {TaskStatus.COMPLETED, TaskStatus.BLOCKED, TaskStatus.FAILED}
+_CANDIDATE_LABEL = (
+    "Candidate events (recommendations only -- none has been selected for you, registered, "
+    "or sent for approval):"
+)
+_SELECTION_GUIDANCE = (
+    "Choose one of the candidate events and ask to register for it by its exact title; it will then be "
+    "checked against your timetable and exams and sent for your approval."
+)
+
+
+def unconfirmed_action_targets(plan: MissionPlan, goal: str) -> Dict[str, TargetProvenance]:
+    """Action tasks whose target the student never named, keyed by task id.
+
+    Deterministic: the target must appear in the student's own goal. These
+    tasks are never dispatched -- no proposal, no approval -- because an
+    agent's recommendation is not the student's selection.
+    """
+    unconfirmed: Dict[str, TargetProvenance] = {}
+    for task in plan.tasks:
+        if task.agent != AgentName.ACTION_AGENT:
+            continue
+        tool_name = str(task.constraints.get("tool_name") or "").strip()
+        provenance = resolve_target_provenance(tool_name, task.constraints, goal)
+        if not provenance.confirmed:
+            unconfirmed[task.task_id] = provenance
+    return unconfirmed
+
+
+def _task_identity(task: MissionTask) -> tuple:
+    return (task.agent, task.objective, tuple(task.dependencies), repr(sorted(task.constraints.items())))
+
+
+def redefined_task_ids(old_plan: MissionPlan, new_plan: MissionPlan) -> List[str]:
+    """Ids a replan reused for a *different* task, plus everything downstream of them.
+
+    Task ids are positional (``<mission>-task-<n>``), so a replan can put a
+    new agent/objective/target under an id that already has a result. That
+    result describes the old task and must not be carried over -- nor may
+    any task built on it.
+    """
+    old_by_id = {task.task_id: task for task in old_plan.tasks}
+    changed = {
+        task.task_id
+        for task in new_plan.tasks
+        if task.task_id in old_by_id and _task_identity(task) != _task_identity(old_by_id[task.task_id])
+    }
+    grew = True
+    while grew:
+        grew = False
+        for task in new_plan.tasks:
+            if task.task_id not in changed and any(dep in changed for dep in task.dependencies):
+                changed.add(task.task_id)
+                grew = True
+    return [task.task_id for task in new_plan.tasks if task.task_id in changed]
 
 
 def _rebuild_failure_fingerprints(context: ContextService, mission_id: str) -> List[str]:
@@ -401,10 +470,37 @@ class MissionOrchestrator:
                 message=f"Validated plan with {len(plan.tasks)} task(s).",
                 metadata={"plan": plan.model_dump(mode="json")},
             )
+            task_status = self._skip_unconfirmed_action_targets(context, state, plan)
             context.update_mission_status(state["mission_id"], MissionStatus.IN_PROGRESS)
         finally:
             session.close()
-        return {"validation_errors": [], "mission_status": MissionStatus.IN_PROGRESS}
+        return {"validation_errors": [], "mission_status": MissionStatus.IN_PROGRESS, "task_status": task_status}
+
+    @staticmethod
+    def _skip_unconfirmed_action_targets(context: ContextService, state: OrchestratorState, plan: MissionPlan) -> Dict[str, TaskStatus]:
+        """Mark every action task whose target the student never named SKIPPED
+        before anything is dispatched, so it can never produce a proposal or an
+        approval. Its read-only upstream tasks still run, so candidates are
+        still shown -- as candidates, for the student to choose from."""
+        task_status = dict(state.get("task_status", {}))
+        for task_id, provenance in unconfirmed_action_targets(plan, state["original_goal"]).items():
+            if task_status.get(task_id) in (TaskStatus.COMPLETED, TaskStatus.SKIPPED):
+                continue
+            task_status[task_id] = TaskStatus.SKIPPED
+            context.update_mission_step(task_id, status=TaskStatus.SKIPPED, completed_at=utc_now())
+            context.append_audit_event(
+                event_id=_event_id(),
+                mission_id=state["mission_id"],
+                step_id=task_id,
+                event_type="action_target_unconfirmed",
+                actor="mission_orchestrator",
+                message=(
+                    f"Action {provenance.tool_name} was not prepared: {provenance.reason} "
+                    "No proposal or approval was created; the student must select the target explicitly."
+                ),
+                metadata={"target_provenance": provenance.model_dump(mode="json"), "user_selection_required": True},
+            )
+        return task_status
 
     def _schedule_ready_tasks(self, state: OrchestratorState) -> dict:
         plan = state["plan"]
@@ -417,7 +513,7 @@ class MissionOrchestrator:
         assert plan is not None
         ready = state.get("ready_task_ids", [])
 
-        base_facts: dict = {"student_id": state["student_id"]}
+        base_facts: dict = {"student_id": state["student_id"], MISSION_GOAL_KEY: state["original_goal"]}
         if state.get("as_of"):
             base_facts["as_of"] = state["as_of"]
 
@@ -681,12 +777,71 @@ class MissionOrchestrator:
             if status == TaskStatus.FAILED:
                 task_status[task_id] = TaskStatus.PENDING
 
+        agent_results = dict(state.get("agent_results", {}))
+        verifications = dict(state.get("verifications", {}))
+        responses = dict(state.get("responses", {}))
+        old_plan = state["plan"]
+        redefined = redefined_task_ids(old_plan, new_plan) if old_plan is not None else []
+        new_ids = {task.task_id for task in new_plan.tasks}
+        superseded = [
+            task.task_id
+            for task in (old_plan.tasks if old_plan is not None else [])
+            if task.task_id not in new_ids and task_status.get(task.task_id) not in (TaskStatus.COMPLETED, TaskStatus.SKIPPED)
+        ]
+        for task_id in redefined:
+            task_status[task_id] = TaskStatus.PENDING
+            for results in (agent_results, verifications, responses):
+                results.pop(task_id, None)
+        for task_id in superseded:
+            task_status[task_id] = TaskStatus.SKIPPED
+        self._persist_replan_task_changes(state["mission_id"], new_plan, redefined, superseded)
+
         return {
             "plan": new_plan,
             "task_status": task_status,
+            "agent_results": agent_results,
+            "verifications": verifications,
+            "responses": responses,
             "replan_count": state["replan_count"] + 1,
             "round_failures": {},
         }
+
+    def _persist_replan_task_changes(
+        self, mission_id: str, new_plan: MissionPlan, redefined: List[str], superseded: List[str]
+    ) -> None:
+        if not redefined and not superseded:
+            return
+        tasks_by_id = {task.task_id: task for task in new_plan.tasks}
+        session = self._session_factory()
+        try:
+            context = ContextService(session)
+            existing = {step.step_id for step in context.get_mission(mission_id).steps}
+            for task_id in redefined:
+                if task_id not in existing:
+                    continue  # created fresh by validate_plan
+                task = tasks_by_id[task_id]
+                context.update_mission_step(task_id, status=TaskStatus.PENDING, agent=task.agent, objective=task.objective)
+                context.append_audit_event(
+                    event_id=_event_id(),
+                    mission_id=mission_id,
+                    step_id=task_id,
+                    event_type="task_redefined",
+                    actor="mission_orchestrator",
+                    message=f"Replan assigned {task_id} to a different task; its earlier result is not reused.",
+                    metadata={"agent": task.agent.value, "objective": task.objective},
+                )
+            for task_id in superseded:
+                context.update_mission_step(task_id, status=TaskStatus.SKIPPED, completed_at=utc_now())
+                context.append_audit_event(
+                    event_id=_event_id(),
+                    mission_id=mission_id,
+                    step_id=task_id,
+                    event_type="task_superseded",
+                    actor="mission_orchestrator",
+                    message=f"Task {task_id} is not part of the new plan and will not run.",
+                )
+        finally:
+            session.close()
 
     def _finalize(self, state: OrchestratorState) -> dict:
         final_text = self._summarize(state)
@@ -709,21 +864,43 @@ class MissionOrchestrator:
     def _summarize(state: OrchestratorState) -> str:
         plan = state.get("plan")
         responses = state.get("responses", {})
+        task_status = state.get("task_status", {})
         unsupported = list(plan.unsupported_requests) if plan is not None else []
+        # Phase 12B: an action whose target the student never named was not
+        # prepared. Say so, and present any events found as candidates -- an
+        # agent's recommendation is never the student's selection.
+        unconfirmed = unconfirmed_action_targets(plan, state["original_goal"]) if plan is not None else {}
+        confirmed_registration = plan is not None and any(
+            task.agent == AgentName.ACTION_AGENT
+            and task.constraints.get("tool_name") == "register_event"
+            and task.task_id not in unconfirmed
+            for task in plan.tasks
+        )
+        label_candidates = bool(unconfirmed or unsupported) and not confirmed_registration
         # Iterate the plan's declared task order (not a lexical sort of task
         # ids) so a synthesized multi-agent result reads in the mission's
         # actual sequence -- matters once task ids exceed one digit, and is
         # the more correct ordering either way.
-        ordered_task_ids = [task.task_id for task in plan.tasks] if plan is not None else sorted(responses)
+        tasks = list(plan.tasks) if plan is not None else []
+        ordered_task_ids = [task.task_id for task in tasks] if plan is not None else sorted(responses)
+        agents = {task.task_id: task.agent for task in tasks}
         # Skip a task's answer when an earlier task's answer already contains
         # it verbatim (e.g. an eligibility answer that already states the
         # recovery path), so the synthesis doesn't repeat itself.
         parts: List[str] = []
         for task_id in ordered_task_ids:
+            if plan is not None and task_status.get(task_id) not in _SUMMARIZED_STATUSES:
+                continue
             answer = (responses.get(task_id) or "").strip()
             if answer and not any(answer in earlier for earlier in parts):
+                if label_candidates and agents.get(task_id) == AgentName.EVENTS_OPPORTUNITY_AGENT:
+                    answer = f"{_CANDIDATE_LABEL}\n{answer}"
                 parts.append(answer)
         gathered = " ".join(parts)
+        selection_notes = [
+            f"User selection required: {provenance.tool_name} was not prepared -- {provenance.reason} {_SELECTION_GUIDANCE}"
+            for provenance in unconfirmed.values()
+        ]
 
         if state.get("planning_error"):
             text = f"Mission failed: the planner could not produce a usable plan ({state['planning_error']})."
@@ -736,6 +913,8 @@ class MissionOrchestrator:
         text = gathered or f"Mission ended with status {state['mission_status'].value}."
         if state.get("duplicate_failure_stop"):
             text = f"{DUPLICATE_FAILURE_MESSAGE} {gathered}".strip()
+        if selection_notes:
+            text += " " + " ".join(selection_notes)
         if unsupported:
             text += " Not handled by this mission: " + " ".join(unsupported)
         return text

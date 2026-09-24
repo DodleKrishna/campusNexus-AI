@@ -68,9 +68,10 @@ from app.rules.action_preconditions import (
     check_calendar_creation,
     check_case_creation,
     check_event_registration,
+    resolve_target_provenance,
 )
 from app.rules.event_availability import find_exam_conflicts, find_timetable_conflicts
-from app.schemas.action import ActionProposal
+from app.schemas.action import ActionProposal, TargetProvenance
 from app.schemas.agent import AgentMessage, AgentResult
 from app.schemas.enums import (
     AgentName,
@@ -183,6 +184,14 @@ def _upstream_schedule_check(facts: Dict[str, object], event: EventSummary) -> _
     return _UpstreamScheduleCheck()
 
 
+def _target_provenance(message: AgentMessage) -> TargetProvenance:
+    """``mission_goal`` is supplied by the Orchestrator's dispatcher; without
+    it the constraints came straight from the caller (an explicit edit)."""
+    goal = message.facts.get("mission_goal")
+    tool_name = str(message.constraints.get("tool_name") or "").strip()
+    return resolve_target_provenance(tool_name, message.constraints, str(goal) if goal is not None else None)
+
+
 @dataclass
 class ActionAgentOutcome:
     """Local convenience bundle -- structurally satisfies app.graph.results.AgentOutcome."""
@@ -282,6 +291,20 @@ class ActionAgent:
         tool_name = str(message.constraints.get("tool_name") or "").strip()
         student_id = str(message.facts.get("student_id") or "").strip()
         now = _resolve_now(message.facts.get("as_of"))
+
+        # Phase 12B: the Orchestrator already skips an action whose target the
+        # student never named; this is the independent second layer. No
+        # proposal -- and so no approval -- for an unconfirmed target.
+        provenance = _target_provenance(message)
+        if not provenance.confirmed:
+            verification = _new_verification(
+                message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
+                [f"Target not explicitly selected by the student: {provenance.reason}"],
+            )
+            return self._failed_outcome(
+                message, verification,
+                facts={"tool_name": tool_name, "target_provenance": provenance.model_dump(mode="json")},
+            )
 
         if tool_name == "register_event":
             return self._propose_register_event(message, student_id, now)
@@ -531,6 +554,8 @@ class ActionAgent:
             input_model=self._input_model(tool_name),
         )
         target_resource = approved_payload["target_resource"]
+        provenance = _target_provenance(message).model_dump(mode="json")
+        supporting_facts = {**supporting_facts, "target_provenance": provenance}
         proposal_id = f"prop-{uuid.uuid4().hex[:12]}"
         tool_call_id = f"tc-{uuid.uuid4().hex[:12]}"
         # Versioned so ActionAgent.propose_edit's fresh proposal never collides
@@ -590,6 +615,9 @@ class ActionAgent:
             # Phase 11: set when this proposal replaces an approval that went
             # STALE -- the old one stays stale; this one needs its own decision.
             "replaces_approval_id": replaces_approval_id,
+            # Phase 12B: where the target came from (the student's own goal, or
+            # the caller of an explicit edit) -- never an agent recommendation.
+            "target_provenance": provenance,
         }
         agent_result = AgentResult(
             mission_id=mission_id, task_id=task_id, agent=AgentName.ACTION_AGENT, status=AgentResultStatus.PARTIAL,

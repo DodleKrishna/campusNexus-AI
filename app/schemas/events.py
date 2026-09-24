@@ -107,6 +107,12 @@ class EventAssessment(BaseModel):
     timetable_conflicts: List[TimetableConflict] = Field(default_factory=list)
     exam_conflicts: List[ExamConflict] = Field(default_factory=list)
     conflict_check_performed: bool = False
+    # Phase 12B (additive): why this event was returned. ``matched_terms`` are
+    # the shared keywords (empty only when no relevance filter applied);
+    # ``matched_skill_gaps`` are the upstream Career skill gaps it matched --
+    # an event may only be described as addressing a gap listed here.
+    matched_terms: List[str] = Field(default_factory=list)
+    matched_skill_gaps: List[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -120,5 +126,8 @@ class EventsResponseContext(BaseModel):
     verification_issues: List[str] = Field(default_factory=list)
     student_name: Optional[str] = None
     assessments: List[EventAssessment] = Field(default_factory=list)
+    # The upstream skill gaps events were matched against; None when no
+    # Career task fed this one (Phase 12B, additive).
+    skill_gaps: Optional[List[str]] = None
     evidence: List[Evidence] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)

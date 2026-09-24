@@ -50,6 +50,8 @@ _EVENT_TYPE_TO_STATUS = {
     "approval_edit_requested": "WAITING_FOR_APPROVAL",
     # Phase 11: not a rejection -- the approval expired because conditions changed.
     "approval_invalidated": "NEEDS_REVIEW",
+    # Phase 12B: not a failure -- the student has to pick the target themselves.
+    "action_target_unconfirmed": "NEEDS_REVIEW",
 }
 
 

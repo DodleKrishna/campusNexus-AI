@@ -8,10 +8,13 @@ bool, so a failure is always traceable to a specific named rule.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from datetime import datetime
-from typing import List, Optional
+from typing import Any, List, Mapping, Optional
 
 from app.rules.event_availability import compute_availability
+from app.schemas.action import TargetProvenance, TargetSource
 from app.schemas.events import EventAvailabilityStatus, EventSummary, ExamConflict, TimetableConflict
 from app.schemas.verification import VerificationCheck
 
@@ -30,6 +33,73 @@ CATEGORY_DEPARTMENTS = {
     "administrative": "Administrative Office",
 }
 VALID_CASE_PRIORITIES = {"low", "normal", "high", "urgent"}
+
+# The constraint naming each tool's target resource. A tool absent here has
+# no external target to select (a complaint is routed by category); a
+# calendar entry only has one when it is anchored to a campus event.
+ACTION_TARGET_FIELDS = {"register_event": "event_title", "create_calendar_event": "source_event_title"}
+
+_NON_ALNUM_RE = re.compile(r"[^0-9a-z]+")
+
+
+def _normalize_for_match(text: str) -> str:
+    folded = unicodedata.normalize("NFKC", text).casefold()
+    return _NON_ALNUM_RE.sub(" ", folded).strip()
+
+
+def target_named_in_goal(target: str, goal: str) -> bool:
+    """True when ``target`` appears in ``goal`` as a whole-word phrase,
+    ignoring case, quotes and punctuation. The student has to have said it."""
+    normalized_target = _normalize_for_match(target)
+    return bool(normalized_target) and f" {normalized_target} " in f" {_normalize_for_match(goal)} "
+
+
+def resolve_target_provenance(
+    tool_name: str, constraints: Mapping[str, Any], goal: Optional[str]
+) -> TargetProvenance:
+    """Decide whether an action's target was explicitly selected by the student.
+
+    ``goal`` is the student's own request. ``None`` means no goal was
+    supplied because the caller passed the constraints directly (an explicit
+    human edit of an action) -- the caller is then the source. A planner's
+    choice, an agent's recommendation or the top search result is never
+    enough: the target must appear in what the student wrote.
+    """
+    field = ACTION_TARGET_FIELDS.get(tool_name)
+    if field is None:
+        return TargetProvenance(tool_name=tool_name, source=TargetSource.NOT_REQUIRED)
+
+    raw_value = constraints.get(field)
+    value = str(raw_value).strip() if raw_value is not None else ""
+    has_event_id = constraints.get("event_id") is not None
+    if tool_name == "create_calendar_event" and not value:
+        return TargetProvenance(tool_name=tool_name, target_field=field, source=TargetSource.NOT_REQUIRED)
+
+    if goal is None:
+        if value or has_event_id:
+            return TargetProvenance(
+                tool_name=tool_name, target_field=field, target_value=value or None, source=TargetSource.CALLER_SUPPLIED
+            )
+        return TargetProvenance(
+            tool_name=tool_name, target_field=field, source=TargetSource.UNCONFIRMED, reason="no target was specified."
+        )
+
+    if not value:
+        return TargetProvenance(
+            tool_name=tool_name,
+            target_field=field,
+            source=TargetSource.UNCONFIRMED,
+            reason="no specific event was named in the request.",
+        )
+    if not target_named_in_goal(value, goal):
+        return TargetProvenance(
+            tool_name=tool_name,
+            target_field=field,
+            target_value=value,
+            source=TargetSource.UNCONFIRMED,
+            reason=f"'{value}' was not named in the request.",
+        )
+    return TargetProvenance(tool_name=tool_name, target_field=field, target_value=value, source=TargetSource.USER_GOAL)
 
 
 def check_event_registration(

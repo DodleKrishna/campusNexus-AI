@@ -238,16 +238,23 @@ schedule data. The conflict check is done by T4's pre-check, using T2 and T3's v
 
 ```powershell
 python scripts/check_live_llm.py            # structured intents + plans for every demo goal
-python scripts/check_live_llm.py --e2e --out data/demo/live_report.json   # + full missions
+python scripts/check_live_llm.py --e2e --pause 20 --out data/demo/live_report.json   # + full missions
+python scripts/check_live_llm.py --affected --out data/demo/live_affected_report.json  # the 3 Phase 12B scenarios
 ```
 
 Without a key it prints `UNAVAILABLE` and exits 2. It never falls back to mock. With a key, it checks
-three things:
+four things:
 
 - Every intent and plan validates against the Pydantic schemas.
 - Every plan passes the deterministic plan validator: only registered agents, known dependencies,
-  no cycles, and action tasks carrying an allowlisted tool.
+  no cycles, and action tasks carrying an allowlisted tool. It also checks that no action task targets
+  something the student did not name.
 - The off-topic goal is declined.
+- With `--e2e`, each mission reaches its *correct* outcome, and a safe outcome counts as a pass. "Book me a
+  flight" must be a SAFE REFUSAL. "Find a suitable event … prepare my registration" must be a SAFE
+  CLARIFICATION / USER SELECTION REQUIRED, with no proposal and no approval. A named event must be AWAITING
+  APPROVAL. The report includes full traces and per-component latency. On a low per-minute token limit (the
+  Groq free tier), use `--pause` so rate-limit errors do not fail tasks.
 
 Supported models: `claude-sonnet-5` (default), `claude-opus-5`, `claude-haiku-4-5`. Models that reject
 forced tool calls or disabled thinking are refused at startup with a clear message.

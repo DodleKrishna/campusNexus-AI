@@ -16,6 +16,9 @@ DEFAULT_PROVIDER = "mock"
 
 _PROVIDER_ALIASES = {"mock", "deterministic", "test"}
 
+# Providers that call a real model over the network.
+LIVE_PROVIDERS = {"anthropic", "groq"}
+
 
 def get_llm_provider(provider: Optional[str] = None, **kwargs: object) -> LLMProvider:
     """Build an LLMProvider by name (falls back to CAMPUSNEXUS_LLM_PROVIDER, then "mock").
@@ -35,4 +38,9 @@ def get_llm_provider(provider: Optional[str] = None, **kwargs: object) -> LLMPro
 
         return AnthropicLLMProvider(**kwargs)  # type: ignore[arg-type]
 
-    raise ValueError(f"unknown LLM provider {provider!r}; expected one of {sorted(_PROVIDER_ALIASES | {'anthropic'})}")
+    if key == "groq":
+        from app.llm.providers.groq import GroqLLMProvider
+
+        return GroqLLMProvider(**kwargs)  # type: ignore[arg-type]
+
+    raise ValueError(f"unknown LLM provider {provider!r}; expected one of {sorted(_PROVIDER_ALIASES | LIVE_PROVIDERS)}")

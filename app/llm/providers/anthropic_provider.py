@@ -73,13 +73,17 @@ _SYSTEM_INTENT_PROMPT = (
     "campus assistant. You do not answer the question yourself and you do not perform any "
     "calculation -- you only classify intent and, if the query names a course, extract the "
     "exact substring of the query that refers to it. Never invent a course reference that "
-    "does not literally appear in the query."
+    "does not literally appear in the query. Distinguish attendance_status (the current figure "
+    "only) from attendance_recovery (how many more classes are needed, or how to reach/recover "
+    "the required attendance) using the intent definitions in the tool schema."
 )
 
 _SYSTEM_CAREER_INTENT_PROMPT = (
     "You classify a student's career/internship support request into a structured intent for "
     "a campus assistant. You do not answer the question yourself, compute eligibility, or "
-    "invent an opportunity -- you only classify intent."
+    "invent an opportunity -- you only classify intent. Identifying the student's missing or "
+    "lacking skills (skill gaps) is opportunity_discovery: skill gaps are derived from the open "
+    "opportunities the student is evaluated against."
 )
 
 _SYSTEM_EVENTS_INTENT_PROMPT = (
@@ -151,7 +155,11 @@ _SYSTEM_PLAN_PROMPT = (
     "4. Never invent a value the student did not state. In particular, never pick an event to register for, "
     "a complaint category/description, or a calendar title on the student's behalf. If the student wants an "
     "action but has not given what it needs, plan only the read-only discovery tasks and explain what is "
-    "missing in `unsupported_requests`.\n"
+    "missing in `unsupported_requests`. For example, a student who wants to register but has not named an exact "
+    "event gets NO action_agent task: plan an Academic timetable task, an Academic exam-schedule task, and an "
+    "events task that depends on both (so the candidates are checked for clashes), and state in "
+    "`unsupported_requests` that the student must choose one event by its exact title. An action_agent task whose "
+    "target the student did not name word-for-word is refused before it runs.\n"
     "5. If part of the goal is outside every supported agent's capabilities, do not create a task for it; add a "
     "short plain-language explanation to `unsupported_requests`. If nothing in the goal is supported, return "
     "zero tasks.\n"
@@ -174,7 +182,10 @@ _SYSTEM_RESPONSE_PROMPT = _response_prompt("academic")
 _SYSTEM_CAREER_RESPONSE_PROMPT = _response_prompt("career/internship")
 _SYSTEM_EVENTS_RESPONSE_PROMPT = _response_prompt("campus events/opportunity") + (
     " Only say an event has no schedule conflict when its conflict_check_performed is true; when it is "
-    "false, say that schedule conflicts were not checked for that event."
+    "false, say that schedule conflicts were not checked for that event. When skill_gaps is present, only "
+    "say an event addresses a skill gap listed in that event's matched_skill_gaps; if no event matches, say "
+    "plainly that no matching event was found for those skill gaps. These are candidate events: never say "
+    "the student has chosen, selected or been registered for one unless already_registered is true."
 )
 _SYSTEM_SERVICES_RESPONSE_PROMPT = _response_prompt("campus services/grievance")
 

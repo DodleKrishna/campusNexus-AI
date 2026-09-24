@@ -149,7 +149,10 @@ class CareerAgent:
         facts: dict = {"intent": intent.value}
         if eligibilities:
             facts["eligibilities"] = [e.model_dump(mode="json") for e in eligibilities]
-        if skill_gaps:
+        if eligibilities:
+            # Published even when empty once opportunities were evaluated, so a
+            # dependent Events task can tell "no gaps found" apart from "no
+            # Career input" and never falls back to recommending everything.
             facts["skill_gaps"] = skill_gaps
         if applications:
             facts["applications"] = [a.model_dump(mode="json") for a in applications]

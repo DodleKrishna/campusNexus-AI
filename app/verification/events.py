@@ -28,6 +28,13 @@ class EventsVerificationInput:
     expected_conflict_check: bool = False
     assessments: List[EventAssessment] = field(default_factory=list)
     evidence: List[Evidence] = field(default_factory=list)
+    # Phase 12B: whether a relevance filter was applied (every returned event
+    # must then carry the terms it matched), the upstream Career skill gaps it
+    # was matched against (None = no Career dependency), and whether those
+    # upstream gaps arrived in an unusable shape.
+    relevance_filter_active: bool = False
+    skill_gaps: Optional[List[str]] = None
+    skill_gaps_malformed: bool = False
 
 
 class EventsVerifier:
@@ -59,7 +66,18 @@ class EventsVerifier:
             failed = True
             issues.append("Unsupported events request.")
 
-        if data.student_exists and data.requires_events:
+        if data.skill_gaps_malformed:
+            checks.append(
+                VerificationCheck(
+                    name="skill_gaps_well_formed",
+                    passed=False,
+                    detail="Upstream skill gaps were not a list of skill names.",
+                )
+            )
+            failed = True
+            issues.append("Upstream skill gaps were malformed, so events could not be matched against them.")
+
+        if data.student_exists and data.requires_events and not data.skill_gaps_malformed:
             has_data = bool(data.assessments)
             checks.append(
                 VerificationCheck(
@@ -68,7 +86,38 @@ class EventsVerifier:
             )
             if not has_data:
                 needs_review = True
-                issues.append("No relevant upcoming events found.")
+                if data.skill_gaps is None:
+                    issues.append("No relevant upcoming events found.")
+                elif data.skill_gaps:
+                    issues.append(f"No upcoming event matches the skill gaps: {', '.join(data.skill_gaps)}.")
+                else:
+                    issues.append("No skill gaps were identified upstream, so no event could be matched to one.")
+
+            if data.relevance_filter_active:
+                untraceable = [a.event.title for a in data.assessments if not a.matched_terms]
+                checks.append(
+                    VerificationCheck(
+                        name="relevance_traceable",
+                        passed=not untraceable,
+                        detail=None if not untraceable else f"Returned without a matching term: {', '.join(untraceable)}.",
+                    )
+                )
+                if untraceable:
+                    failed = True
+                    issues.append("An event was presented as relevant without any matching term.")
+
+            if data.skill_gaps is not None:
+                unknown_gaps = sorted({g for a in data.assessments for g in a.matched_skill_gaps} - set(data.skill_gaps))
+                checks.append(
+                    VerificationCheck(
+                        name="skill_gap_matches_consistent",
+                        passed=not unknown_gaps,
+                        detail=None if not unknown_gaps else f"Matched gaps not in the upstream list: {', '.join(unknown_gaps)}.",
+                    )
+                )
+                if unknown_gaps:
+                    failed = True
+                    issues.append("An event claims to address a skill gap that was not identified upstream.")
 
             if data.expected_conflict_check:
                 conflict_checks_ran = all(a.conflict_check_performed for a in data.assessments)

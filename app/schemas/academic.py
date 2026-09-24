@@ -42,6 +42,19 @@ class AcademicIntent(str, Enum):
     UNKNOWN = "unknown"
 
 
+ACADEMIC_INTENT_DEFINITIONS = (
+    "attendance_status: the student's CURRENT attendance figure only -- 'What is my attendance?', "
+    "'How much attendance do I have in X?', 'Show my attendance percentage'. "
+    "attendance_recovery: what the student must DO to reach, restore or improve the required attendance -- "
+    "'How many (more) classes do I need to attend?', 'How can I reach 75%?', 'What must I attend to recover?', "
+    "'How do I get my attendance back above the minimum?'. Any question asking for a number of classes still "
+    "needed, or how to reach/recover the threshold, is attendance_recovery even if it also mentions attendance. "
+    "exam_eligibility: whether the student is allowed to write/sit an exam. "
+    "timetable: the weekly class schedule. exam_schedule: when exams take place. "
+    "policy_question: what an academic rule or procedure says. unknown: none of these."
+)
+
+
 class AcademicIntentResult(BaseModel):
     """Structured output of ``LLMProvider.classify_academic_intent``.
 
@@ -50,9 +63,13 @@ class AcademicIntentResult(BaseModel):
     ``app.agents.academic.course_resolution.resolve_course`` is what actually
     resolves it against the student's real enrolled courses; the LLM never
     gets to assert a course exists.
+
+    The ``intent`` description is part of the JSON schema both real providers
+    send as the structured-output tool, so the status/recovery distinction is
+    stated where the model makes the choice (Phase 12B).
     """
 
-    intent: AcademicIntent
+    intent: AcademicIntent = Field(description=ACADEMIC_INTENT_DEFINITIONS)
     raw_course_reference: Optional[str] = None
 
 

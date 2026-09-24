@@ -157,12 +157,20 @@ class ContextService:
         status: Optional[TaskStatus] = None,
         started_at: Optional[datetime] = None,
         completed_at: Optional[datetime] = None,
+        agent: Optional[AgentName] = None,
+        objective: Optional[str] = None,
     ) -> MissionStep:
+        """``agent``/``objective`` change only when a replan reuses this step's
+        id for a different task (Phase 12B)."""
         step = self._session.get(MissionStep, step_id)
         if step is None:
             raise ValueError(f"unknown step_id: {step_id!r}")
         if status is not None:
             step.status = status
+        if agent is not None:
+            step.agent = agent
+        if objective is not None:
+            step.objective = objective
         if started_at is not None:
             step.started_at = started_at
         if completed_at is not None:

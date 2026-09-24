@@ -54,6 +54,12 @@ class DispatchOutcome:
     error: Optional[str] = None
 
 
+# Set by the Orchestrator only (Phase 12B): the student's own words, which the
+# Action Agent checks an action's target against. Re-applied after merging
+# upstream facts so no agent's output can stand in for what the student said.
+MISSION_GOAL_KEY = "mission_goal"
+
+
 def build_task_input_facts(
     task: MissionTask,
     base_facts: Dict[str, JsonValue],
@@ -65,6 +71,8 @@ def build_task_input_facts(
         upstream = agent_results.get(dependency_id)
         if upstream is not None:
             facts.update(upstream.facts)
+    if MISSION_GOAL_KEY in base_facts:
+        facts[MISSION_GOAL_KEY] = base_facts[MISSION_GOAL_KEY]
     facts["query"] = task.objective
     return facts
 

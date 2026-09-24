@@ -101,6 +101,10 @@ def _extract_shared_subject(goal: str) -> Optional[str]:
 
 _RECOVERY_PHRASES = ("how many classes", "how many more classes", "need to attend", "classes do i need")
 _RECOVERY_WORDS = ("recover", "catch up", "make up my attendance", "improve my attendance")
+# Reaching/raising the threshold is recovery, not a status lookup
+# (app.schemas.academic.ACADEMIC_INTENT_DEFINITIONS) -- only when the query
+# is about attendance at all.
+_RECOVERY_TARGET_CUES = ("reach", "get to", "get back", "bring", "raise")
 
 
 def _classify(query: str) -> AcademicIntent:
@@ -108,7 +112,8 @@ def _classify(query: str) -> AcademicIntent:
     if "exam" in q and any(keyword in q for keyword in _EXAM_ELIGIBILITY_KEYWORDS):
         return AcademicIntent.EXAM_ELIGIBILITY
     recovery_phrase = any(phrase in q for phrase in _RECOVERY_PHRASES) and ("attend" in q or "need" in q)
-    if recovery_phrase or any(word in q for word in _RECOVERY_WORDS):
+    recovery_target = "attend" in q and any(cue in q for cue in _RECOVERY_TARGET_CUES)
+    if recovery_phrase or recovery_target or any(word in q for word in _RECOVERY_WORDS):
         return AcademicIntent.ATTENDANCE_RECOVERY
     if "timetable" in q or "class schedule" in q or "schedule of classes" in q:
         return AcademicIntent.TIMETABLE
@@ -427,6 +432,8 @@ def _classify_career(query: str) -> CareerIntent:
     if any(k in q for k in ("status of my application", "application status", "my application")):
         return CareerIntent.APPLICATION_STATUS
     if any(k in q for k in ("internship", "job", "opportunit", "eligib", "skill gap", "skill-gap")):
+        return CareerIntent.OPPORTUNITY_DISCOVERY
+    if "skill" in q and any(k in q for k in ("missing", "lack", "gap")):
         return CareerIntent.OPPORTUNITY_DISCOVERY
     if "polic" in q:
         return CareerIntent.POLICY_QUESTION
@@ -772,6 +779,8 @@ class MockLLMProvider(LLMProvider):
 
     def _render_event_assessments(self, context: EventsResponseContext) -> str:
         if not context.assessments:
+            if context.skill_gaps:
+                return f"No upcoming event matches your skill gaps ({', '.join(context.skill_gaps)})."
             return "I couldn't find any relevant upcoming events."
 
         # "No conflicts found" is only a claim when a check actually ran
@@ -789,6 +798,8 @@ class MockLLMProvider(LLMProvider):
                 note = f" (you're already registered -- {a.registration_status})"
             else:
                 note = f" ({a.availability.value})"
+            if a.matched_skill_gaps:
+                note += f" -- matches skill gap: {', '.join(a.matched_skill_gaps)}"
             return f"- {a.event.title} on {a.event.start_at.isoformat()} at {a.event.location}{note}"
 
         if conflict_free:

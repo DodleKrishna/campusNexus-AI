@@ -39,10 +39,24 @@ class CareerIntent(str, Enum):
     UNKNOWN = "unknown"
 
 
-class CareerIntentResult(BaseModel):
-    """Structured output of ``LLMProvider.classify_career_intent``."""
+CAREER_INTENT_DEFINITIONS = (
+    "opportunity_discovery: finding internships/jobs the student is eligible for, AND identifying the "
+    "student's skill gaps / missing skills / skills they lack (skill gaps are computed against the open "
+    "opportunities, so 'What skills am I missing?' or 'Identify my missing technical skills' is "
+    "opportunity_discovery). application_status: the status of the student's own applications. "
+    "policy_question: what a placement/internship rule or procedure says. unknown: none of these."
+)
 
-    intent: CareerIntent
+
+class CareerIntentResult(BaseModel):
+    """Structured output of ``LLMProvider.classify_career_intent``.
+
+    The ``intent`` description travels in the structured-output tool schema;
+    Phase 12B added it after a live model classified a skill-gap request as
+    ``unknown`` because no intent named skill gaps explicitly.
+    """
+
+    intent: CareerIntent = Field(description=CAREER_INTENT_DEFINITIONS)
 
 
 # ---------------------------------------------------------------------------

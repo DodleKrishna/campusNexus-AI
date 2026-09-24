@@ -134,6 +134,11 @@ across a component boundary. Free text is allowed only in the final user-facing 
   `MissionPlan.unsupported_requests`, and Action Agent tasks only ever carry allowlisted `constraints`
   (the provider's `_ActionSpec`), never values the student did not state.
 - Demo runs use the isolated `data/demo/` environment (`scripts/reset_demo_env.py`), never the dev DB.
+- Real providers: `anthropic` and `groq` (`app/llm/providers/groq.py`, Phase 12). Groq uses its
+  OpenAI-compatible API over `httpx` with a forced function call whose schema is the same Pydantic model, and
+  reuses the Anthropic provider's prompts/plan schema/`_proposal_to_plan` so both plan under identical rules.
+  Keys come only from `ANTHROPIC_API_KEY`/`GROQ_API_KEY`; the model from `CAMPUSNEXUS_LLM_MODEL` (empty = the
+  provider's default).
 
 ## Mission & Action Flow (Phase 10)
 
@@ -167,6 +172,28 @@ across a component boundary. Free text is allowed only in the final user-facing 
   successor skip that recheck, and never create a replacement approval while the action is still invalid.
 - New persisted columns must be nullable so `app/db/session.py::upgrade_schema` can add them to existing
   databases. It is additive only.
+
+## Action Targets & Live Runtime Correctness (Phase 12B)
+
+- An action's target resource must be explicitly selected by the student. `resolve_target_provenance`
+  (`app/rules/action_preconditions.py`) requires `register_event.event_title` (and a calendar entry's
+  `source_event_title`, when set) to appear in the student's goal. A planner's pick, the top search result,
+  or "best match" is never a selection. Only an explicit edit (`propose_edit`, no goal supplied) may pass
+  constraints directly.
+- Two layers enforce it: the Orchestrator marks an unconfirmed action task SKIPPED before dispatch, with an
+  `action_target_unconfirmed` audit event, and the Action Agent refuses it again from `facts["mission_goal"]`.
+  An unconfirmed target never produces a proposal, tool call or approval. The mission still returns the
+  conflict-checked candidates and ends COMPLETED with a "User selection required" note. Do not add a new
+  mission status for this.
+- `mission_goal` is set only by the Orchestrator. The dispatcher re-applies it after merging upstream facts.
+- A replan that reuses a task id for a different task (agent/objective/dependencies/constraints) must
+  re-run it and everything downstream of it (`redefined_task_ids`). A stale result is never carried over,
+  and the final synthesis only shows tasks that ran under the current plan.
+- Events are relevant only through a traceable term or skill gap (`matched_terms`/`matched_skill_gaps`).
+  Upstream `skill_gaps` that are malformed FAIL verification, and an empty gap list matches nothing. Never
+  relax a verifier so a live model passes. Fix the classification, the fact shape or the matching instead.
+- Intent definitions belong in the structured-output schema's field descriptions, which both real
+  providers send. Do not special-case evaluation sentences.
 
 ## Idempotency Requirement
 
@@ -281,9 +308,17 @@ python scripts/reset_demo_env.py
 # Readiness check in the API's shell (DB, policy store, LLM mode, running API);
 # exits non-zero if anything must be fixed. --live-call spends one real request.
 python scripts/demo_preflight.py
-# Validate the real Anthropic provider's structured intents/plans (--e2e for full
-# missions on a throwaway DB). Exits 2 (UNAVAILABLE) without ANTHROPIC_API_KEY.
+# Validate a real provider's structured intents/plans (--e2e for full
+# missions on a throwaway DB). Exits 2 (UNAVAILABLE) without the provider's API key.
 python scripts/check_live_llm.py
+# Phase 12: 5-request smoke check (2 intents + 3 plans; never executes an action). Picks
+# --provider, else CAMPUSNEXUS_LLM_PROVIDER if it is a real provider, else anthropic.
+python scripts/check_live_llm.py --provider groq --smoke --out data/demo/live_smoke_report.json
+# Phase 12B: re-run only the three scenarios the first live E2E run got wrong, with full traces
+# (plan, AgentMessages, results, evidence, verification, audit, approvals) and per-component latency.
+# E2E outcomes are judged against the *correct* result (a safe refusal/clarification is a pass).
+python scripts/check_live_llm.py --provider groq --affected --out data/demo/live_affected_report.json
+python scripts/check_live_llm.py --provider groq --e2e --pause 20 --out data/demo/live_report.json
 
 # Phase 10 demo on a throwaway DB: conflict-free registration, known conflict blocked
 # before approval, schedule change after approval (TOCTOU), duplicate-failure stop --

@@ -16,11 +16,40 @@ unvalidated raw dict.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
 from app.schemas.common import JsonValue, NonBlankStr, utc_now
+
+
+class TargetSource(str, Enum):
+    """Where an action's target resource came from (Phase 12B).
+
+    Only a target the student named -- in the mission goal, or directly by the
+    caller of an explicit edit -- may reach a proposal. An agent's
+    recommendation ("best match", "first result") is never a source.
+    """
+
+    USER_GOAL = "user_goal"
+    CALLER_SUPPLIED = "caller_supplied"
+    NOT_REQUIRED = "not_required"
+    UNCONFIRMED = "unconfirmed"
+
+
+class TargetProvenance(BaseModel):
+    """Deterministic verdict on whether an action's target was explicitly selected."""
+
+    tool_name: str
+    target_field: Optional[str] = None
+    target_value: Optional[str] = None
+    source: TargetSource
+    reason: Optional[str] = None
+
+    @property
+    def confirmed(self) -> bool:
+        return self.source != TargetSource.UNCONFIRMED
 
 
 class ActionProposal(BaseModel):

@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 from sqlalchemy.orm import Session
 
@@ -42,6 +42,19 @@ _RELEVANCE_STOPWORDS = {
     "find", "workshops", "workshop", "related", "and", "identify", "skill", "skills", "gaps", "gap",
     "that", "don", "conflict", "conflicts", "with", "your", "classes", "class", "exams", "exam",
     "events", "event", "for", "the", "are", "when", "what", "register", "registration", "status", "my",
+    # Phase 12B: generic request/filler vocabulary a live planner writes into
+    # objectives ("Find campus events that could be suitable for the student",
+    # "...that address the missing technical skills identified in task 1").
+    # None of it names a topic, so it must never make an event "relevant" --
+    # a live run surfaced "Blood Donation Camp" purely because its organizer
+    # is the *Student* Welfare Office.
+    "campus", "student", "students", "suitable", "useful", "relevant", "missing", "technical", "identified",
+    "address", "addresses", "based", "current", "currently", "interest", "interests", "match", "matches",
+    "matching", "open", "upcoming", "available", "could", "would", "should", "help", "helpful", "improve",
+    "check", "schedule", "timetable", "clash", "clashes", "task", "tasks", "any", "some", "which", "from",
+    "these", "those", "this", "them", "they", "not", "ensure", "ensuring", "fit", "fits", "profile", "provide",
+    "list", "show", "recommend", "suggest", "good", "best", "attend", "join", "prepare", "preparation",
+    "competitions", "seminars", "talks", "sessions", "activities", "programs", "programmes", "opportunities",
 }
 _WORD_RE = re.compile(r"[a-zA-Z0-9]{3,}")
 _ACRONYM_RE = re.compile(r"\b[A-Z]{2,6}\b")
@@ -51,6 +64,22 @@ def _tokenize_for_relevance(text: str) -> Set[str]:
     words = {w.lower() for w in _WORD_RE.findall(text) if w.lower() not in _RELEVANCE_STOPWORDS}
     acronyms = {a.lower() for a in _ACRONYM_RE.findall(text)}
     return words | acronyms
+
+
+def _parse_upstream_skill_gaps(facts: Dict) -> Tuple[Optional[List[str]], bool]:
+    """``(skill_gaps, malformed)`` from a Career dependency's facts.
+
+    ``None`` means no Career task fed this one (plain discovery). A list --
+    possibly empty, meaning Career found no gaps -- switches on skill-gap
+    matching. Anything that is not a list of non-blank strings is malformed
+    and reported as such instead of being coerced into match terms.
+    """
+    if "skill_gaps" not in facts:
+        return None, False
+    raw = facts["skill_gaps"]
+    if not isinstance(raw, list) or not all(isinstance(gap, str) and gap.strip() for gap in raw):
+        return None, True
+    return [gap.strip() for gap in raw], False
 
 
 def _resolve_now(as_of_raw: object) -> datetime:
@@ -117,34 +146,47 @@ class EventsAgent:
         exams = _parse_upstream_exams(message.facts)
         expected_conflict_check = timetable is not None or exams is not None
 
-        raw_skill_gaps = message.facts.get("skill_gaps") or []
-        relevance_tokens = _tokenize_for_relevance(query)
-        for gap in raw_skill_gaps:
-            relevance_tokens |= _tokenize_for_relevance(str(gap))
+        # Relevance is the union of the task's own topic terms and every
+        # upstream skill gap's terms. With skill gaps upstream the filter is
+        # always on: an empty criterion set then matches nothing rather than
+        # "every event", so an event is never presented as addressing a skill
+        # gap it shares no term with.
+        skill_gaps, skill_gaps_malformed = _parse_upstream_skill_gaps(message.facts)
+        topic_tokens = _tokenize_for_relevance(query)
+        gap_tokens: Dict[str, Set[str]] = {gap: _tokenize_for_relevance(gap) for gap in (skill_gaps or [])}
+        relevance_tokens = topic_tokens.union(*gap_tokens.values())
+        relevance_filter_active = bool(relevance_tokens) or skill_gaps is not None
 
         assessments: List[EventAssessment] = []
         evidence: List[Evidence] = []
         errors: List[str] = []
 
-        if student_exists:
+        if student_exists and not skill_gaps_malformed:
             if requires_events:
                 for event in events_service.get_upcoming_events(self._session, now):
                     event_tokens = _tokenize_for_relevance(f"{event.title} {event.description} {event.category}")
-                    if relevance_tokens and not (relevance_tokens & event_tokens):
+                    matched_terms = sorted(relevance_tokens & event_tokens)
+                    if relevance_filter_active and not matched_terms:
                         continue  # not relevant to this query/skill-gap set -- never claim otherwise
                     registration_status = events_service.get_student_registration_status(
                         self._session, student_id, event.event_id
                     )
                     confirmed_count = events_service.get_registration_count(self._session, event.event_id)
+                    assessment = assess_event(
+                        event,
+                        now=now,
+                        confirmed_registrations=confirmed_count,
+                        already_registered=registration_status is not None,
+                        registration_status=registration_status,
+                        timetable=timetable,
+                        exams=exams,
+                    )
                     assessments.append(
-                        assess_event(
-                            event,
-                            now=now,
-                            confirmed_registrations=confirmed_count,
-                            already_registered=registration_status is not None,
-                            registration_status=registration_status,
-                            timetable=timetable,
-                            exams=exams,
+                        assessment.model_copy(
+                            update={
+                                "matched_terms": matched_terms,
+                                "matched_skill_gaps": [gap for gap, tokens in gap_tokens.items() if tokens & event_tokens],
+                            }
                         )
                     )
                 evidence = self._knowledge.search(_EVENT_POLICY_QUERY, as_of=now.date(), top_k=3, visibility="public")
@@ -162,12 +204,17 @@ class EventsAgent:
                 expected_conflict_check=expected_conflict_check,
                 assessments=assessments,
                 evidence=evidence,
+                relevance_filter_active=relevance_filter_active,
+                skill_gaps=skill_gaps,
+                skill_gaps_malformed=skill_gaps_malformed,
             )
         )
 
         facts: dict = {"intent": intent.value}
         if assessments:
             facts["assessments"] = [a.model_dump(mode="json") for a in assessments]
+        if skill_gaps is not None:
+            facts["matched_against_skill_gaps"] = skill_gaps
 
         status_map = {
             VerificationStatus.VERIFIED: AgentResultStatus.SUCCESS,
@@ -191,6 +238,7 @@ class EventsAgent:
                 verification_issues=verification.issues,
                 student_name=student.user.full_name if student is not None else None,
                 assessments=assessments,
+                skill_gaps=skill_gaps,
                 evidence=evidence,
                 errors=errors,
             )
