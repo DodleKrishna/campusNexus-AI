@@ -31,6 +31,18 @@ The execute-time recheck still re-derives everything from current DB state.
 
 A REJECTED approval is handled defensively here too (the scheduler should
 never re-dispatch a FAILED step, but this never executes regardless).
+
+Phase 11 approval lifecycle hardening: every approval is bound to its exact
+payload (``app/services/approval_binding.py``). ``_execute`` first runs an
+execution gate (``_binding_problems``: right mission/step/tool call, payload
+fingerprint matches, actor matches, tool call not already attempted) and then
+the execute-time recheck. Any failure marks the approval STALE via
+``ApprovalGate.invalidate`` -- terminal, never reactivated -- and nothing is
+written. A later dispatch of the same step (e.g. after a replan) sees the
+STALE approval and proposes afresh; that replacement proposal must also pass
+the current-state recheck (``_revalidation_block``), because the upstream
+facts it would otherwise rely on are exactly what went stale. If it passes,
+a brand-new approval is requested.
 """
 from __future__ import annotations
 
@@ -76,6 +88,7 @@ from app.schemas.tools import ToolCall
 from app.schemas.verification import VerificationCheck, VerificationResult
 from app.services import academic as academic_service
 from app.services import events as events_service
+from app.services.approval_binding import approval_fingerprint, build_approval_payload
 from app.services.approval_gate import ApprovalGate
 from app.services.context import ContextService
 from app.services.knowledge import KnowledgeService
@@ -210,7 +223,9 @@ class ActionAgent:
             return self._still_pending_outcome(message, approval)
         if approval is not None and approval.status == ApprovalStatus.REJECTED:
             return self._rejected_outcome(message, approval)
-        # None, or the latest is EDIT_REQUIRED (superseded) -> propose fresh.
+        # None, EDIT_REQUIRED (superseded) or STALE (invalidated) -> propose
+        # fresh. A STALE approval is never reused: the new proposal gets a new
+        # approval of its own (see _create_proposal_and_pause).
         return self._propose(message)
 
     def verify_claimed_result(self, tool_name: str, arguments: Dict[str, object], result_data: Dict[str, object]) -> VerificationResult:
@@ -351,7 +366,6 @@ class ActionAgent:
         return self._create_proposal_and_pause(
             message,
             tool_name="register_event",
-            target_resource=f"event:{event.event_id}",
             parameters=parameters,
             description=description,
             precheck=precheck,
@@ -433,7 +447,6 @@ class ActionAgent:
         return self._create_proposal_and_pause(
             message,
             tool_name="create_calendar_event",
-            target_resource=f"calendar:{student_id}:{title}",
             parameters=parameters,
             description=description,
             precheck=precheck,
@@ -481,7 +494,6 @@ class ActionAgent:
         return self._create_proposal_and_pause(
             message,
             tool_name="create_campus_case",
-            target_resource=f"case:{student_id}:{category}",
             parameters=parameters,
             description=description,
             precheck=precheck,
@@ -494,7 +506,6 @@ class ActionAgent:
         message: AgentMessage,
         *,
         tool_name: str,
-        target_resource: str,
         parameters: Dict[str, object],
         description: str,
         precheck: VerificationResult,
@@ -502,6 +513,24 @@ class ActionAgent:
         supporting_facts: Dict[str, object],
     ) -> ActionAgentOutcome:
         mission_id, task_id = message.mission_id, message.task_id
+
+        previous = get_latest_approval_for_step(self._session, task_id)
+        replaces_approval_id = None
+        if previous is not None and previous.status == ApprovalStatus.STALE:
+            replaces_approval_id = previous.approval_id
+            blocked = self._revalidation_block(message, tool_name, parameters, previous)
+            if blocked is not None:
+                return blocked
+
+        approved_payload = build_approval_payload(
+            mission_id=mission_id,
+            step_id=task_id,
+            tool_name=tool_name,
+            arguments=parameters,
+            precheck_status=precheck.status.value,
+            input_model=self._input_model(tool_name),
+        )
+        target_resource = approved_payload["target_resource"]
         proposal_id = f"prop-{uuid.uuid4().hex[:12]}"
         tool_call_id = f"tc-{uuid.uuid4().hex[:12]}"
         # Versioned so ActionAgent.propose_edit's fresh proposal never collides
@@ -532,8 +561,9 @@ class ActionAgent:
             idempotency_key=idempotency_key,
             status=ToolExecutionStatus.PENDING,
         )
-        self._approval_gate.request_approval(
-            mission_id=mission_id, step_id=task_id, tool_call_id=tool_call_id, action_summary=description, requested_by=self._requested_by
+        approval = self._approval_gate.request_approval(
+            mission_id=mission_id, step_id=task_id, tool_call_id=tool_call_id, action_summary=description,
+            requested_by=self._requested_by, approved_payload=approved_payload,
         )
 
         verification = VerificationResult(
@@ -555,6 +585,11 @@ class ActionAgent:
             # The deterministic pre-check's own verdict, kept separate from the
             # task's NEEDS_REVIEW (which only means "paused for a human").
             "precheck_status": precheck.status.value,
+            "approval_id": approval.approval_id,
+            "payload_fingerprint": approval.payload_fingerprint,
+            # Phase 11: set when this proposal replaces an approval that went
+            # STALE -- the old one stays stale; this one needs its own decision.
+            "replaces_approval_id": replaces_approval_id,
         }
         agent_result = AgentResult(
             mission_id=mission_id, task_id=task_id, agent=AgentName.ACTION_AGENT, status=AgentResultStatus.PARTIAL,
@@ -563,8 +598,53 @@ class ActionAgent:
         return ActionAgentOutcome(
             agent_result=agent_result,
             verification=verification,
-            response_text=description + " This action is awaiting human approval before it will be executed.",
+            response_text=description + (
+                f" Approval {replaces_approval_id} expired because execution conditions changed, so this updated "
+                "action needs a new approval."
+                if replaces_approval_id
+                else ""
+            ) + " This action is awaiting human approval before it will be executed.",
         )
+
+    def _input_model(self, tool_name: str):
+        return self._tool_gateway.get(tool_name).input_model if self._tool_gateway.is_registered(tool_name) else None
+
+    def _revalidation_block(
+        self, message: AgentMessage, tool_name: str, parameters: Dict[str, object], stale_approval
+    ) -> Optional[ActionAgentOutcome]:
+        """A proposal that replaces a STALE approval must pass the same
+        current-state recheck execution would run. The approval went stale
+        because the world changed after the upstream facts were gathered, so
+        those facts alone cannot vouch for the replacement. Returns a blocked
+        outcome (identical in shape to an execute-time block) or None."""
+        now = _resolve_now(message.facts.get("as_of"))
+        recheck = self._verifier.verify_pre_action(
+            mission_id=message.mission_id, task_id=message.task_id,
+            checks=self._recheck(tool_name, dict(parameters), now),
+            blocking_check_names=_SCHEDULE_CONFLICT_BLOCKING_CHECKS,
+        )
+        if recheck.status == VerificationStatus.VERIFIED:
+            return None
+        return self._blocked_outcome(
+            message, recheck, tool_name=tool_name,
+            extra_facts={"stale_approval_id": stale_approval.approval_id, "revalidation_after_stale": True},
+        )
+
+    def _blocked_outcome(
+        self, message: AgentMessage, recheck: VerificationResult, *, tool_name: str, extra_facts: Optional[Dict] = None
+    ) -> ActionAgentOutcome:
+        # Force a hard FAILED verification whether the recheck itself came back
+        # FAILED or (soft) NEEDS_REVIEW: a human already approved based on what
+        # is now stale information, and that approval cannot be asked again --
+        # a NEEDS_REVIEW here must not leave the task BLOCKED with no pending
+        # approval to ever resolve it. See tests/test_action_safety.py.
+        blocked = _new_verification(
+            message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
+            [f"Action blocked: preconditions are no longer valid ({'; '.join(recheck.issues)})."],
+        )
+        facts: Dict[str, object] = {"tool_name": tool_name, "execution_recheck_status": recheck.status.value}
+        facts.update(extra_facts or {})
+        return self._failed_outcome(message, blocked, facts=facts)
 
     # ------------------------------------------------------------------
     # Pending / rejected (defensive re-dispatch guards)
@@ -609,6 +689,10 @@ class ActionAgent:
     def _execute(self, message: AgentMessage, approval) -> ActionAgentOutcome:
         tool_call_record = get_tool_call_by_id(self._session, approval.tool_call_id)
         if tool_call_record is None:
+            self._approval_gate.invalidate(
+                approval.approval_id, reason="Approval does not reference an existing tool call.", actor="action_agent",
+                details={"cause": "binding_mismatch", "problems": ["approval does not reference this tool call"]},
+            )
             verification = _new_verification(
                 message.mission_id, message.task_id, VerificationPhase.POST_ACTION, VerificationStatus.FAILED,
                 ["Approved action has no associated tool call record (data inconsistency)."],
@@ -626,36 +710,53 @@ class ActionAgent:
             post = self._verifier.verify_post_action(mission_id=message.mission_id, task_id=message.task_id, checks=post_checks)
             return self._executed_outcome(message, tool_call_record, post, already_executed=True)
 
+        # Execution gate, part 1 (Phase 11): is this approval bound to exactly
+        # this action? Any mismatch invalidates it and blocks execution.
+        problems = self._binding_problems(message, approval, tool_call_record)
+        if problems:
+            reason = "Approval does not match the action being executed: " + "; ".join(problems) + "."
+            self._invalidate(approval, tool_call_record, reason=reason, details={"cause": "binding_mismatch", "problems": problems})
+            verification = _new_verification(
+                message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
+                [f"Action blocked: {reason}"],
+            )
+            return self._failed_outcome(
+                message, verification,
+                facts={
+                    "tool_name": tool_call_record.tool_name,
+                    "approval_status": ApprovalStatus.STALE.value,
+                    "stale_approval_id": approval.approval_id,
+                },
+            )
+
+        # Execution gate, part 2: deterministic preconditions against *current*
+        # DB state. Unlike propose-time (where NEEDS_REVIEW still proceeds to
+        # human approval), a human has *already* approved based on what could
+        # now be stale information -- so anything short of a clean recheck
+        # blocks the write here and invalidates the approval (STALE: it can
+        # never authorize anything again). A newly-appeared schedule conflict
+        # or capacity/deadline/duplicate change since approval is exactly
+        # what this catches.
         precheck_checks = self._recheck(tool_call_record.tool_name, arguments, now)
         precheck = self._verifier.verify_pre_action(
             mission_id=message.mission_id, task_id=message.task_id, checks=precheck_checks,
             blocking_check_names=_SCHEDULE_CONFLICT_BLOCKING_CHECKS,
         )
         if precheck.status != VerificationStatus.VERIFIED:
-            # Unlike propose-time (where NEEDS_REVIEW still proceeds to human
-            # approval), at execute-time a human has *already* approved based
-            # on what could now be stale information -- so anything short of
-            # a clean recheck blocks execution here. A newly-appeared
-            # schedule conflict or capacity/duplicate change since approval
-            # is exactly what this catches.
-            self._context.update_tool_call_record(
-                tool_call_record.tool_call_id,
-                status=ToolExecutionStatus.FAILED,
-                error="preconditions are no longer valid (recheck): " + "; ".join(precheck.issues),
+            reason = "Execution conditions changed after approval: " + (
+                "; ".join(precheck.issues) if precheck.issues else "the deterministic recheck did not pass."
             )
-            # Force a hard FAILED verification regardless of whether the
-            # recheck itself came back FAILED or (soft) NEEDS_REVIEW -- at
-            # execute-time there is no "pause and ask a human again" option
-            # left (the approval was already spent), so a NEEDS_REVIEW
-            # recheck must not leave the task BLOCKED with no pending
-            # approval to ever resolve it. See tests/test_action_safety.py.
-            blocked = _new_verification(
-                message.mission_id, message.task_id, VerificationPhase.PRE_ACTION, VerificationStatus.FAILED,
-                [f"Action blocked: preconditions are no longer valid ({'; '.join(precheck.issues)})."],
+            self._invalidate(
+                approval, tool_call_record, reason=reason,
+                details={
+                    "cause": "execution_recheck_failed",
+                    "recheck_status": precheck.status.value,
+                    "failed_checks": [{"name": c.name, "detail": c.detail} for c in precheck.checks if not c.passed],
+                },
             )
-            return self._failed_outcome(
-                message, blocked,
-                facts={"tool_name": tool_call_record.tool_name, "execution_recheck_status": precheck.status.value},
+            return self._blocked_outcome(
+                message, precheck, tool_name=tool_call_record.tool_name,
+                extra_facts={"approval_status": ApprovalStatus.STALE.value, "stale_approval_id": approval.approval_id},
             )
 
         tool_call = ToolCall(
@@ -689,6 +790,50 @@ class ActionAgent:
             message, tool_call_record, post, already_executed=False, result_data=result.data,
             execution_recheck_status=precheck.status.value,
         )
+
+    def _binding_problems(self, message: AgentMessage, approval, tool_call_record) -> List[str]:
+        """Every way this APPROVED approval fails to authorize exactly this tool
+        call for exactly this mission step (an empty list = correctly bound)."""
+        problems: List[str] = []
+        if approval.mission_id != message.mission_id or approval.step_id != message.task_id:
+            problems.append("approval belongs to a different mission step")
+        if (
+            tool_call_record.tool_call_id != approval.tool_call_id
+            or tool_call_record.mission_id != approval.mission_id
+            or tool_call_record.step_id != approval.step_id
+        ):
+            problems.append("approval does not reference this tool call")
+        if tool_call_record.status != ToolExecutionStatus.PENDING:
+            problems.append(f"this tool call was already attempted (status={tool_call_record.status.value})")
+        stored = approval.approved_payload or {}
+        if not approval.payload_fingerprint or not stored:
+            problems.append("approval predates payload binding and has no fingerprint")
+            return problems
+        if approval_fingerprint(stored) != approval.payload_fingerprint:
+            problems.append("stored approved payload does not match its fingerprint")
+        current = build_approval_payload(
+            mission_id=approval.mission_id,
+            step_id=approval.step_id,
+            tool_name=tool_call_record.tool_name,
+            arguments=dict(tool_call_record.arguments or {}),
+            precheck_status=str(stored.get("precheck_status", "")),
+            input_model=self._input_model(tool_call_record.tool_name),
+        )
+        if approval_fingerprint(current) != approval.payload_fingerprint:
+            problems.append("payload fingerprint mismatch (the action's arguments differ from what was approved)")
+        caller = str(message.facts.get("student_id") or "").strip()
+        if caller and caller != current["actor_student_id"]:
+            problems.append("the mission's student is not the actor this approval was granted for")
+        return problems
+
+    def _invalidate(self, approval, tool_call_record, *, reason: str, details: Dict[str, object]) -> None:
+        """Block the tool call (never executed) and mark its approval STALE."""
+        if tool_call_record.status == ToolExecutionStatus.PENDING:
+            self._context.update_tool_call_record(
+                tool_call_record.tool_call_id, status=ToolExecutionStatus.FAILED,
+                error="blocked before execution; approval invalidated: " + reason,
+            )
+        self._approval_gate.invalidate(approval.approval_id, reason=reason, actor="action_agent", details=details)
 
     def _executed_outcome(
         self,

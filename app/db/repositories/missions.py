@@ -57,6 +57,13 @@ def get_tool_call_by_idempotency_key(session: Session, idempotency_key: str) -> 
     return session.execute(stmt).scalar_one_or_none()
 
 
+def list_approvals_for_step(session: Session, step_id: str) -> list[ApprovalRecord]:
+    """Every approval a step has had, oldest first -- the chain an original
+    approval and its replacements (edit or Phase 11 stale) form."""
+    stmt = select(ApprovalRecord).where(ApprovalRecord.step_id == step_id).order_by(ApprovalRecord.created_at)
+    return list(session.execute(stmt).scalars().all())
+
+
 def count_approvals_for_step(session: Session, step_id: str) -> int:
     """How many approval requests a step has had -- the versioned-idempotency-key
     input for ApprovalGate/ActionAgent's edit-supersedes-original flow."""
@@ -75,7 +82,15 @@ def list_pending_approvals(
     STUDENT-role API caller's own-approvals-only view."""
     from app.schemas.enums import ApprovalStatus
 
-    stmt = select(ApprovalRecord).where(ApprovalRecord.status == ApprovalStatus.PENDING)
+    return list_approvals_by_status(session, ApprovalStatus.PENDING, mission_id=mission_id, student_id=student_id)
+
+
+def list_approvals_by_status(
+    session: Session, status, *, mission_id: str | None = None, student_id: str | None = None
+) -> list[ApprovalRecord]:
+    """Every approval in ``status`` (an ``ApprovalStatus``), oldest first,
+    optionally scoped to one mission or one student -- e.g. Phase 11's STALE list."""
+    stmt = select(ApprovalRecord).where(ApprovalRecord.status == status)
     if mission_id is not None:
         stmt = stmt.where(ApprovalRecord.mission_id == mission_id)
     if student_id is not None:

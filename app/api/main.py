@@ -8,6 +8,9 @@ reimplements agent/rule/verification logic; every route composes existing
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+from typing import AsyncContextManager, AsyncIterator, Callable
+
 from fastapi import FastAPI
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -17,7 +20,7 @@ from app.agents.career.agent import CareerAgent
 from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
 from app.api.routers import admin, approvals, health, missions, students
-from app.db.session import create_db_engine, create_session_factory
+from app.db.session import create_db_engine, create_session_factory, upgrade_schema
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
 from app.llm.base import LLMProvider
@@ -48,6 +51,7 @@ def create_app(
     knowledge_service: KnowledgeService,
     llm_provider: LLMProvider,
     tool_gateway: ToolGateway | None = None,
+    lifespan: Callable[[FastAPI], AsyncContextManager[None]] | None = None,
 ) -> FastAPI:
     """Build a fully-wired FastAPI app.
 
@@ -67,6 +71,7 @@ def create_app(
             "No production authentication -- see docs/ARCHITECTURE.md's Phase 8 trust-boundary note."
         ),
         version="0.8.0",
+        lifespan=lifespan,
     )
     fastapi_app.state.session_factory = session_factory
     fastapi_app.state.orchestrator = orchestrator
@@ -93,7 +98,19 @@ def _build_default_app() -> FastAPI:
     knowledge_service = KnowledgeService(retriever=retriever)
 
     llm_provider = get_llm_provider(None)  # CAMPUSNEXUS_LLM_PROVIDER env var, defaults to "mock"
-    return create_app(session_factory=session_factory, knowledge_service=knowledge_service, llm_provider=llm_provider)
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        # At server startup, never at import time (tests import this module and
+        # must never touch the dev DB): additively brings a database created by
+        # an earlier phase up to the current columns (e.g. Phase 11 approval
+        # binding) without touching data.
+        upgrade_schema(engine)
+        yield
+
+    return create_app(
+        session_factory=session_factory, knowledge_service=knowledge_service, llm_provider=llm_provider, lifespan=lifespan
+    )
 
 
 app = _build_default_app()

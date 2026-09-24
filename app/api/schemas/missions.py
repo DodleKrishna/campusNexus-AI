@@ -47,6 +47,8 @@ class ApprovalSummaryView(BaseModel):
     step_id: str
     action_summary: str
     status: str
+    invalidation_reason: Optional[str] = None
+    replaced_by_approval_id: Optional[str] = None
 
 
 class ExecutionStopView(BaseModel):
@@ -64,6 +66,8 @@ class MissionResponse(BaseModel):
     plan: List[MissionTaskView]
     agent_results: List[AgentRunView]
     pending_approvals: List[ApprovalSummaryView] = []
+    # Phase 11: approvals that expired because execution conditions changed.
+    stale_approvals: List[ApprovalSummaryView] = []
     final_result: Optional[str] = None
     execution_stop: Optional[ExecutionStopView] = None
     created_at: datetime

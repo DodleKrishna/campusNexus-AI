@@ -40,6 +40,21 @@ class ApprovalView(BaseModel):
     # Where the pre-approval schedule-conflict check got its data (register_event only).
     schedule_check: Optional[Dict[str, JsonValue]] = None
 
+    # Phase 11: payload binding + invalidation. A STALE approval was approved
+    # by a human (decision_by/decision_at still say who and when) but the
+    # conditions it was granted under stopped holding before execution -- it
+    # is NOT a rejection, and it can never authorize anything again.
+    payload_fingerprint: Optional[str] = None
+    invalidated_at: Optional[datetime] = None
+    invalidation_reason: Optional[str] = None
+    invalidation_details: Optional[Dict[str, JsonValue]] = None
+    # The approval this one replaced (an earlier STALE/EDIT_REQUIRED request for
+    # the same step), and the newer request that replaced this one, if any.
+    replaces_approval_id: Optional[str] = None
+    replaced_by_approval_id: Optional[str] = None
+    # One plain-language line explaining the status to an approver.
+    status_message: Optional[str] = None
+
 
 class ApprovalDecisionRequest(BaseModel):
     decision: Literal["approve", "reject"]

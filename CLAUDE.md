@@ -148,6 +148,26 @@ across a component boundary. Free text is allowed only in the final user-facing 
   stops FAILED with a `duplicate_failure_detected` audit event. Do not suppress a retry whose reason or
   input changed, and never hide a repeated run -- the UI folds it, the audit trail keeps it.
 
+## Approval Lifecycle (Phase 11)
+
+- An approval authorizes one exact payload. `ApprovalRecord.approved_payload`/`payload_fingerprint`
+  (`app/services/approval_binding.py`: SHA-256 over canonical JSON of mission/step, tool, actor, target,
+  normalized arguments and the pre-check verdict, never built-in `hash()`) are set once when the approval is
+  requested and never changed. The fingerprint's field list is documented in that module; change it only by
+  bumping `BINDING_VERSION`.
+- `ActionAgent._execute` must verify the binding (mission/step/tool call, tool call not yet attempted,
+  fingerprint of the current arguments, actor) *before* the execute-time recheck. Any mismatch, or any
+  recheck result short of VERIFIED, blocks the write and calls `ApprovalGate.invalidate`, which marks the
+  approval `ApprovalStatus.STALE`.
+- STALE is terminal and is not a rejection. Never reactivate, re-decide or overwrite it, and never touch its
+  `decision_*` fields (the original approver and time must survive). The invalidation reason and details
+  go in the `invalidation_*` fields plus an `approval_invalidated` audit event.
+- A step whose latest approval is STALE is re-proposed, and that proposal must pass the current-state
+  recheck (`_revalidation_block`) before a *new* approval is requested. Never let a stale approval's
+  successor skip that recheck, and never create a replacement approval while the action is still invalid.
+- New persisted columns must be nullable so `app/db/session.py::upgrade_schema` can add them to existing
+  databases. It is additive only.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -269,6 +289,11 @@ python scripts/check_live_llm.py
 # before approval, schedule change after approval (TOCTOU), duplicate-failure stop --
 # with plans, dependency traces, check verdicts and audit trails.
 python scripts/demo_phase10.py
+
+# Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
+# resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,
+# execute exactly once with a verified postcondition. Exits non-zero on any deviation.
+python scripts/demo_phase11.py
 ```
 
 The dev database path defaults to `data/campusnexus.db` and is configurable via `CAMPUSNEXUS_DB_PATH` (see

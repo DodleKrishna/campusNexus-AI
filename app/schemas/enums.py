@@ -78,6 +78,10 @@ class ApprovalStatus(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
     EDIT_REQUIRED = "edit_required"
+    # Phase 11: an approval whose execution-time preconditions (or payload
+    # binding) no longer hold. Terminal -- never reactivated, never executes;
+    # a later valid action needs a brand-new approval. Not a human rejection.
+    STALE = "stale"
 
 
 class VerificationPhase(str, Enum):

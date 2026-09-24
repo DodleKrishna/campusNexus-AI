@@ -43,6 +43,8 @@ _STATUS_COLORS = {
     "needs_review": ("#FFF1E0", "#C2660D"),
     "approved": ("#E7F8EE", "#1E8E5A"),
     "rejected": ("#FDEAEA", "#C23B3B"),
+    "stale": ("#F1F3F7", "#5B6B82"),
+    "edit_required": ("#FFF1E0", "#C2660D"),
     "open": ("#FFF1E0", "#C2660D"),
     "resolved": ("#E7F8EE", "#1E8E5A"),
     "closed": ("#F1F3F7", "#5B6B82"),

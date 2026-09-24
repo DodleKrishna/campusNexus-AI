@@ -22,9 +22,15 @@ from app.api.schemas.missions import (
 )
 from app.api.timeline import build_timeline
 from app.db.models.mission import Mission
-from app.db.repositories.missions import get_audit_trail, get_mission_steps, list_pending_approvals
+from app.db.repositories.missions import (
+    get_audit_trail,
+    get_mission_steps,
+    list_approvals_by_status,
+    list_approvals_for_step,
+    list_pending_approvals,
+)
 from app.graph.orchestrator import DUPLICATE_FAILURE_MESSAGE, MissionOrchestrator
-from app.schemas.enums import UserRole
+from app.schemas.enums import ApprovalStatus, UserRole
 from app.schemas.evidence import Evidence
 from app.services.context import ContextService
 
@@ -83,13 +89,27 @@ def _mission_response(session: Session, mission: Mission) -> MissionResponse:
         ApprovalSummaryView(approval_id=a.approval_id, step_id=a.step_id, action_summary=a.action_summary, status=a.status.value)
         for a in pending
     ]
+    stale_views = [
+        ApprovalSummaryView(
+            approval_id=a.approval_id, step_id=a.step_id, action_summary=a.action_summary, status=a.status.value,
+            invalidation_reason=a.invalidation_reason, replaced_by_approval_id=_next_approval_id(session, a),
+        )
+        for a in list_approvals_by_status(session, ApprovalStatus.STALE, mission_id=mission.mission_id)
+    ]
 
     return MissionResponse(
         mission_id=mission.mission_id, goal=mission.original_goal, status=mission.status.value,
-        plan=plan_view, agent_results=agent_results, pending_approvals=pending_views,
+        plan=plan_view, agent_results=agent_results, pending_approvals=pending_views, stale_approvals=stale_views,
         final_result=mission.final_result, execution_stop=_execution_stop(context, mission.mission_id),
         created_at=mission.created_at, updated_at=mission.updated_at,
     )
+
+
+def _next_approval_id(session: Session, approval) -> Optional[str]:
+    """The request that replaced ``approval`` for the same step, if any."""
+    chain = [a.approval_id for a in list_approvals_for_step(session, approval.step_id)]
+    index = chain.index(approval.approval_id)
+    return chain[index + 1] if index + 1 < len(chain) else None
 
 
 def _execution_stop(context: ContextService, mission_id: str) -> Optional[ExecutionStopView]:

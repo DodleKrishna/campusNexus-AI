@@ -172,6 +172,8 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
         for approval in mission["pending_approvals"]:
             st.info(f"**{approval['action_summary']}**: open the Action Center to approve or reject.")
 
+    _render_stale_approvals(client, mission)
+
     st.markdown("#### Evidence & Trust")
     _render_evidence(client, mission_id, short_ids)
 
@@ -196,6 +198,37 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
 
     with st.expander("Mission timeline"):
         _render_timeline(client, mission_id)
+
+
+def _render_stale_approvals(client: ApiClient, mission: dict) -> None:
+    """Phase 11: approvals that expired because conditions changed after a human
+    approved them. Never presented as a rejection; never reusable."""
+    stale = mission.get("stale_approvals") or []
+    if not stale:
+        return
+    st.markdown("#### Expired approvals")
+    for approval in stale:
+        replacement = approval.get("replaced_by_approval_id")
+        follow_up = f" Replaced by new request `{replacement}`." if replacement else " Nothing was executed."
+        st.warning(
+            f"**{approval['action_summary']}**: Approval expired because execution conditions changed. Review the "
+            f"updated action and approve again.{follow_up}"
+        )
+        if approval.get("invalidation_reason"):
+            st.caption(f"What changed: {approval['invalidation_reason']}")
+    awaiting_replacement = any(not a.get("replaced_by_approval_id") for a in stale)
+    if awaiting_replacement and mission["status"] in ("failed", "needs_replan"):
+        st.caption(
+            "Once the conflicting change is resolved, re-check the action: if it is valid again, a NEW approval "
+            "request is created (the expired one is never reused)."
+        )
+        if st.button("🔁 Re-check and request a new approval", key=f"recheck-{mission['mission_id']}"):
+            try:
+                client.resume_mission(mission["mission_id"])
+            except (ApiUnavailableError, ApiError) as exc:
+                st.error(f"Re-check failed: {exc}")
+            else:
+                st.rerun()
 
 
 def short_ids_for(mission: dict) -> dict:

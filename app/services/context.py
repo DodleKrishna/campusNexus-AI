@@ -298,6 +298,8 @@ class ContextService:
         action_summary: str,
         requested_by: str,
         tool_call_id: Optional[str] = None,
+        payload_fingerprint: Optional[str] = None,
+        approved_payload: Optional[Dict[str, Any]] = None,
     ) -> ApprovalRecord:
         record = ApprovalRecord(
             approval_id=approval_id,
@@ -307,6 +309,8 @@ class ContextService:
             action_summary=action_summary,
             requested_by=requested_by,
             status=ApprovalStatus.PENDING,
+            payload_fingerprint=payload_fingerprint,
+            approved_payload=approved_payload,
         )
         self._session.add(record)
         self._session.commit()
@@ -331,6 +335,13 @@ class ContextService:
         record = self._session.get(ApprovalRecord, approval_id)
         if record is None:
             raise ValueError(f"unknown approval_id: {approval_id!r}")
+        if record.status == ApprovalStatus.STALE:
+            raise ValueError(
+                f"approval {approval_id!r} is stale; a stale approval is terminal and can never be "
+                "re-decided or reactivated -- a new approval request is required"
+            )
+        if status == ApprovalStatus.STALE:
+            raise ValueError("use invalidate_approval_record() to mark an approval stale")
         if status in _RESOLVED_APPROVAL_STATUSES and (decision_by is None or decision_at is None):
             raise ValueError(
                 "a resolved approval (approved/rejected/edit_required) must record "
@@ -340,6 +351,36 @@ class ContextService:
         record.decision_by = decision_by
         record.decision_at = decision_at
         record.decision_reason = decision_reason
+        self._session.commit()
+        self._session.refresh(record)
+        return record
+
+    def invalidate_approval_record(
+        self,
+        approval_id: str,
+        *,
+        invalidated_at: datetime,
+        reason: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> ApprovalRecord:
+        """Mark an APPROVED approval STALE (Phase 11).
+
+        Unlike ``update_approval_record`` this never touches ``decision_by``/
+        ``decision_at``/``decision_reason`` -- who approved and when stays on the
+        record; why it stopped being valid goes in the ``invalidation_*`` fields.
+        STALE is terminal: ``update_approval_record`` refuses to change it.
+        """
+        record = self._session.get(ApprovalRecord, approval_id)
+        if record is None:
+            raise ValueError(f"unknown approval_id: {approval_id!r}")
+        if record.status != ApprovalStatus.APPROVED:
+            raise ValueError(
+                f"only an APPROVED approval can become stale; {approval_id!r} is {record.status.value}"
+            )
+        record.status = ApprovalStatus.STALE
+        record.invalidated_at = invalidated_at
+        record.invalidation_reason = reason
+        record.invalidation_details = details or {}
         self._session.commit()
         self._session.refresh(record)
         return record

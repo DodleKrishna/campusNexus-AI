@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.base import Base
@@ -74,6 +74,33 @@ def create_session_factory(engine: Engine) -> sessionmaker[Session]:
 def init_db(engine: Engine) -> None:
     """Create all tables known to ``Base.metadata`` on ``engine``."""
     Base.metadata.create_all(engine)
+    upgrade_schema(engine)
+
+
+def upgrade_schema(engine: Engine) -> list[str]:
+    """Add columns that exist in the models but not yet in an existing table.
+
+    ``create_all`` never alters an existing table, so a database created before
+    a phase added a column (e.g. Phase 11's approval binding columns) would fail
+    on the first SELECT. Strictly additive and idempotent: it only ever adds
+    *nullable* columns and never drops, renames or rewrites anything. Returns
+    the ``table.column`` names it added.
+    """
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+    added: list[str] = []
+    with engine.begin() as connection:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            present = {column["name"] for column in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in present or not column.nullable or column.primary_key:
+                    continue
+                column_type = column.type.compile(dialect=engine.dialect)
+                connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column_type}'))
+                added.append(f"{table.name}.{column.name}")
+    return added
 
 
 def drop_db(engine: Engine) -> None:

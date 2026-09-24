@@ -29,6 +29,11 @@ class ApprovalRequest(BaseModel):
     decision_at: Optional[datetime] = None
     decision_reason: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
+    # Phase 11: the fingerprint of the exact payload this approval authorizes
+    # (app/services/approval_binding.py), and why it became STALE, if it did.
+    payload_fingerprint: Optional[str] = None
+    invalidated_at: Optional[datetime] = None
+    invalidation_reason: Optional[str] = None
 
     @model_validator(mode="after")
     def _decision_fields_match_status(self) -> "ApprovalRequest":
@@ -39,7 +44,9 @@ class ApprovalRequest(BaseModel):
                 )
         elif not self.decision_by or self.decision_at is None:
             raise ValueError(
-                "a resolved approval (APPROVED/REJECTED/EDIT_REQUIRED) must record "
+                "a resolved approval (APPROVED/REJECTED/EDIT_REQUIRED/STALE) must record "
                 "decision_by and decision_at"
             )
+        if self.status == ApprovalStatus.STALE and (self.invalidated_at is None or not self.invalidation_reason):
+            raise ValueError("a STALE approval must record invalidated_at and invalidation_reason")
         return self

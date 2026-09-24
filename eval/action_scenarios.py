@@ -407,6 +407,159 @@ PHASE10_SCENARIOS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Phase 11 -- approval lifecycle hardening. A third throwaway environment
+# (full registry). Every scenario targets event 10; the first two restore the
+# state they change, and only the last one actually registers.
+# ---------------------------------------------------------------------------
+
+
+def _step_approvals(session_factory, task_id: str):
+    from app.db.repositories.missions import list_approvals_for_step
+
+    with session_factory() as session:
+        return [(a.approval_id, a.status, a.decision_by, a.invalidation_reason) for a in list_approvals_for_step(session, task_id)]
+
+
+def _invalidation_events(session_factory, mission_id: str):
+    with session_factory() as session:
+        return [dict(e.event_metadata or {}) for e in ContextService(session).list_audit_events(mission_id)
+                if e.event_type == "approval_invalidated"]
+
+
+def _approve_and_break(orchestrator, session_factory, mutate):
+    """Run a conflict-free registration to approval, approve it, apply ``mutate``
+    (returns an undo callable), resume. Returns (final, resumed, task_id, undo)."""
+    final = orchestrator.run_mission(REGISTER_GOAL, user_id=DEMO_STUDENT, user_role=UserRole.STUDENT, student_id=DEMO_STUDENT)
+    task_id = _action_task_id(final)
+    _approve(session_factory, task_id)
+    undo = mutate()
+    resumed = orchestrator.resume_mission(final["mission_id"])
+    return final, resumed, task_id, undo
+
+
+def _stale_checks(session_factory, final, resumed, task_id) -> Dict[str, Any]:
+    chain = _step_approvals(session_factory, task_id)
+    events = _invalidation_events(session_factory, final["mission_id"])
+    with session_factory() as session:
+        reg = get_registration(session, CLEAN_EVENT_ID, DEMO_STUDENT)
+    ok = (
+        final["mission_status"] == MissionStatus.NEEDS_APPROVAL
+        and resumed["mission_status"] == MissionStatus.FAILED
+        and [status for _, status, _, _ in chain] == [ApprovalStatus.STALE]
+        and chain[0][2] == "admin-eval"  # the human approval is still on record
+        and len(events) == 1 and events[0]["approved_by"] == "admin-eval"
+        and reg is None
+    )
+    return {"ok": ok, "approvals": [s.value for _, s, _, _ in chain], "reason": chain[0][3] if chain else None,
+            "registration_row": reg is not None}
+
+
+def scenario_approval_invalidated_by_schedule_change(orchestrator, session_factory, **_) -> Dict[str, Any]:
+    def mutate():
+        exam_id = _add_exam_over_event(session_factory, CLEAN_EVENT_ID)
+        return lambda: _remove_exam(session_factory, exam_id)
+
+    final, resumed, task_id, undo = _approve_and_break(orchestrator, session_factory, mutate)
+    try:
+        checks = _stale_checks(session_factory, final, resumed, task_id)
+    finally:
+        undo()
+    passed = checks.pop("ok") and "schedule conflict" in (checks["reason"] or "")
+    return {"passed": passed, **checks}
+
+
+def scenario_approval_invalidated_by_capacity_change(orchestrator, session_factory, **_) -> Dict[str, Any]:
+    from sqlalchemy import func, select
+
+    from app.db.models.events import Event, EventRegistration, RegistrationStatus
+
+    def mutate():
+        with session_factory() as session:
+            event = session.get(Event, CLEAN_EVENT_ID)
+            original = event.capacity
+            # Full: capacity drops to the current confirmed count (as if other students took the seats).
+            event.capacity = session.execute(
+                select(func.count()).select_from(EventRegistration).where(
+                    EventRegistration.event_id == CLEAN_EVENT_ID, EventRegistration.status == RegistrationStatus.CONFIRMED
+                )
+            ).scalar_one()
+            session.commit()
+
+        def undo():
+            with session_factory() as session:
+                session.get(Event, CLEAN_EVENT_ID).capacity = original
+                session.commit()
+
+        return undo
+
+    final, resumed, task_id, undo = _approve_and_break(orchestrator, session_factory, mutate)
+    try:
+        checks = _stale_checks(session_factory, final, resumed, task_id)
+    finally:
+        undo()
+    passed = checks.pop("ok") and "capacity" in (checks["reason"] or "").lower()
+    return {"passed": passed, **checks}
+
+
+def scenario_stale_approval_requires_new_approval(orchestrator, session_factory, **_) -> Dict[str, Any]:
+    holder: Dict[str, int] = {}
+
+    def mutate():
+        holder["exam_id"] = _add_exam_over_event(session_factory, CLEAN_EVENT_ID)
+        return lambda: _remove_exam(session_factory, holder["exam_id"])
+
+    final, blocked, task_id, restore = _approve_and_break(orchestrator, session_factory, mutate)
+    stale_id = _step_approvals(session_factory, task_id)[0][0]
+    restore()  # the exam moves away: the action is valid again
+    replanned = orchestrator.resume_mission(final["mission_id"])
+    chain = _step_approvals(session_factory, task_id)
+
+    # The stale approval can never be revived -- even though the action is valid again.
+    with session_factory() as session:
+        try:
+            ApprovalGate(session).decide(stale_id, decision=ApprovalStatus.APPROVED, decision_by="admin-eval")
+            revived = True
+        except Exception:  # noqa: BLE001 -- ApprovalGateError is the expected outcome
+            revived = False
+
+    _approve(session_factory, task_id)  # decides the NEW (latest) request
+    done = orchestrator.resume_mission(final["mission_id"])
+    orchestrator.resume_mission(final["mission_id"])  # a repeat resume must not write again
+    from sqlalchemy import func, select
+
+    from app.db.models.events import EventRegistration
+    from app.db.models.identity import Student
+
+    with session_factory() as session:
+        student = session.execute(select(Student).where(Student.student_code == DEMO_STUDENT)).scalar_one()
+        rows = session.execute(
+            select(func.count()).select_from(EventRegistration).where(
+                EventRegistration.event_id == CLEAN_EVENT_ID, EventRegistration.student_id == student.id
+            )
+        ).scalar_one()
+        final_chain = [(a_id, status) for a_id, status, _, _ in _step_approvals(session_factory, task_id)]
+    passed = (
+        blocked["mission_status"] == MissionStatus.FAILED
+        and replanned["mission_status"] == MissionStatus.NEEDS_APPROVAL
+        and [status for _, status, _, _ in chain] == [ApprovalStatus.STALE, ApprovalStatus.PENDING]
+        and not revived
+        and done["mission_status"] == MissionStatus.COMPLETED
+        and done["agent_results"][task_id].facts.get("postcondition_verified") is True
+        and final_chain == [(stale_id, ApprovalStatus.STALE), (chain[1][0], ApprovalStatus.APPROVED)]
+        and rows == 1
+    )
+    return {"passed": passed, "approvals": [f"{a_id}:{s.value}" for a_id, s in final_chain],
+            "stale_revived": revived, "final_status": done["mission_status"].value, "registration_rows": rows}
+
+
+PHASE11_SCENARIOS = [
+    ("approval-invalidated-by-schedule-change", scenario_approval_invalidated_by_schedule_change),
+    ("approval-invalidated-by-capacity-change", scenario_approval_invalidated_by_capacity_change),
+    ("stale-approval-requires-new-approval", scenario_stale_approval_requires_new_approval),
+]
+
+
 SCENARIOS = [
     ("successful-registration-persists-and-verifies", scenario_successful_registration_persists_and_verifies),
     ("rejected-action-never-executes", scenario_rejected_action_never_executes),
@@ -440,8 +593,9 @@ def _run_scenarios(scenarios, *, with_academic: bool) -> int:
 def main() -> int:
     failures = _run_scenarios(SCENARIOS, with_academic=False)
     failures += _run_scenarios(PHASE10_SCENARIOS, with_academic=True)
+    failures += _run_scenarios(PHASE11_SCENARIOS, with_academic=True)
 
-    total = len(SCENARIOS) + len(PHASE10_SCENARIOS)
+    total = len(SCENARIOS) + len(PHASE10_SCENARIOS) + len(PHASE11_SCENARIOS)
     print(f"\n{total - failures}/{total} scenarios passed.")
     return 1 if failures else 0
 

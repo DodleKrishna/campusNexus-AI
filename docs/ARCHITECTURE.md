@@ -509,6 +509,7 @@ The spec's lifecycle names (`WAITING_FOR_APPROVAL`/`APPROVED`/`REJECTED`/`EXECUT
 | EXECUTING | `TaskStatus.IN_PROGRESS`, already set by `_dispatch_and_collect` before every agent call |
 | VERIFIED COMPLETION | `TaskStatus.COMPLETED` + `VerificationStatus.VERIFIED` |
 | FAILED | `TaskStatus.FAILED` / `VerificationStatus.FAILED` / `MissionStatus.FAILED` |
+| EXPIRED APPROVAL (Phase 11) | `ApprovalStatus.STALE`, the one enum value added after Phase 7. No existing value meant "a human approved, then the conditions stopped holding": `REJECTED` would claim a human said no, and `EDIT_REQUIRED` means the payload was edited |
 
 Concretely, `ActionAgent.handle()` is **dispatched twice** per approved action -- exactly like any other
 `SpecialistAgent.handle(AgentMessage) -> AgentOutcome`, no new orchestrator concept needed. First dispatch:
@@ -849,15 +850,136 @@ two-level DAG with its full replan budget already exceeded.
 
 ### Known limitations
 
-- After an execute-time block, the one permitted replan re-dispatches the same approved step, which runs
-  the recheck again against the already-granted approval (it is blocked again unless the world changed
-  back in between). A spent-on-failure approval is not yet invalidated.
+- ~~After an execute-time block, the one permitted replan re-dispatches the same approved step, which runs
+  the recheck again against the already-granted approval. A spent-on-failure approval is not yet
+  invalidated.~~ Resolved in Phase 11: the block marks the approval STALE, and a re-dispatch proposes afresh.
 - The fingerprint's input hash covers the facts a task was dispatched with, not DB state the agent reads
   itself; a DB change that produces the identical failure reason is (correctly) still a repeat, but one
   that produces a *different* reason is only noticed by running the task.
 - `scripts/demo_actions.py` and the first eight `eval/action_scenarios.py` scenarios intentionally keep
   the Phase 7 registry (no Academic Agent), so they still exercise the execute-time recheck as the only
   conflict check.
+
+## Approval Lifecycle Hardening (Phase 11)
+
+No new agents, no architecture change. One goal: **a human approval cannot stay valid after the
+assumptions it was granted under stop holding.** Before this phase the execute-time recheck already blocked
+an unsafe write, but the approval itself stayed `APPROVED`. A replan resets the FAILED action step to
+PENDING *with the same step id*, so the next dispatch found that `APPROVED` record and ran `_execute` again.
+If the world had changed back in between, the old approval would have authorized the write.
+
+### Approval binding (`app/services/approval_binding.py`)
+
+When the Action Agent requests an approval it builds a canonical **approved payload**. The Approval Gate
+stores it and its fingerprint on the existing `ApprovalRecord` (`approved_payload`, `payload_fingerprint`).
+Both are set once and never changed. No second approval subsystem was added.
+
+| Field | Why it is bound |
+|---|---|
+| `binding_version` | lets the payload format evolve without silently matching old fingerprints |
+| `mission_id`, `step_id` | the approval belongs to exactly one mission step |
+| `tool_name` | the write tool that will run |
+| `actor_student_id` | the student the action is performed for (checked against the mission's student) |
+| `target_resource` | re-derived from the arguments (`target_resource_for`), never trusted as a stored string |
+| `arguments` | normalized through the tool's own `input_model` (validate + JSON dump), so `"10"` and `10` hash alike |
+| `precheck_status` | the deterministic verdict the human saw when approving |
+
+Excluded on purpose: timestamps, generated ids (approval, tool call, proposal), idempotency keys, summaries
+and evidence text. The fingerprint is SHA-256 over canonical JSON (sorted keys, fixed separators, ASCII),
+never Python's per-process-randomized `hash()`, so another process computes the same value
+(`test_fingerprint_is_stable_across_processes`).
+
+A fingerprint identifies the *logical action*, not the approval. A replacement approval for an identical
+action therefore has the same fingerprint as the stale one it replaces. That is intended: reuse is prevented
+by the stale approval's terminal status and by each approval being tied to its own tool call. What cannot
+happen is the reverse, one approval authorizing two different payload hashes.
+
+### Execution gate (`ActionAgent._execute`)
+
+Before any write, in order:
+
+1. the approval exists and is `APPROVED` (routing in `handle()`);
+2. it belongs to this mission step and references this tool call (`_binding_problems`);
+3. the tool call has not already been attempted (status still `PENDING`);
+4. the approval has a fingerprint, the stored payload still matches it, and the payload recomputed from the
+   `ToolCallRecord`'s current arguments matches it;
+5. the mission's student is the bound actor (the Tool Gateway re-checks role and ownership independently);
+6. the execute-time deterministic recheck against current DB state is `VERIFIED` (unchanged since Phase 8).
+
+Any failure blocks the write, marks the tool call `FAILED` without executing it, and invalidates the
+approval. Approvals persisted before Phase 11 have no fingerprint, so they fail check 4 and never execute.
+
+### STALE (`ApprovalStatus.STALE`)
+
+`ApprovalGate.invalidate` calls `ContextService.invalidate_approval_record`:
+
+- Only an `APPROVED` approval can become stale, and STALE is terminal. `decide`, `mark_superseded` and
+  `update_approval_record` all refuse to change it, so it can never be reactivated.
+- `decision_by`/`decision_at`/`decision_reason` are **not** touched: who approved and when stays on the
+  record. `invalidated_at`, `invalidation_reason` and `invalidation_details` (cause, recheck status, the
+  failed checks with their details) record why it went stale.
+- An `approval_invalidated` audit event (actor `action_agent`) repeats the approver, approval time,
+  fingerprint, reason and details. It is appended after `approval_approved`, never instead of it, and no
+  `approval_rejected` event is written.
+
+The recheck covers timetable/exam conflicts, event full, registration deadline passed, event no longer
+open, duplicate registration and student no longer valid.
+
+### Replanning after a stale approval
+
+`handle()` treats a STALE latest approval like `EDIT_REQUIRED`: it proposes afresh, with the next versioned
+idempotency key, a new tool call and a **new** approval. The approval went stale because the world changed
+after the upstream facts were gathered, so those facts alone cannot vouch for the replacement.
+`_revalidation_block` therefore also runs the execute-time current-state recheck before a new approval is
+requested. This is a deterministic Verifier check of current state, not the Action Agent fetching missing
+upstream context; the Phase 10 rule about missing context is unchanged.
+
+- **Still invalid:** blocked with the same message as the execute-time block. The failure fingerprint
+  repeats, so Phase 10's duplicate-failure stop ends the mission after one replan. No new approval is
+  created and no execution is attempted, however many times the mission is resumed.
+- **Valid again:** a new `PENDING` approval whose run facts carry `replaces_approval_id`. The old one stays
+  STALE forever.
+
+End to end (`scripts/demo_phase11.py`, `test_mission_flow_stale_then_new_approval_then_single_execution`):
+
+```
+propose -> precheck VERIFIED -> A1 APPROVED -> exam rescheduled -> resume
+  -> binding OK, recheck FAILED -> no write, A1 STALE, step FAILED -> replan -> revalidation FAILED -> stop
+exam moved away -> resume -> replan -> revalidation VERIFIED -> A2 PENDING (replaces A1)
+  -> A2 APPROVED -> resume -> recheck VERIFIED -> one write -> postcondition VERIFIED
+```
+
+### Persistence upgrade (`app/db/session.py::upgrade_schema`)
+
+`create_all` never alters an existing table, so `upgrade_schema` adds any model column that an existing
+table lacks. It adds nullable columns only, never drops or rewrites anything, and is idempotent. `init_db`
+calls it, and so does the FastAPI app at startup, so a dev or demo DB from an earlier phase keeps working
+without a reseed.
+
+### API / UI (additive)
+
+- `GET /approvals/stale`, with the same scoping as `/approvals/pending`. `ApprovalView` adds
+  `payload_fingerprint`, `invalidated_at`, `invalidation_reason`, `invalidation_details`,
+  `replaces_approval_id`, `replaced_by_approval_id` and a plain-language `status_message`. `_enrich` now
+  picks the proposing run by `approval_id`, so an expired request and its replacement each show their own
+  payload.
+- Deciding a stale approval returns 409 with the expiry message.
+- `MissionResponse.stale_approvals`. The timeline maps `approval_invalidated` to NEEDS_REVIEW, not FAILED.
+- Action Center: an **Expired approvals** section ("Approval expired because execution conditions changed.
+  Review the updated action and approve again.") with a grey STALE badge, the original approver and time,
+  what changed, and the replacement id. A replacement request's card says which expired approval it
+  replaces. The Mission Workspace shows the same notice and a **Re-check and request a new approval**
+  button, which resumes the mission.
+
+### Known limitations
+
+- A Tool Gateway failure after a clean recheck (for example, the handler raising) marks the tool call
+  FAILED. The gate's "not already attempted" check then invalidates the approval on the next dispatch, not
+  at the moment of failure.
+- `approved_payload.precheck_status` records the propose-time verdict. The revalidation that preceded a
+  replacement approval is recorded in the run's facts, not in the payload.
+- Approval chains are ordered by `created_at` (microsecond UTC timestamps), the same ordering
+  `get_latest_approval_for_step` already used.
 
 ## Non-Goals (for now)
 

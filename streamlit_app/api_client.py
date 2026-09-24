@@ -129,6 +129,9 @@ class ApiClient:
     def list_pending_approvals(self) -> List[Dict[str, Any]]:
         return self._request("GET", "/approvals/pending")
 
+    def list_stale_approvals(self) -> List[Dict[str, Any]]:
+        return self._request("GET", "/approvals/stale")
+
     def decide_approval(self, approval_id: str, decision: str, reason: Optional[str] = None) -> Dict[str, Any]:
         body: Dict[str, Any] = {"decision": decision}
         if reason:

@@ -142,6 +142,17 @@ class ApprovalRecord(Base):
     decision_reason: Mapped[Optional[str]] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
+    # Phase 11 payload binding (app/services/approval_binding.py). Set once when
+    # the approval is requested and never changed: an approval authorizes exactly
+    # this payload. NULL only for approvals persisted before Phase 11.
+    payload_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), default=None)
+    approved_payload: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, default=None)
+    # Phase 11 invalidation (status=STALE). Kept separate from decision_* so the
+    # original approver/decision time are never overwritten.
+    invalidated_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    invalidation_reason: Mapped[Optional[str]] = mapped_column(Text, default=None)
+    invalidation_details: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, default=None)
+
     mission = relationship("Mission")
     step = relationship("MissionStep")
 

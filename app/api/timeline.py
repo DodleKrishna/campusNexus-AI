@@ -48,6 +48,8 @@ _EVENT_TYPE_TO_STATUS = {
     "approval_approved": "RUNNING",
     "approval_rejected": "FAILED",
     "approval_edit_requested": "WAITING_FOR_APPROVAL",
+    # Phase 11: not a rejection -- the approval expired because conditions changed.
+    "approval_invalidated": "NEEDS_REVIEW",
 }
 
 

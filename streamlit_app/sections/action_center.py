@@ -16,6 +16,7 @@ from streamlit_app.api_client import ApiClient, ApiError, ApiUnavailableError
 
 
 _FLASH_KEY = "cn_action_center_flash"
+STALE_MESSAGE = "Approval expired because execution conditions changed. Review the updated action and approve again."
 
 
 def render(client: ApiClient, can_decide: bool) -> None:
@@ -30,19 +31,49 @@ def render(client: ApiClient, can_decide: bool) -> None:
 
     try:
         approvals = client.list_pending_approvals()
+        stale = client.list_stale_approvals()
     except ApiUnavailableError as exc:
         st.error(f"⚠️ {exc}")
         return
     except ApiError as exc:
-        st.error(f"Could not load pending approvals ({exc.status_code}): {exc.detail}")
+        st.error(f"Could not load approvals ({exc.status_code}): {exc.detail}")
         return
 
     if not approvals:
         st.info("No pending approvals right now.")
-        return
-
     for approval in approvals:
         _render_card(client, approval, can_decide)
+
+    if stale:
+        st.markdown("#### Expired approvals")
+        st.caption(
+            "These were approved, but what they were approved for stopped being true before they ran, so "
+            "nothing was executed. An expired approval can never be reused."
+        )
+        for approval in stale:
+            _render_stale_card(approval)
+
+
+def _render_stale_card(approval: dict) -> None:
+    """A STALE approval: approved by a human, then invalidated by a change in
+    the world -- shown as expired, never as rejected, and never decidable."""
+    with st.container(border=True):
+        st.markdown(
+            f"**{approval['action_summary']}**  \n{theme.status_badge('stale')} `{approval['approval_id']}`",
+            unsafe_allow_html=True,
+        )
+        st.warning(approval.get("status_message") or STALE_MESSAGE)
+        st.caption(
+            f"Originally approved by {approval.get('decision_by') or 'unknown'} at {approval.get('decision_at') or 'unknown'}; "
+            f"expired at {approval.get('invalidated_at') or 'unknown'}."
+        )
+        if approval.get("invalidation_reason"):
+            st.caption(f"What changed: {approval['invalidation_reason']}")
+        replacement = approval.get("replaced_by_approval_id")
+        if replacement:
+            st.caption(f"Replaced by new request `{replacement}` (see pending approvals above if it is still open).")
+        else:
+            st.caption("No replacement request yet: resuming the mission re-checks the action against current data.")
 
 
 def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
@@ -53,6 +84,12 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
     with st.container(border=True):
         st.markdown(f"**{approval['action_summary']}**")
         st.caption(f"Mission `{approval['mission_id']}` · requested {approval['created_at']}")
+        if approval.get("replaces_approval_id"):
+            st.info(
+                f"New request `{approval_id}`, replacing expired approval `{approval['replaces_approval_id']}`. "
+                "The earlier approval stopped being valid when conditions changed; this one was re-verified "
+                "against current data and needs its own decision."
+            )
         info_cols = st.columns(4)
         info_cols[0].markdown(f"Tool  \n`{approval.get('tool_name') or 'n/a'}`")
         info_cols[1].markdown(f"Target resource  \n`{approval.get('target_resource') or 'n/a'}`")
@@ -131,7 +168,9 @@ def _decide(client: ApiClient, approval_id: str, decision: str, reason: str, dec
         st.session_state.pop(decided_key, None)
         st.session_state[_FLASH_KEY] = ("error", f"⚠️ {exc}")
     except ApiError as exc:
-        if exc.status_code == 409:
+        if exc.status_code == 409 and "expired" in str(exc.detail):
+            st.session_state[_FLASH_KEY] = ("warning", STALE_MESSAGE)
+        elif exc.status_code == 409:
             st.session_state[_FLASH_KEY] = ("warning", "This action was already decided, so no duplicate decision was submitted.")
         else:
             st.session_state.pop(decided_key, None)

@@ -10,17 +10,24 @@ action's step flips back to PENDING so the next
 ``MissionOrchestrator.resume_mission`` call re-dispatches it -- the
 "separate explicit operation" the Phase 7 spec asks for. No LLM calls, no
 planning: a deterministic accessor, like the Context Service it wraps.
+
+Phase 11: an approval is bound to one exact payload (``approved_payload`` +
+``payload_fingerprint``, see ``app/services/approval_binding.py``), and an
+approval whose execution-time preconditions stop holding is invalidated to
+the terminal ``STALE`` status (``invalidate``) -- it keeps who approved and
+when, records why it went stale, and can never authorize anything again.
 """
 from __future__ import annotations
 
 import uuid
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from sqlalchemy.orm import Session
 
 from app.db.base import utc_now
 from app.db.models.mission import ApprovalRecord
 from app.schemas.enums import ApprovalStatus, TaskStatus
+from app.services.approval_binding import approval_fingerprint
 from app.services.context import ContextService
 
 _DECIDABLE = {ApprovalStatus.APPROVED, ApprovalStatus.REJECTED}
@@ -43,8 +50,13 @@ class ApprovalGate:
         tool_call_id: str,
         action_summary: str,
         requested_by: str,
+        approved_payload: Optional[Dict[str, Any]] = None,
     ) -> ApprovalRecord:
+        """Open a PENDING approval. ``approved_payload`` (from
+        ``build_approval_payload``) binds the approval to that exact action; its
+        fingerprint is computed here, once, and never changed afterwards."""
         approval_id = f"appr-{uuid.uuid4().hex[:12]}"
+        fingerprint = approval_fingerprint(approved_payload) if approved_payload is not None else None
         record = self._context.create_approval_record(
             approval_id=approval_id,
             mission_id=mission_id,
@@ -52,6 +64,8 @@ class ApprovalGate:
             action_summary=action_summary,
             requested_by=requested_by,
             tool_call_id=tool_call_id,
+            payload_fingerprint=fingerprint,
+            approved_payload=approved_payload,
         )
         self._context.append_audit_event(
             event_id=f"evt-{uuid.uuid4().hex[:12]}",
@@ -60,6 +74,7 @@ class ApprovalGate:
             event_type="approval_requested",
             actor=requested_by,
             message=action_summary,
+            metadata={"approval_id": approval_id, "tool_call_id": tool_call_id, "payload_fingerprint": fingerprint},
         )
         return record
 
@@ -133,5 +148,54 @@ class ApprovalGate:
             event_type="approval_edit_requested",
             actor=requested_by,
             message=reason or "Action parameters edited; a fresh approval is required.",
+        )
+        return updated
+
+    def invalidate(
+        self,
+        approval_id: str,
+        *,
+        reason: str,
+        actor: str,
+        details: Optional[Dict[str, Any]] = None,
+    ) -> ApprovalRecord:
+        """Mark an APPROVED approval STALE: the conditions it was granted under no
+        longer hold, so it can never authorize execution again (Phase 11).
+
+        Not a rejection -- no human said no. The original ``decision_by``/
+        ``decision_at`` are preserved; the audit event records who approved,
+        when, why it went stale and which state change caused it. The mission
+        step is left to the caller (the Action Agent's failed outcome already
+        marks it FAILED through the normal dispatch path).
+        """
+        record = self._session.get(ApprovalRecord, approval_id)
+        if record is None:
+            raise ApprovalGateError(f"unknown approval_id: {approval_id!r}")
+        if record.status != ApprovalStatus.APPROVED:
+            raise ApprovalGateError(
+                f"approval {approval_id!r} cannot become stale from status={record.status.value}"
+            )
+        now = utc_now()
+        updated = self._context.invalidate_approval_record(approval_id, invalidated_at=now, reason=reason, details=details)
+        self._context.append_audit_event(
+            event_id=f"evt-{uuid.uuid4().hex[:12]}",
+            mission_id=record.mission_id,
+            step_id=record.step_id,
+            event_type="approval_invalidated",
+            actor=actor,
+            message=(
+                f"Approval {approval_id} (approved by {record.decision_by} at "
+                f"{record.decision_at.isoformat() if record.decision_at else 'unknown'}) is now STALE: {reason} "
+                "It can no longer authorize execution; a new approval is required."
+            ),
+            metadata={
+                "approval_id": approval_id,
+                "tool_call_id": record.tool_call_id,
+                "approved_by": record.decision_by,
+                "approved_at": record.decision_at.isoformat() if record.decision_at else None,
+                "payload_fingerprint": record.payload_fingerprint,
+                "reason": reason,
+                "details": details or {},
+            },
         )
         return updated
