@@ -215,11 +215,12 @@ def test_faculty_leave_goes_to_the_hod_with_affected_classes(client, session_fac
     assert audit == ["request_prepared", "request_submitted", "request_approved"]
 
 
-def test_hod_own_request_needs_review_and_faculty_chat_routes_requests(client) -> None:
+def test_hod_own_request_goes_to_the_administration_and_faculty_chat_routes_requests(client) -> None:
+    # Phase 18 closed the gap: a department head's own request is routed to the administration.
     hod = auth(client, HOD)
     draft = prepare(client, hod, "I need leave tomorrow.")["request"]
-    assert draft["reviewer_name"] is None and draft["routing_basis"] == "unresolved"
-    assert client.post("/requests", json={"request_id": draft["request_id"]}, headers=hod).json()["status"] == "needs_review"
+    assert (draft["reviewer_name"], draft["routing_basis"], draft["request_type"]) == ("the Administration", "administration", "hod_leave")
+    assert client.post("/requests", json={"request_id": draft["request_id"]}, headers=hod).json()["status"] == "pending"
     assert client.post(f"/requests/{draft['request_id']}/approve", json={}, headers=hod).status_code == 403
 
     reply = ask(client, auth(client, VERMA), "enquiry", "I need leave tomorrow.", base="/faculty/agents")

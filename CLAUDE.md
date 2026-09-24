@@ -315,6 +315,31 @@ across a component boundary. Free text is allowed only in the final user-facing 
   `init_db`/`upgrade_schema`) from runtime code, never at import time. `tests/test_phase17_hod_ops.py`
   enforces this for `eval/` and `scripts/`.
 
+## Admin Console & Institution Operations (Phase 18)
+
+- `/admin/*` (JWT, `app/api/routers/admin_console.py`) requires an active ADMIN account (`current_admin`).
+  Scope is the whole institution (`admin_ops.institution_scope`). A `department` parameter can only narrow
+  it to a real department; an unknown code is a 404, never "everything". `/admin/cases` is the unchanged
+  Phase 8 demo-identity endpoint.
+- Institution figures reuse `department_ops` with an `InstitutionScope`; those functions only read
+  `scope.department_ids`. Never write a second copy of class-state, attendance or complaint logic.
+- The routing chain ends at the administration: student → class faculty/mentor → HOD → admin; faculty →
+  HOD → admin; a department head's own request (HOD_LEAVE, DEPARTMENT_RESOURCE, DEPARTMENT_PERMISSION,
+  ADMIN_ESCALATION, OD, substitution) → admin. An admin-routed request has `reviewer_role="admin"` and no
+  `reviewer_faculty_id`; any active admin may decide it (`decide_as_admin`), never their own. NEEDS_REVIEW
+  remains only when no active admin exists. Existing unassigned rows are escalated (audited, once) when an
+  admin views the inbox. Every routing step is appended to `routing_history`.
+- Admin notifications live in `account_notifications` (the other two notification tables require a student
+  or a faculty profile).
+- Account operations are limited to activate/deactivate, a role change within `allowed_roles`
+  (profile-link-consistent), and a one-time development password. All are audited; none applies to your
+  own account.
+- The audit page merges `audit_logs` and `operation_audit_events` read-only (GET only). Successful
+  sign-ins are audited as `login`.
+- No admin response may contain a key, JWT secret or password hash; settings show only whether each is set.
+  Mock mode is reported as "degraded", never as live.
+- Demo-only extra classes (`scripts/schedule_demo_class.demo_window`) never cross midnight.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so

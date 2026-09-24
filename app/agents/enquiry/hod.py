@@ -211,7 +211,9 @@ class HodAgent:
         return self._reply(key, "verified", f"{len(escalated)} escalated student request{'s' if len(escalated) != 1 else ''}: " + "; ".join(r.title for r in escalated) + ".", facts)
 
     def _make_request(self, session, scope, plan, key, facts, now):
-        hint = ActionHint(agent_key="permission", message="As head of department, your own requests go to the administration, which is not set up in CampusNexus yet.")
+        facts["route"] = "permission_request"
+        facts["request_message"] = message
+        hint = ActionHint(agent_key="permission", message="That is a request, so it goes through the Permission Agent: it prepares it for you to confirm, then sends it to the Administration.")
         return self._reply(key, "not_applicable", hint.message, facts, hint=hint)
 
     # -- complaints / events -------------------------------------------------

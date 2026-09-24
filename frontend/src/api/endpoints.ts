@@ -1,6 +1,16 @@
 /** Typed backend endpoints. Identity always comes from the bearer token. */
 import { apiRequest } from "@/api/client";
 import type {
+  AdminAttendance,
+  AdminComplaint,
+  AdminDashboard,
+  AIOperations,
+  AuditEntry,
+  DepartmentDetail,
+  DepartmentRow,
+  PasswordReset,
+  SystemStatus,
+  UserView,
   AttendanceInsights,
   DepartmentClass,
   DepartmentComplaint,
@@ -33,9 +43,13 @@ import type {
   WorkflowRequest,
 } from "@/types/api";
 
-export type ChatScope = "student" | "faculty" | "hod";
+export type ChatScope = "student" | "faculty" | "hod" | "admin";
 export type RequestBox = "inbox" | "mine";
-const CHAT_BASE: Record<ChatScope, string> = { student: "/agents", faculty: "/faculty/agents", hod: "/hod/agents" };
+const CHAT_BASE: Record<ChatScope, string> = { student: "/agents", faculty: "/faculty/agents", hod: "/hod/agents", admin: "/admin/agents" };
+const qs = (params: Record<string, string | boolean | undefined | null>) => {
+  const entries = Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== "" && v !== false);
+  return entries.length ? `?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)])).toString()}` : "";
+};
 
 export const api = {
   health: () => apiRequest<Health>("/health", { auth: false }),
@@ -99,6 +113,23 @@ export const api = {
   hodStudents: () => apiRequest<StudentRisk[]>("/hod/students"),
   hodAttendance: () => apiRequest<AttendanceInsights>("/hod/attendance"),
   hodComplaints: () => apiRequest<DepartmentComplaint[]>("/hod/complaints"),
+
+  // Administrator console (institution-wide; filters only narrow).
+  adminDashboard: (department?: string) => apiRequest<AdminDashboard>(`/admin/dashboard${qs({ department })}`),
+  adminDepartments: () => apiRequest<DepartmentRow[]>("/admin/departments"),
+  adminDepartment: (code: string) => apiRequest<DepartmentDetail>(`/admin/departments/${encodeURIComponent(code)}`),
+  adminAttendance: (department?: string) => apiRequest<AdminAttendance>(`/admin/attendance${qs({ department })}`),
+  adminComplaints: (filters: { department?: string; status?: string; priority?: string; breached?: boolean }) =>
+    apiRequest<AdminComplaint[]>(`/admin/complaints${qs(filters)}`),
+  adminUsers: () => apiRequest<UserView[]>("/admin/users"),
+  adminSetActive: (accountId: number, isActive: boolean) =>
+    apiRequest<UserView>(`/admin/users/${accountId}/active`, { method: "POST", body: { is_active: isActive } }),
+  adminSetRole: (accountId: number, role: string) => apiRequest<UserView>(`/admin/users/${accountId}/role`, { method: "POST", body: { role } }),
+  adminResetPassword: (accountId: number) => apiRequest<PasswordReset>(`/admin/users/${accountId}/reset-password`, { method: "POST" }),
+  adminAIOperations: () => apiRequest<AIOperations>("/admin/ai-operations"),
+  adminAudit: (filters: { source?: string; action?: string }) => apiRequest<AuditEntry[]>(`/admin/audit${qs(filters)}`),
+  adminSystem: () => apiRequest<SystemStatus>("/admin/system"),
+  adminNotifications: () => apiRequest<NotificationItem[]>("/admin/notifications"),
 };
 
 export const queryKeys = {
@@ -117,6 +148,7 @@ export const queryKeys = {
   workflowBox: (box: RequestBox) => ["workflow-requests", box] as const,
   staffNotifications: ["staff", "notifications"] as const,
   hod: (part: string) => ["hod", part] as const,
+  admin: (...parts: (string | number | boolean | undefined)[]) => ["admin", ...parts] as const,
   facultyProfile: ["faculty", "profile"] as const,
   facultyDashboard: ["faculty", "dashboard"] as const,
   facultyToday: ["faculty", "classes", "today"] as const,

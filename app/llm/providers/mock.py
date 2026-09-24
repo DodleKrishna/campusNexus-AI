@@ -30,6 +30,7 @@ from app.schemas.enums import AgentName, VerificationStatus
 from app.schemas.events import EventsIntent, EventsIntentResult, EventsResponseContext
 from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.department import HodQueryPlan
+from app.schemas.admin_console import AdminQueryPlan
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.services import ServicesIntent, ServicesIntentResult, ServicesResponseContext
 from app.schemas.workflow import PermissionIntent
@@ -211,6 +212,10 @@ def _permission_intent(message: str) -> PermissionIntent:
     q = message.lower().strip()
     if any(k in q for k in (" od ", " od.", "on duty", "on-duty")) or q.startswith("od "):
         request_type = "od_request"
+    elif "escalat" in q and "admin" in q:
+        request_type = "admin_escalation"
+    elif any(k in q for k in ("resource", "equipment", "projector", "budget", "lab space", "new lab")):
+        request_type = "department_resource"
     elif "substitut" in q:
         request_type = "class_substitution"
     elif "department permission" in q or "permission from the department" in q:
@@ -281,6 +286,41 @@ def _hod_plan(message: str) -> HodQueryPlan:
         intent=intent, section_reference=section.group(1).upper() if section else None,
         year_reference=int(year.group(1)) if year else None,
     )
+
+
+_NOT_DEPARTMENTS = {"SLA", "HOD", "OD", "AI", "IST", "I", "OK", "CN", "OS"}
+
+
+def _admin_plan(message: str) -> AdminQueryPlan:
+    q = message.lower()
+    codes = [c for c in re.findall(r"\b([A-Z]{2,5})\b", message) if c not in _NOT_DEPARTMENTS]
+    if any(k in q for k in _MAKE_REQUEST_PHRASES):
+        intent = "make_request"
+    elif "normal" in q or "overview" in q or "everything" in q:
+        intent = "campus_overview"
+    elif any(k in q for k in ("failed", "error", "outage", "workflow")):
+        intent = "failed_workflows"
+    elif any(k in q for k in ("complaint", "sla", "grievance")):
+        intent = "complaints_breached"
+    elif "escalat" in q:
+        intent = "escalated_requests"
+    elif "request" in q:
+        intent = "pending_requests"
+    elif any(k in q for k in ("not started", "haven't started", "have not started", "didn't start", "did not start", "delayed", "start on time")):
+        intent = "classes_not_started"
+    elif "department" in q and any(k in q for k in ("risk", "most", "worst")):
+        intent = "attendance_risk_by_department"
+    elif "below" in q or "%" in q or "threshold" in q:
+        intent = "below_threshold"
+    elif any(k in q for k in ("running", "right now", "in session")):
+        intent = "classes_running"
+    elif "event" in q:
+        intent = "upcoming_events"
+    elif "class" in q and ("today" in q or "how many" in q):
+        intent = "classes_today"
+    else:
+        intent = "unknown"
+    return AdminQueryPlan(intent=intent, department_reference=codes[0] if codes else None)
 
 
 def _faculty_plan(message: str) -> FacultyQueryPlan:
@@ -656,6 +696,10 @@ class MockLLMProvider(LLMProvider):
     def plan_hod_query(self, message: str) -> HodQueryPlan:
         """Deterministic keyword classification for the HOD agents."""
         return _hod_plan(message)
+
+    def plan_admin_query(self, message: str) -> AdminQueryPlan:
+        """Deterministic keyword classification for the admin agents."""
+        return _admin_plan(message)
 
     def plan_mission(
         self, mission_id: str, goal: str, *, supported_agents: List[AgentName]

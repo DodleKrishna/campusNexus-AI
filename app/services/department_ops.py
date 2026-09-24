@@ -5,6 +5,9 @@ must have the HOD role, be linked to a faculty profile, AND that profile must
 be the department's recorded head (``departments.hod_faculty_id``). Every
 function below takes that ``HodScope`` and only ever queries rows whose
 department is ``scope.department`` -- a client never supplies a department.
+Phase 18: the read-only analytics also accept an administrator's
+``InstitutionScope`` (all departments, or a filtered subset); they only ever
+read ``scope.department_ids``, so HOD and admin views share one implementation.
 
 Every status, count and percentage is computed here from timetable slots,
 attendance sessions, marks, counters and requests. Class state (delayed / not
@@ -21,7 +24,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -76,6 +79,26 @@ class HodScope:
     faculty: FacultyProfile
     department: Department
 
+    @property
+    def department_ids(self) -> tuple:
+        return (self.department.id,)
+
+
+@dataclass(frozen=True)
+class InstitutionScope:
+    """Phase 18: an administrator's view -- every department, or a filtered subset of them."""
+
+    account: AuthAccount
+    departments: tuple
+
+    @property
+    def department_ids(self) -> tuple:
+        return tuple(d.id for d in self.departments)
+
+
+# The read-only analytics below take either scope; they only ever read ``scope.department_ids``.
+Area = Union[HodScope, InstitutionScope]
+
 
 def hod_scope(session: Session, account_id: int) -> Optional[HodScope]:
     """current HOD -> faculty identity -> department, or None. Role alone is never enough."""
@@ -107,21 +130,21 @@ def class_label(assignment: TeachingAssignment) -> str:
 # ---------------------------------------------------------------------------
 
 
-def assignments(session: Session, scope: HodScope) -> List[TeachingAssignment]:
+def assignments(session: Session, scope: Area) -> List[TeachingAssignment]:
     return list(session.execute(
-        select(TeachingAssignment).where(TeachingAssignment.department_id == scope.department.id).order_by(TeachingAssignment.id)
+        select(TeachingAssignment).where(TeachingAssignment.department_id.in_(scope.department_ids)).order_by(TeachingAssignment.id)
     ).scalars().all())
 
 
-def faculty_members(session: Session, scope: HodScope) -> List[FacultyProfile]:
+def faculty_members(session: Session, scope: Area) -> List[FacultyProfile]:
     return list(session.execute(
-        select(FacultyProfile).where(FacultyProfile.department_id == scope.department.id).order_by(FacultyProfile.employee_code)
+        select(FacultyProfile).where(FacultyProfile.department_id.in_(scope.department_ids)).order_by(FacultyProfile.employee_code)
     ).scalars().all())
 
 
-def students(session: Session, scope: HodScope) -> List[Student]:
+def students(session: Session, scope: Area) -> List[Student]:
     return list(session.execute(
-        select(Student).where(Student.department_id == scope.department.id).order_by(Student.year, Student.section, Student.student_code)
+        select(Student).where(Student.department_id.in_(scope.department_ids)).order_by(Student.year, Student.section, Student.student_code)
     ).scalars().all())
 
 
@@ -152,7 +175,7 @@ def class_view(session: Session, item: PlannedClass, now: datetime, grace: int) 
     )
 
 
-def activity(session: Session, scope: HodScope, now: datetime) -> List[DepartmentClassView]:
+def activity(session: Session, scope: Area, now: datetime) -> List[DepartmentClassView]:
     grace = start_grace_minutes()
     return [class_view(session, p, now, grace) for p in planned_classes(session, assignments(session, scope), local(now).date())]
 
@@ -240,7 +263,7 @@ def dashboard(session: Session, scope: HodScope, now: datetime) -> DepartmentDas
     )
 
 
-def faculty_list(session: Session, scope: HodScope, now: datetime) -> List[FacultySummary]:
+def faculty_list(session: Session, scope: Area, now: datetime) -> List[FacultySummary]:
     views = activity(session, scope, now)
     by_faculty: Dict[int, List[DepartmentClassView]] = {}
     for v in views:
@@ -259,7 +282,7 @@ def faculty_list(session: Session, scope: HodScope, now: datetime) -> List[Facul
             WorkflowRequest.status.in_([WorkflowRequestStatus.PENDING, WorkflowRequestStatus.NEEDS_REVIEW]))).all()
         result.append(FacultySummary(
             faculty_id=f.id, employee_code=f.employee_code, full_name=f.full_name, designation=f.designation, email=f.email,
-            is_hod=scope.department.hod_faculty_id == f.id, courses=teaching.get(f.id, []), classes_today=len(mine),
+            is_hod=f.department.hod_faculty_id == f.id, courses=teaching.get(f.id, []), classes_today=len(mine),
             active_class=f"{active.course_title} ({active.class_label})" if active else None,
             not_started_today=len(not_started(mine)), pending_requests_to_review=len(to_review), own_open_requests=len(own_open),
         ))
@@ -317,7 +340,7 @@ def _session_summary(session: Session, row: AttendanceSession) -> SessionSummary
     )
 
 
-def attendance_insights(session: Session, knowledge: KnowledgeService, scope: HodScope, now: datetime) -> AttendanceInsights:
+def attendance_insights(session: Session, knowledge: KnowledgeService, scope: Area, now: datetime) -> AttendanceInsights:
     required = _required(knowledge, now)
     courses: List[CourseAttendanceSummary] = []
     sections: Dict[tuple, dict] = {}
@@ -374,7 +397,7 @@ def attendance_insights(session: Session, knowledge: KnowledgeService, scope: Ho
     )
 
 
-def student_risk(session: Session, knowledge: KnowledgeService, scope: HodScope, now: datetime) -> List[StudentRisk]:
+def student_risk(session: Session, knowledge: KnowledgeService, scope: Area, now: datetime) -> List[StudentRisk]:
     required = _required(knowledge, now)
     result: List[StudentRisk] = []
     for s in students(session, scope):
@@ -395,7 +418,7 @@ def student_risk(session: Session, knowledge: KnowledgeService, scope: HodScope,
     return result
 
 
-def present_today(session: Session, scope: HodScope, now: datetime, year: Optional[int], section: Optional[str]) -> List[SessionSummary]:
+def present_today(session: Session, scope: Area, now: datetime, year: Optional[int], section: Optional[str]) -> List[SessionSummary]:
     """Started/closed sessions today for the department's classes, optionally one year/section."""
     chosen = [a for a in assignments(session, scope)
               if (year is None or a.year == year) and (section is None or a.section.upper() == section.upper())]
@@ -414,10 +437,10 @@ def present_today(session: Session, scope: HodScope, now: datetime, year: Option
 # ---------------------------------------------------------------------------
 
 
-def complaints(session: Session, scope: HodScope, now: datetime) -> List[DepartmentComplaint]:
+def complaints(session: Session, scope: Area, now: datetime) -> List[DepartmentComplaint]:
     rows = session.execute(
         select(CampusCase).join(Student, Student.id == CampusCase.student_id)
-        .where(Student.department_id == scope.department.id).order_by(CampusCase.created_at.desc())
+        .where(Student.department_id.in_(scope.department_ids)).order_by(CampusCase.created_at.desc())
     ).scalars().all()
     result = []
     for case in rows:

@@ -1,4 +1,4 @@
-import { Bot, Building2, FileCheck2, Users, Briefcase, CalendarDays, ClipboardCheck, ClipboardList, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, type LucideIcon } from "lucide-react";
+import { Bot, Building2, Cpu, FileCheck2, ScrollText, UserCog, Users, Briefcase, CalendarDays, ClipboardCheck, ClipboardList, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, type LucideIcon } from "lucide-react";
 import type { Role } from "@/types/api";
 
 export interface NavItem {
@@ -35,14 +35,27 @@ const HOD_NAV: NavItem[] = [
   { label: "Attendance", to: "/hod/attendance", icon: ClipboardCheck },
   { label: "Agents", to: "/hod/agents", icon: Bot },
   { label: "Requests", to: "/hod/requests", icon: Inbox },
+  { label: "My Requests", to: "/hod/my-requests", icon: FileCheck2 },
   { label: "Complaints", to: "/hod/complaints", icon: MessageSquareWarning },
+];
+
+const ADMIN_NAV: NavItem[] = [
+  { label: "Overview", to: "/admin", icon: LayoutDashboard, end: true },
+  { label: "Departments", to: "/admin/departments", icon: Building2 },
+  { label: "Users", to: "/admin/users", icon: UserCog },
+  { label: "Attendance", to: "/admin/attendance", icon: ClipboardCheck },
+  { label: "Requests", to: "/admin/requests", icon: Inbox },
+  { label: "Complaints", to: "/admin/complaints", icon: MessageSquareWarning },
+  { label: "AI Operations", to: "/admin/ai-operations", icon: Cpu },
+  { label: "Audit Log", to: "/admin/audit", icon: ScrollText },
+  { label: "Agents", to: "/admin/agents", icon: Bot },
 ];
 
 export function navigationFor(role: Role): NavItem[] {
   if (role === "student") return STUDENT_NAV;
   if (role === "faculty") return FACULTY_NAV;
   if (role === "hod") return HOD_NAV;
-  return [{ label: "Overview", to: "/admin", icon: LayoutDashboard, end: true }];
+  return ADMIN_NAV;
 }
 
 export function settingsPathFor(role: Role): string {

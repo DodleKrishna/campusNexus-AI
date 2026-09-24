@@ -48,6 +48,7 @@ from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
 from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.department import HodQueryPlan
+from app.schemas.admin_console import AdminQueryPlan
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
 from app.schemas.workflow import PermissionIntent
@@ -92,6 +93,13 @@ _SYSTEM_PERMISSION_PROMPT = (
     "workflow. You never grant anything, never choose who reviews it, never invent an event, date or reason, and "
     "never compute a date: report the day only as today, tomorrow, yesterday or an explicit date the student wrote. "
     "event_reference must be words copied from the message. If the student gave no reason, leave reason null."
+)
+
+_ADMIN_QUERY_TOOL_NAME = "classify_admin_query"
+_SYSTEM_ADMIN_QUERY_PROMPT = (
+    "You classify a campus administrator's institution-wide question into a structured intent. You never answer, "
+    "count or compute anything -- the system computes every figure from records. Copy a department code only if "
+    "the question names one; never invent one."
 )
 
 _HOD_QUERY_TOOL_NAME = "classify_hod_query"
@@ -480,6 +488,12 @@ class AnthropicLLMProvider(LLMProvider):
         return self._structured(
             max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_HOD_QUERY_PROMPT, content=f"HOD question: {message}",
             tool_name=_HOD_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=HodQueryPlan,
+        )
+
+    def plan_admin_query(self, message: str) -> AdminQueryPlan:
+        return self._structured(
+            max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_ADMIN_QUERY_PROMPT, content=f"Administrator question: {message}",
+            tool_name=_ADMIN_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=AdminQueryPlan,
         )
 
     def plan_mission(

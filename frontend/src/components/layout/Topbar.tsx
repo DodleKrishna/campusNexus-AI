@@ -9,6 +9,7 @@ import { SkeletonRows } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState } from "@/components/ui/states";
 import { ROLE_LABELS } from "@/auth/roles";
 import { useAuth } from "@/auth/useAuth";
+import { useAdminNotifications } from "@/hooks/useAdminData";
 import { useStaffNotifications } from "@/hooks/useHodData";
 import { useNotifications } from "@/hooks/useStudentData";
 import { initials, relativeTime, titleCase } from "@/utils/format";
@@ -37,10 +38,11 @@ function AskCampusNexus() {
   );
 }
 
-function NotificationsMenu({ staff = false }: { staff?: boolean }) {
-  const student = useNotifications(!staff);
-  const staffFeed = useStaffNotifications(staff);
-  const { data, isLoading, isError, error, refetch } = staff ? staffFeed : student;
+function NotificationsMenu({ feed = "student" }: { feed?: "student" | "staff" | "admin" }) {
+  const student = useNotifications(feed === "student");
+  const staffFeed = useStaffNotifications(feed === "staff");
+  const adminFeed = useAdminNotifications(feed === "admin");
+  const { data, isLoading, isError, error, refetch } = feed === "admin" ? adminFeed : feed === "staff" ? staffFeed : student;
   const unread = data?.filter((n) => n.status !== "read").length ?? 0;
   return (
     <Popover
@@ -81,7 +83,8 @@ export function Topbar() {
       <div className="flex flex-1 items-center">{isStudent && <AskCampusNexus />}</div>
       <ModeBadge />
       {isStudent && <NotificationsMenu />}
-      {(user.role === "faculty" || user.role === "hod") && <NotificationsMenu staff />}
+      {(user.role === "faculty" || user.role === "hod") && <NotificationsMenu feed="staff" />}
+      {user.role === "admin" && <NotificationsMenu feed="admin" />}
       <div className="flex items-center gap-2.5 border-l border-border pl-4">
         <div className="flex size-8 items-center justify-center rounded-full bg-primary-soft text-xs font-semibold text-primary" aria-hidden>
           {initials(user.display_name)}

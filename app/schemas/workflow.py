@@ -14,9 +14,13 @@ REQUEST_TYPE_LABELS = {
     "faculty_leave": "Faculty Leave",
     "class_substitution": "Class Substitution",
     "department_permission": "Department Permission",
+    "hod_leave": "HOD Leave",
+    "department_resource": "Department Resource",
+    "admin_escalation": "Admin Escalation",
 }
 STUDENT_REQUEST_TYPES = ("event_permission", "attendance_permission", "leave_request", "od_request")
 FACULTY_REQUEST_TYPES = ("faculty_leave", "class_substitution", "od_request", "department_permission")
+HOD_REQUEST_TYPES = ("hod_leave", "department_resource", "department_permission", "admin_escalation", "od_request", "class_substitution")
 
 
 class RequestEvent(BaseModel):
@@ -82,6 +86,10 @@ class WorkflowRequestView(BaseModel):
     student_name: Optional[str] = None
     requester_kind: str = "student"
     requester_name: Optional[str] = None
+    requester_role: Optional[str] = None
+    department_code: Optional[str] = None
+    reviewer_role: Optional[str] = None
+    routing_history: List[dict] = Field(default_factory=list)
     reviewer_name: Optional[str] = None
     routing_basis: str
     routing_note: str
@@ -125,7 +133,8 @@ class PermissionPreview(BaseModel):
 class PermissionIntent(BaseModel):
     request_type: Literal[
         "event_permission", "attendance_permission", "leave_request", "od_request",
-        "faculty_leave", "class_substitution", "department_permission", "unclear",
+        "faculty_leave", "class_substitution", "department_permission",
+        "department_resource", "admin_escalation", "unclear",
     ] = Field(
         description=(
             "event_permission: permission to attend/participate in a campus event (contest, workshop, fest). "
@@ -135,6 +144,8 @@ class PermissionIntent(BaseModel):
             "faculty_leave: a faculty member asking for leave from their teaching duties. "
             "class_substitution: a faculty member asking for someone to take their classes. "
             "department_permission: a faculty member asking the department for permission (e.g. to hold or attend an event). "
+            "department_resource: asking for a resource for the department (budget, equipment, lab, room, staff). "
+            "admin_escalation: raising an issue with the administration that the department cannot resolve. "
             "unclear: none of these, or not a request."
         )
     )

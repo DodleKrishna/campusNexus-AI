@@ -63,6 +63,25 @@ class StaffNotification(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
+class AccountNotification(Base):
+    """Phase 18: an in-app notification for an account with no faculty/student profile (administrators)."""
+
+    __tablename__ = "account_notifications"
+    __table_args__ = (UniqueConstraint("account_id", "ref_key", name="uq_account_notifications_account_ref"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("auth_accounts.id"), index=True)
+    title: Mapped[str] = mapped_column(String(150))
+    body: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(60))
+    status: Mapped[NotificationStatus] = mapped_column(
+        SAEnum(NotificationStatus, values_callable=lambda e: [m.value for m in e]),
+        default=NotificationStatus.SENT,
+    )
+    ref_key: Mapped[Optional[str]] = mapped_column(String(120), default=None)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+
+
 class CalendarEvent(Base):
     """A student-facing calendar entry, e.g. mirroring an exam or event."""
 

@@ -12,6 +12,7 @@ from app.api.auth_deps import AuthenticatedUser, require_authenticated_user
 from app.api.deps import get_session
 from app.auth.accounts import authenticate
 from app.auth.tokens import issue_token
+from app.db.repositories import operations_audit
 from app.db.models.identity import Department
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -57,6 +58,12 @@ def login(body: LoginRequest, session: Session = Depends(get_session)) -> LoginR
     account = authenticate(session, body.email, body.password)
     if account is None:
         raise HTTPException(status_code=401, detail="Incorrect email or password.")
+    # Phase 18: successful sign-ins are audited (never the password, never failed-attempt details).
+    operations_audit.record(
+        session, event_type="login", actor_account_id=account.id, actor_role=account.role.value,
+        subject_type="auth_account", subject_id=str(account.id), message=f"{account.display_name} signed in.",
+    )
+    session.commit()
     token, expires_at = issue_token(account.id, account.role.value)
     user = AuthenticatedUser(
         account_id=account.id, email=account.email, role=account.role, display_name=account.display_name,

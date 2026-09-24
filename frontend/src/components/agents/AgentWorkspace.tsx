@@ -91,7 +91,9 @@ export function AgentWorkspace({
             <div className="mx-auto max-w-xl py-8 text-center">
               <p className="text-sm font-medium">Ask {agent.name} a question</p>
               <p className="mt-1 text-xs text-muted">
-                {scope === "hod"
+                {scope === "admin"
+                  ? "Answers cover the whole institution, from records. Every count is computed, never estimated."
+                  : scope === "hod"
                   ? "Answers use only your department's classes, students, requests and complaints. Every count is computed from records."
                   : scope === "faculty"
                   ? "Answers use only your own classes and the requests routed to you. Every count is computed from attendance records."

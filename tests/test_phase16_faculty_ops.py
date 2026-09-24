@@ -204,7 +204,8 @@ def test_session_lifecycle_start_mark_close_updates_counters_once(client, sessio
         absent_after, late_after = _counters(session, "STU2023023", "CS303"), _counters(session, "STU2023024", "CS303")
         assert absent_after == (before[0][0], before[0][1] + 1)  # conducted +1, attended unchanged
         assert late_after == (before[1][0] + 1, before[1][1] + 1)  # late counts as attended
-        events = [e.event_type for e in session.execute(select(OperationAuditEvent).order_by(OperationAuditEvent.id)).scalars()]
+        events = [e.event_type for e in session.execute(select(OperationAuditEvent).where(
+            OperationAuditEvent.subject_type == "attendance_session").order_by(OperationAuditEvent.id)).scalars()]
         assert events == ["class_started", "attendance_marked", "attendance_marked", "class_closed"]
         student = session.execute(select(Student).where(Student.student_code == "STU2023023")).scalar_one()
         note = session.execute(select(Notification).where(Notification.student_id == student.id, Notification.category == "attendance")).scalar_one()
@@ -425,11 +426,17 @@ def test_attendance_permission_routes_to_the_affected_course_faculty_and_can_be_
 
 
 def test_unresolvable_routing_needs_review_and_nobody_can_decide(client, session_factory) -> None:
-    # Phase 17 escalates to the department HOD, so remove the mentor AND the head to leave nobody.
+    # Phase 17 escalates to the department HOD and Phase 18 to the administration, so remove the
+    # mentor, the head AND every active admin account to leave nobody.
+    from app.db.models.auth import AuthAccount
+    from app.schemas.enums import UserRole
+
     with session_factory() as session:
         aditi = session.execute(select(Student).where(Student.student_code == "STU-DEMO-001")).scalar_one()
         aditi.mentor_faculty_id = None
         aditi.department.hod_faculty_id = None
+        for admin in session.execute(select(AuthAccount).where(AuthAccount.role == UserRole.ADMIN)).scalars():
+            admin.is_active = False
         session.commit()
     student = auth(client, STUDENT)
     draft = prepare(client, student, "I need permission to attend the coding contest.")["request"]

@@ -360,7 +360,10 @@ export interface WorkflowRequest {
     | "od_request"
     | "faculty_leave"
     | "class_substitution"
-    | "department_permission";
+    | "department_permission"
+    | "hod_leave"
+    | "department_resource"
+    | "admin_escalation";
   type_label: string;
   status: WorkflowRequestStatus;
   title: string;
@@ -369,8 +372,12 @@ export interface WorkflowRequest {
   student_name: string | null;
   requester_kind?: "student" | "faculty";
   requester_name?: string | null;
+  requester_role?: string | null;
+  department_code?: string | null;
+  reviewer_role?: "faculty" | "admin" | null;
+  routing_history?: { at: string; basis: string; reviewer: string; note: string }[];
   reviewer_name: string | null;
-  routing_basis: "affected_course_faculty" | "mentor" | "unresolved" | "hod_escalation" | "department_hod";
+  routing_basis: "affected_course_faculty" | "mentor" | "unresolved" | "hod_escalation" | "department_hod" | "admin_escalation" | "administration";
   routing_note: string;
   context: RequestContext;
   created_at: string;
@@ -559,4 +566,144 @@ export interface DepartmentOverview {
   at_risk_students: number;
   below_threshold_entries: number;
   required_percentage: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 18: administrator console
+// ---------------------------------------------------------------------------
+
+export interface DepartmentRow {
+  department_id: number;
+  code: string;
+  name: string;
+  hod_name: string | null;
+  faculty_count: number;
+  student_count: number;
+  classes_today: number;
+  active_classes: number;
+  not_started_classes: number;
+  attendance_risk_students: number;
+  pending_requests: number;
+  open_complaints: number;
+  sla_breaches: number;
+}
+
+export interface AdminDashboard {
+  date: string;
+  now_local: string;
+  start_grace_minutes: number;
+  total_students: number;
+  total_faculty: number;
+  departments: number;
+  classes_today: number;
+  active_classes: number;
+  not_started_classes: number;
+  completed_classes: number;
+  cancelled_classes: number;
+  pending_requests: number;
+  escalations: number;
+  sla_breaches: number;
+  system_errors_24h: number;
+  activity: DepartmentClass[];
+  department_filter: string | null;
+}
+
+export interface DepartmentDetail {
+  department: DepartmentRow;
+  activity: DepartmentClass[];
+  faculty: FacultySummary[];
+  at_risk_students: StudentRisk[];
+  attendance: AttendanceInsights;
+  complaints: DepartmentComplaint[];
+}
+
+export interface DepartmentAttendance {
+  code: string;
+  name: string;
+  students: number;
+  classes_attended: number;
+  classes_conducted: number;
+  percentage: number | null;
+  students_below_threshold: number;
+}
+
+export interface AdminAttendance {
+  required_percentage: number | null;
+  by_department: DepartmentAttendance[];
+  insights: AttendanceInsights;
+  active_sessions: SessionSummary[];
+  low_attendance_students: number;
+}
+
+export interface AdminComplaint extends DepartmentComplaint {
+  student_department: string;
+}
+
+export interface UserView {
+  account_id: number;
+  email: string;
+  display_name: string;
+  role: Role;
+  is_active: boolean;
+  department_code: string | null;
+  linked_student_id: string | null;
+  linked_faculty: string | null;
+  is_department_head: boolean;
+  last_login_at: string | null;
+  allowed_roles: Role[];
+}
+
+export interface PasswordReset {
+  account_id: number;
+  temporary_password: string;
+  note: string;
+}
+
+export interface OpsEvent {
+  timestamp: string;
+  event_type: string;
+  reference: string;
+  message: string;
+  details: Record<string, unknown>;
+}
+
+export interface AIOperations {
+  provider: string;
+  model: string | null;
+  live: boolean;
+  live_ai_configured: Record<string, boolean>;
+  missions_by_status: Record<string, number>;
+  recent_missions: { mission_id: string; user_id: string; goal: string; status: string; created_at: string; updated_at: string }[];
+  agent_runs_total: number;
+  agent_runs_failed: number;
+  failed_missions: number;
+  provider_errors: number;
+  rate_limit_incidents: number;
+  recent_provider_errors: OpsEvent[];
+  pending_approvals: number;
+  stale_approvals: number;
+  workflow_failures: number;
+  recent_workflow_failures: OpsEvent[];
+  requests_needing_review: number;
+  rag_chunks: number;
+  rag_ready: boolean;
+  database_ready: boolean;
+  token_usage: string;
+}
+
+export interface AuditEntry {
+  timestamp: string;
+  source: "mission" | "operations";
+  actor: string;
+  role: string;
+  action: string;
+  target: string;
+  reference: string;
+  outcome: string;
+}
+
+export interface SystemStatus {
+  overall: "ready" | "degraded";
+  components: { name: string; status: "ready" | "degraded" | "unavailable"; detail: string }[];
+  settings: Record<string, unknown>;
 }

@@ -19,10 +19,12 @@ const SUGGESTIONS = {
     "I need leave tomorrow afternoon.",
   ],
   faculty: ["I need leave tomorrow afternoon.", "I need a substitute for my classes tomorrow.", "I need on duty leave tomorrow for an external workshop."],
+  hod: ["I need leave tomorrow.", "I need a new projector for the CSE lab because the old one broke.", "I need to escalate the lab staffing shortage to the admin."],
 };
 const INTRO = {
   student: "Describe what you need. The agent collects your event, classes and attendance, finds the right faculty member, and shows you the request before anything is sent.",
   faculty: "Describe what you need. The agent collects the classes you would miss, sends the request to your HOD, and shows it to you before anything is sent.",
+  hod: "Describe what you need. The agent collects the classes you would miss, sends the request to the Administration, and shows it to you before anything is sent.",
 };
 
 const errorText = (error: unknown) => (error instanceof ApiError ? error.message : "CampusNexus couldn't reach the Permission Agent.");
@@ -37,7 +39,7 @@ export function PermissionAgentPanel({
   initialMessage,
 }: {
   onSent?: (request: WorkflowRequest) => void;
-  role?: "student" | "faculty";
+  role?: "student" | "faculty" | "hod";
   initialMessage?: string;
 }) {
   const client = useQueryClient();

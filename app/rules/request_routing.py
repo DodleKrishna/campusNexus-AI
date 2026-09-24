@@ -14,6 +14,10 @@ with the faculty assigned to teach it) and the student's mentor:
 * Faculty requests (``route_faculty_request``) go to the head of the
   requester's department (basis ``department_hod``). A department head's own
   request has no one above them yet, so it needs review.
+* Phase 18: the administration is the last step. A student request with no
+  class faculty, mentor or HOD, a faculty request with no HOD, and every
+  department head's own request (``route_hod_request``) go to the
+  administration (a reviewer with ``role="admin"``; any active admin decides).
 * No reviewer found: status NEEDS_REVIEW, reviewer None. Never a guess.
 """
 from __future__ import annotations
@@ -29,8 +33,12 @@ FACULTY_REQUEST_TYPES = frozenset({"faculty_leave", "class_substitution", "od_re
 
 @dataclass(frozen=True)
 class Reviewer:
-    faculty_id: int
+    faculty_id: Optional[int]
     name: str
+    role: str = "faculty"  # "faculty" (a faculty member or HOD) or "admin" (the administration)
+
+
+ADMINISTRATION = Reviewer(None, "the Administration", "admin")
 
 
 @dataclass(frozen=True)
@@ -49,13 +57,22 @@ def _single(affected: Iterable[Reviewer]) -> Optional[Reviewer]:
     return next(iter(distinct.values())) if len(distinct) == 1 else None
 
 
+def _to_admin(decision: RoutingDecision, admin: Optional[Reviewer]) -> RoutingDecision:
+    if decision.resolved or admin is None:
+        return decision
+    why = decision.note.split(": ", 1)[-1].rstrip(".")
+    return RoutingDecision(admin, "admin_escalation", f"Escalated to the Administration ({why}).")
+
+
 def route_request(
     request_type: str, affected_faculty: Iterable[Reviewer], mentor: Optional[Reviewer],
-    hod: Optional[Reviewer] = None, department_code: str = "",
+    hod: Optional[Reviewer] = None, department_code: str = "", admin: Optional[Reviewer] = None,
 ) -> RoutingDecision:
     decision = _route_student(request_type, affected_faculty, mentor)
-    if decision.resolved or hod is None:
+    if decision.resolved:
         return decision
+    if hod is None:
+        return _to_admin(RoutingDecision(None, "unresolved", decision.note.rstrip(".") + "; the department has no HOD on record."), admin)
     why = decision.note.split(": ", 1)[-1].rstrip(".")
     return RoutingDecision(
         hod, "hod_escalation",
@@ -63,13 +80,22 @@ def route_request(
     )
 
 
-def route_faculty_request(requester_faculty_id: int, hod: Optional[Reviewer], department_code: str = "") -> RoutingDecision:
+def route_faculty_request(
+    requester_faculty_id: int, hod: Optional[Reviewer], department_code: str = "", admin: Optional[Reviewer] = None,
+) -> RoutingDecision:
     label = f"HOD{', ' + department_code if department_code else ''}"
+    if hod is not None and hod.faculty_id == requester_faculty_id:
+        return route_hod_request(admin)
     if hod is None:
-        return RoutingDecision(None, "unresolved", f"No reviewer could be determined: the department has no {label} on record.")
-    if hod.faculty_id == requester_faculty_id:
-        return RoutingDecision(None, "unresolved", "No reviewer could be determined: a department head's own requests go to the administration, which is not set up yet.")
+        return _to_admin(RoutingDecision(None, "unresolved", f"No reviewer could be determined: the department has no {label} on record."), admin)
     return RoutingDecision(hod, "department_hod", f"Sent to {hod.name}, {label}.")
+
+
+def route_hod_request(admin: Optional[Reviewer]) -> RoutingDecision:
+    """A department head's own request goes to the administration."""
+    if admin is None:
+        return RoutingDecision(None, "unresolved", "No reviewer could be determined: no administrator account is active.")
+    return RoutingDecision(admin, "administration", "Sent to the Administration.")
 
 
 def _route_student(request_type: str, affected_faculty: Iterable[Reviewer], mentor: Optional[Reviewer]) -> RoutingDecision:

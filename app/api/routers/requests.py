@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.agents.permission.agent import PermissionAgent
-from app.api.auth_deps import AuthenticatedUser, FacultyCaller, current_faculty_profile, require_authenticated_user
+from app.api.auth_deps import AuthenticatedUser, current_faculty_profile, require_authenticated_user
 from app.api.deps import get_knowledge_service, get_now, get_session
 from app.auth.accounts import get_account
 from app.llm.base import LLMProviderError, LLMTransientError
@@ -87,6 +87,10 @@ def list_requests(
             if scope is not None:
                 department_ops.escalate_unassigned(session, scope, now)
             rows = workflow_requests.list_for_reviewer(session, faculty)
+    elif user.role == UserRole.ADMIN:
+        # Phase 18: the administration's inbox. Anything stuck with no reviewer is escalated here first.
+        workflow_requests.escalate_unassigned_to_admin(session, now)
+        rows = workflow_requests.list_for_admin(session)
     else:
         raise HTTPException(status_code=403, detail="Your role does not have access to this.")
     return [workflow_requests.view(session, r) for r in rows]
@@ -100,6 +104,8 @@ def get_request(
     allowed = request is not None and request.requester_account_id == user.account_id and (
         user.role != UserRole.STUDENT or request.submitted_at is not None
     )
+    if request is not None and not allowed and user.role == UserRole.ADMIN:
+        allowed = request.submitted_at is not None  # institution-wide visibility for administrators
     if request is not None and not allowed and user.role in _STAFF:
         faculty = faculty_for_account(session, user.account_id)
         allowed = faculty is not None and request.reviewer_faculty_id == faculty.id and request.submitted_at is not None
@@ -149,22 +155,30 @@ def cancel(
     return workflow_requests.view(session, request)
 
 
-def _decide(request_id: str, approve: bool, body: DecisionBody, caller: FacultyCaller, session: Session, now: datetime) -> WorkflowRequestView:
+def _decide(request_id: str, approve: bool, body: DecisionBody, user: AuthenticatedUser, session: Session, now: datetime) -> WorkflowRequestView:
+    """Faculty/HOD decide requests routed to them; administrators decide requests routed to the administration."""
+    if user.role == UserRole.ADMIN:
+        account = get_account(session, user.account_id)
+        request = _run(lambda: workflow_requests.decide_as_admin(session, account, request_id, approve, body.comment, now))
+        return workflow_requests.view(session, request)
+    if user.role not in _STAFF:
+        raise HTTPException(status_code=403, detail="Your role does not have access to this.")
+    caller = current_faculty_profile(user, session)
     request = _run(lambda: workflow_requests.decide(session, caller.account, caller.faculty, request_id, approve, body.comment, now))
     return workflow_requests.view(session, request)
 
 
 @router.post("/{request_id}/approve", response_model=WorkflowRequestView)
 def approve(
-    request_id: str, body: DecisionBody, caller: FacultyCaller = Depends(current_faculty_profile),
+    request_id: str, body: DecisionBody, user: AuthenticatedUser = Depends(require_authenticated_user),
     session: Session = Depends(get_session), now: datetime = Depends(get_now),
 ) -> WorkflowRequestView:
-    return _decide(request_id, True, body, caller, session, now)
+    return _decide(request_id, True, body, user, session, now)
 
 
 @router.post("/{request_id}/reject", response_model=WorkflowRequestView)
 def reject(
-    request_id: str, body: DecisionBody, caller: FacultyCaller = Depends(current_faculty_profile),
+    request_id: str, body: DecisionBody, user: AuthenticatedUser = Depends(require_authenticated_user),
     session: Session = Depends(get_session), now: datetime = Depends(get_now),
 ) -> WorkflowRequestView:
-    return _decide(request_id, False, body, caller, session, now)
+    return _decide(request_id, False, body, user, session, now)

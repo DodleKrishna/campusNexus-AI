@@ -40,7 +40,14 @@ from app.db.repositories.students import get_student_by_id
 from app.rules.attendance import compute_attendance
 from app.rules.attendance_standing import attendance_standing
 from app.rules.class_session import overlaps
-from app.rules.request_routing import Reviewer, RoutingDecision, route_faculty_request, route_request
+from app.rules.request_routing import (
+    ADMINISTRATION,
+    Reviewer,
+    RoutingDecision,
+    route_faculty_request,
+    route_hod_request,
+    route_request,
+)
 from app.schemas.workflow import (
     REQUEST_TYPE_LABELS,
     AffectedClass,
@@ -59,7 +66,8 @@ from app.services.class_schedule import (
     planned_classes,
     student_assignments,
 )
-from app.services import staff_notifications
+from app.schemas.enums import UserRole
+from app.services import account_notifications, staff_notifications
 from app.services.faculty_ops import course_counters, required_percentage
 from app.services.knowledge import KnowledgeService
 
@@ -201,6 +209,14 @@ class Requester:
     def kind(self) -> str:
         return "student" if self.student is not None else "faculty"
 
+    @property
+    def is_department_head(self) -> bool:
+        """Phase 18: an HOD account that heads its department asks the administration."""
+        return (
+            self.faculty is not None and self.account is not None and self.account.role == UserRole.HOD
+            and self.faculty.department is not None and self.faculty.department.hod_faculty_id == self.faculty.id
+        )
+
 
 # Phase 17: what a faculty member's interpreted request becomes.
 _FACULTY_TYPE_MAP = {
@@ -211,6 +227,19 @@ _FACULTY_TYPE_MAP = {
     "department_permission": WorkflowRequestType.DEPARTMENT_PERMISSION,
     "event_permission": WorkflowRequestType.DEPARTMENT_PERMISSION,
 }
+# Phase 18: what a department head's interpreted request becomes (routed to the administration).
+_HOD_TYPE_MAP = {
+    "faculty_leave": WorkflowRequestType.HOD_LEAVE,
+    "leave_request": WorkflowRequestType.HOD_LEAVE,
+    "class_substitution": WorkflowRequestType.CLASS_SUBSTITUTION,
+    "od_request": WorkflowRequestType.OD_REQUEST,
+    "department_permission": WorkflowRequestType.DEPARTMENT_PERMISSION,
+    "event_permission": WorkflowRequestType.DEPARTMENT_PERMISSION,
+    "department_resource": WorkflowRequestType.DEPARTMENT_RESOURCE,
+    "admin_escalation": WorkflowRequestType.ADMIN_ESCALATION,
+}
+# Requests about something rather than a day: no date is required.
+_UNDATED = {WorkflowRequestType.DEPARTMENT_RESOURCE, WorkflowRequestType.ADMIN_ESCALATION}
 _STUDENT_TYPES = {"event_permission", "attendance_permission", "leave_request", "od_request"}
 
 
@@ -220,7 +249,7 @@ def collect_context(
 ) -> Collected | NeedsInput:
     """Everything the reviewer needs, gathered deterministically from the database."""
     if requester.kind == "faculty":
-        return _collect_faculty(session, requester.faculty, intent, message, now)
+        return _collect_faculty(session, requester.faculty, intent, message, now, head=requester.is_department_head)
     return _collect_student(session, requester.student, intent, message, now, required)
 
 
@@ -312,10 +341,15 @@ def _faculty_affected_view(session: Session, item: PlannedClass) -> AffectedClas
 
 
 def _collect_faculty(
-    session: Session, faculty: FacultyProfile, intent: PermissionIntent, message: str, now: datetime,
+    session: Session, faculty: FacultyProfile, intent: PermissionIntent, message: str, now: datetime, *, head: bool = False,
 ) -> Collected | NeedsInput:
-    request_type = _FACULTY_TYPE_MAP.get(intent.request_type)
+    request_type = (_HOD_TYPE_MAP if head else _FACULTY_TYPE_MAP).get(intent.request_type)
     if request_type is None:
+        if head:
+            return NeedsInput(
+                "I can prepare HOD leave, department resource, department permission, OD and escalation requests "
+                "to the administration. Tell me which one you need, and why."
+            )
         return NeedsInput(
             "I can prepare faculty leave, class substitution, on-duty (OD) and department permission requests. "
             "Tell me which one you need, for which day, and why."
@@ -336,6 +370,11 @@ def _collect_faculty(
         base.event = RequestEvent(event_id=event.id, title=event.title, starts_at=start, ends_at=end, location=event.location)
         base.request_date = local(start).date()
         title = f"{label}: {event.title}"
+    elif request_type in _UNDATED and _resolve_date(intent, now) is None:
+        summary = (intent.reason or message).strip().rstrip(".")
+        title = f"{label}: {summary[:80]}"
+        base.notes.append("Not tied to a date, so no classes are affected.")
+        return Collected(request_type=request_type, title=title, context=base, affected=[])
     else:
         day = _resolve_date(intent, now)
         if day is None:
@@ -353,7 +392,9 @@ def _collect_faculty(
     if not affected:
         base.notes.append("None of your classes fall in this period.")
     elif request_type in (WorkflowRequestType.FACULTY_LEAVE, WorkflowRequestType.CLASS_SUBSTITUTION, WorkflowRequestType.OD_REQUEST):
-        base.notes.append("Substitutes are not assigned automatically; the HOD arranges cover.")
+        base.notes.append(
+            "Substitutes are not assigned automatically; " + ("the administration arranges cover." if head else "the HOD arranges cover.")
+        )
     if request_type == WorkflowRequestType.CLASS_SUBSTITUTION and not affected:
         return NeedsInput("You have no classes in that period, so there is nothing to substitute.")
     return Collected(request_type=request_type, title=title, context=base, affected=affected)
@@ -362,11 +403,14 @@ def _collect_faculty(
 def route(session: Session, requester: Requester, collected: Collected) -> RoutingDecision:
     from app.services.department_ops import department_head
 
+    admin = admin_reviewer(session)
     if requester.kind == "faculty":
         faculty = requester.faculty
+        if requester.is_department_head:
+            return route_hod_request(admin)
         hod = department_head(session, faculty.department_id)
         return route_faculty_request(
-            faculty.id, Reviewer(hod.id, hod.full_name) if hod else None, faculty.department.code,
+            faculty.id, Reviewer(hod.id, hod.full_name) if hod else None, faculty.department.code, admin,
         )
     student = requester.student
     affected = [Reviewer(p.assignment.faculty.id, p.assignment.faculty.full_name) for p in collected.affected]
@@ -374,8 +418,20 @@ def route(session: Session, requester: Requester, collected: Collected) -> Routi
     hod = department_head(session, student.department_id)
     return route_request(
         collected.request_type.value, affected, Reviewer(mentor.id, mentor.full_name) if mentor else None,
-        Reviewer(hod.id, hod.full_name) if hod else None, student.department.code,
+        Reviewer(hod.id, hod.full_name) if hod else None, student.department.code, admin,
     )
+
+
+def admin_reviewer(session: Session) -> Optional[Reviewer]:
+    """The administration, if any active admin account exists to decide requests."""
+    exists = session.execute(
+        select(AuthAccount.id).where(AuthAccount.role == UserRole.ADMIN, AuthAccount.is_active.is_(True))
+    ).first()
+    return ADMINISTRATION if exists is not None else None
+
+
+def _history(request: WorkflowRequest, basis: str, reviewer: str, note: str, now: datetime) -> None:
+    request.routing_history = [*(request.routing_history or []), {"at": now.isoformat(), "basis": basis, "reviewer": reviewer, "note": note}]
 
 
 # ---------------------------------------------------------------------------
@@ -397,10 +453,12 @@ def create_draft(
         requester_account_id=account.id, requester_role=account.role.value,
         student_id=student.student_code if student else None, requester_faculty_id=faculty.id if faculty else None,
         reviewer_faculty_id=routing.reviewer.faculty_id if routing.reviewer else None,
+        reviewer_role="admin" if routing.reviewer and routing.reviewer.role == "admin" else None,
         department_id=(student or faculty).department_id, title=collected.title, reason=reason,
         context=collected.context.model_dump(mode="json"), routing_basis=routing.basis, routing_note=routing.note,
         created_at=now,
     )
+    _history(request, routing.basis, routing.reviewer.name if routing.reviewer else "none", routing.note, now)
     session.add(request)
     session.flush()
     operations_audit.record(
@@ -476,9 +534,16 @@ def submit(session: Session, account: AuthAccount, request_code: str, reason: Op
         raise RequestError(f"This request was already {request.status.value.replace('_', ' ')}.")
     if reason:
         request.reason = reason.strip()
-    request.status = WorkflowRequestStatus.PENDING if request.reviewer_faculty_id else WorkflowRequestStatus.NEEDS_REVIEW
+    request.status = WorkflowRequestStatus.PENDING if (request.reviewer_faculty_id or request.reviewer_role == "admin") else WorkflowRequestStatus.NEEDS_REVIEW
     request.submitted_at = now
-    if request.reviewer is not None:
+    if request.reviewer_role == "admin":
+        _notify_requester(session, request, "Request sent", f"Your {_subject(request)} was sent to the Administration.", now)
+        account_notifications.notify_admins(
+            session, "Escalated request" if request.routing_basis == "admin_escalation" else "New request for the administration",
+            f"{_requester_name(session, request)} ({request.requester_role}): {request.title}. {request.routing_note}",
+            "admin_request", now=now, ref_key=f"request:{request.request_code}",
+        )
+    elif request.reviewer is not None:
         _notify_requester(session, request, "Request sent", f"Your {_subject(request)} was sent to {_reviewer_label(session, request, request.reviewer)}.", now)
         who = _requester_name(session, request)
         category = "escalated_request" if request.routing_basis == "hod_escalation" else "new_request"
@@ -493,7 +558,7 @@ def submit(session: Session, account: AuthAccount, request_code: str, reason: Op
     operations_audit.record(
         session, event_type="request_submitted", actor_account_id=account.id, actor_role=account.role.value,
         subject_type="workflow_request", subject_id=request.request_code,
-        message=f"Submitted to {request.reviewer.full_name if request.reviewer else 'no reviewer (needs review)'}.",
+        message=f"Submitted to {_reviewer_name(request) or 'no reviewer (needs review)'}.",
         metadata={"status": request.status.value, "routing_basis": request.routing_basis}, at=now,
     )
     session.commit()
@@ -519,6 +584,7 @@ def escalate_to_hod(session: Session, request: WorkflowRequest, hod: FacultyProf
     request.status = WorkflowRequestStatus.PENDING
     request.routing_basis = "hod_escalation"
     request.routing_note = f"Escalated to {hod.full_name}, HOD, {department.code} (no faculty reviewer could be determined)."
+    _history(request, "hod_escalation", hod.full_name, request.routing_note, now)
     _notify_student(session, request.student_id, "Request escalated", f"Your {_subject(request)} was escalated to the HOD, {department.code} ({hod.full_name}).", now)
     staff_notifications.notify(
         session, hod.id, "Escalated student request", f"{_requester_name(session, request)}: {request.title}. {request.routing_note}",
@@ -528,6 +594,85 @@ def escalate_to_hod(session: Session, request: WorkflowRequest, hod: FacultyProf
         session, event_type="request_escalated", actor_account_id=None, actor_role="system",
         subject_type="workflow_request", subject_id=request.request_code, message=request.routing_note, at=now,
     )
+
+
+def escalate_to_admin(session: Session, request: WorkflowRequest, now: datetime) -> None:
+    """Phase 18: a submitted request nobody below could take goes to the administration (staged)."""
+    request.reviewer_faculty_id = None
+    request.reviewer_role = "admin"
+    request.status = WorkflowRequestStatus.PENDING
+    request.routing_basis = "admin_escalation"
+    request.routing_note = "Escalated to the Administration (no reviewer could be determined at a lower level)."
+    _history(request, "admin_escalation", ADMINISTRATION.name, request.routing_note, now)
+    _notify_requester(session, request, "Request escalated", f"Your {_subject(request)} was escalated to the Administration.", now)
+    account_notifications.notify_admins(
+        session, "Escalated request", f"{_requester_name(session, request)} ({request.requester_role}): {request.title}. {request.routing_note}",
+        "admin_request", now=now, ref_key=f"request:{request.request_code}",
+    )
+    operations_audit.record(
+        session, event_type="request_escalated", actor_account_id=None, actor_role="system",
+        subject_type="workflow_request", subject_id=request.request_code, message=request.routing_note, at=now,
+        metadata={"to": "admin"},
+    )
+
+
+def escalate_unassigned_to_admin(session: Session, now: datetime) -> int:
+    """Every submitted NEEDS_REVIEW request with no reviewer goes to the administration (idempotent)."""
+    if admin_reviewer(session) is None:
+        return 0
+    rows = session.execute(select(WorkflowRequest).where(
+        WorkflowRequest.status == WorkflowRequestStatus.NEEDS_REVIEW, WorkflowRequest.reviewer_faculty_id.is_(None),
+        WorkflowRequest.submitted_at.is_not(None),
+    )).scalars().all()
+    for request in rows:
+        escalate_to_admin(session, request, now)
+    if rows:
+        session.commit()
+    return len(rows)
+
+
+def decide_as_admin(
+    session: Session, account: AuthAccount, request_code: str, approve: bool, comment: Optional[str], now: datetime,
+) -> WorkflowRequest:
+    """Only requests routed to the administration, only PENDING, once, never one's own."""
+    request = get_request(session, request_code)
+    if request is None or request.submitted_at is None:
+        raise RequestError("That request was not found.", status_code=404)
+    if request.requester_account_id == account.id:
+        raise RequestError("You cannot decide your own request.", status_code=403)
+    if request.reviewer_role != "admin":
+        raise RequestError("This request is not routed to the administration.", status_code=403)
+    if request.status != WorkflowRequestStatus.PENDING:
+        raise RequestError(f"This request was already {request.status.value.replace('_', ' ')}.")
+    request.status = WorkflowRequestStatus.APPROVED if approve else WorkflowRequestStatus.REJECTED
+    request.decided_at = now
+    request.decided_by_account_id = account.id
+    request.decision_reason = comment.strip() if comment and comment.strip() else None
+    verb = "approved" if approve else "rejected"
+    body = f"Your {_subject(request)} was {verb} by the Administration ({account.display_name})."
+    if request.decision_reason:
+        body += f" Comment: {request.decision_reason}"
+    _notify_requester(session, request, f"Request {verb}", body, now)
+    operations_audit.record(
+        session, event_type=f"request_{verb}", actor_account_id=account.id, actor_role=account.role.value,
+        subject_type="workflow_request", subject_id=request.request_code, message=body,
+        metadata={"comment": request.decision_reason, "reviewer": "admin"}, at=now,
+    )
+    session.commit()
+    return request
+
+
+def list_for_admin(session: Session) -> List[WorkflowRequest]:
+    return list(session.execute(
+        select(WorkflowRequest).where(WorkflowRequest.reviewer_role == "admin", WorkflowRequest.submitted_at.is_not(None))
+        .order_by(WorkflowRequest.id.desc())
+    ).scalars().all())
+
+
+def _reviewer_name(request: WorkflowRequest) -> Optional[str]:
+    if request.reviewer_role == "admin":
+        return "the Administration"
+    return request.reviewer.full_name if request.reviewer else None
 
 
 def decide(
@@ -595,13 +740,16 @@ def list_own_faculty(session: Session, faculty: FacultyProfile) -> List[Workflow
 
 def view(session: Session, request: WorkflowRequest) -> WorkflowRequestView:
     student = get_student_by_id(session, request.student_id) if request.student_id else None
+    department = session.get(Department, request.department_id) if request.department_id else None
     decider = session.get(AuthAccount, request.decided_by_account_id) if request.decided_by_account_id else None
     return WorkflowRequestView(
         request_id=request.request_code, request_type=request.request_type.value,
         type_label=REQUEST_TYPE_LABELS[request.request_type.value], status=request.status.value, title=request.title,
         reason=request.reason, student_id=request.student_id, student_name=student.user.full_name if student else None,
         requester_kind="faculty" if request.requester_faculty_id else "student", requester_name=_requester_name(session, request),
-        reviewer_name=request.reviewer.full_name if request.reviewer else None, routing_basis=request.routing_basis,
+        requester_role=request.requester_role, reviewer_role=request.reviewer_role or ("faculty" if request.reviewer_faculty_id else None),
+        department_code=department.code if department else None, routing_history=list(request.routing_history or []),
+        reviewer_name=_reviewer_name(request), routing_basis=request.routing_basis,
         routing_note=request.routing_note, context=RequestContext.model_validate(request.context or {}),
         created_at=request.created_at, submitted_at=request.submitted_at, decided_at=request.decided_at,
         decided_by=decider.display_name if decider else None, decision_reason=request.decision_reason,

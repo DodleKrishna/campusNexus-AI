@@ -13,9 +13,9 @@ import type { AgentQueryResponse } from "@/types/api";
 function hintLink(response: AgentQueryResponse, scope: ChatScope): { to: string; label: string } | null {
   const hint = response.action_hint;
   if (!hint) return null;
-  if (scope === "faculty" && hint.agent_key === "permission") {
+  if ((scope === "faculty" || scope === "hod") && hint.agent_key === "permission" && response.facts.route === "permission_request") {
     const q = typeof response.facts.request_message === "string" ? `?q=${encodeURIComponent(response.facts.request_message)}` : "";
-    return { to: `/faculty/my-requests/new${q}`, label: "Open Permission Agent" };
+    return { to: `/${scope}/my-requests/new${q}`, label: "Open Permission Agent" };
   }
   const agent = scope === "student" ? agentByKey(hint.agent_key) : undefined;
   return agent?.available ? { to: `/student/agents/${agent.key}`, label: `Open ${agent.name}` } : null;

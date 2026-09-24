@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FilePlus2, Loader2, Send, X } from "lucide-react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { api } from "@/api/endpoints";
 import { Button } from "@/components/ui/button";
@@ -37,16 +37,23 @@ function OwnRequestActions({ request }: { request: WorkflowRequest }) {
   );
 }
 
-/** The faculty member's own requests to their HOD (drafts included). */
+const baseOf = (pathname: string) => (pathname.startsWith("/hod") ? "/hod" : "/faculty");
+
+/** The signed-in faculty member's (or HOD's) own requests (drafts included). */
 export function FacultyMyRequestsPage() {
+  const base = baseOf(useLocation().pathname);
   const { data, isLoading, isError, error, refetch } = useWorkflowRequests("mine");
   return (
     <div className="max-w-4xl space-y-6">
       <PageTitle
         title="My Requests"
-        description="Leave, substitution, OD and department permission requests you have sent to your HOD."
+        description={
+          base === "/hod"
+            ? "Leave, resource, permission and escalation requests you have sent to the Administration."
+            : "Leave, substitution, OD and department permission requests you have sent to your HOD."
+        }
         action={
-          <Link to="/faculty/my-requests/new" className={buttonVariants({ variant: "accent" })}>
+          <Link to={`${base}/my-requests/new`} className={buttonVariants({ variant: "accent" })}>
             <FilePlus2 /> Create Request
           </Link>
         }
@@ -63,13 +70,18 @@ export function FacultyMyRequestsPage() {
   );
 }
 
-/** Permission Agent for faculty; ?q= carries a request handed over from agent chat. */
+/** Permission Agent for faculty or an HOD; ?q= carries a request handed over from agent chat. */
 export function FacultyNewRequestPage() {
   const [params] = useSearchParams();
   const navigate = useNavigate();
+  const base = baseOf(useLocation().pathname);
   return (
     <div className="max-w-4xl">
-      <PermissionAgentPanel role="faculty" initialMessage={params.get("q") ?? undefined} onSent={() => navigate("/faculty/my-requests")} />
+      <PermissionAgentPanel
+        role={base === "/hod" ? "hod" : "faculty"}
+        initialMessage={params.get("q") ?? undefined}
+        onSent={() => navigate(`${base}/my-requests`)}
+      />
     </div>
   );
 }

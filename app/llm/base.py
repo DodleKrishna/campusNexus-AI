@@ -32,6 +32,7 @@ from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
 from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.department import HodQueryPlan
+from app.schemas.admin_console import AdminQueryPlan
 from app.schemas.mission import MissionPlan
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
 from app.schemas.workflow import PermissionIntent
@@ -156,6 +157,10 @@ class LLMProvider(ABC):
         """Phase 17: classify a head of department's question (structured output only).
         The department is never part of the plan -- it comes from the caller's scope."""
         raise LLMProviderError(f"LLM provider {getattr(self, 'name', type(self).__name__)!r} does not support HOD queries.")
+
+    def plan_admin_query(self, message: str) -> AdminQueryPlan:
+        """Phase 18: classify an administrator's institution-wide question (structured output only)."""
+        raise LLMProviderError(f"LLM provider {getattr(self, 'name', type(self).__name__)!r} does not support admin queries.")
 
     @abstractmethod
     def plan_mission(

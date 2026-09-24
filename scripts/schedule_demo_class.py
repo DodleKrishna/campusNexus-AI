@@ -43,6 +43,24 @@ from app.services.class_schedule import local
 DEFAULT_DB = Path(__file__).resolve().parents[1] / "data" / "demo" / "campusnexus_demo.db"
 
 
+def demo_window(now_local: datetime, minutes: int) -> tuple[datetime, datetime]:
+    """A demo class window around ``now_local`` that never crosses midnight (Phase 18).
+
+    Normally it starts at ``now`` rounded down to 5 minutes. If that window would
+    run past the end of the day, it is moved earlier so it ends at 23:59 on the
+    same date (still containing ``now`` unless the day is almost over). Demo
+    tooling only -- the real timetable is never adjusted.
+    """
+    start = now_local.replace(second=0, microsecond=0)
+    start -= timedelta(minutes=start.minute % 5)
+    end = start + timedelta(minutes=minutes)
+    day_end = start.replace(hour=23, minute=59)
+    if end > day_end:
+        end = day_end
+        start = max(end - timedelta(minutes=minutes), start.replace(hour=0, minute=0))
+    return start, end
+
+
 def schedule_extra_class(
     session: Session, *, course_code: str = "CS303", section: str = "1", minutes: int = 60,
     now: Optional[datetime] = None, room: Optional[str] = None, start_at: Optional[datetime] = None,
@@ -56,9 +74,9 @@ def schedule_extra_class(
         raise SystemExit(f"No teaching assignment for {course_code} section {section}. Seed the database first.")
     if start_at is not None:
         start_local = local(start_at)
+        end_local = start_local + timedelta(minutes=minutes)
     else:
-        start_local = local(now).replace(second=0, microsecond=0)
-        start_local -= timedelta(minutes=start_local.minute % 5)
+        start_local, end_local = demo_window(local(now), minutes)
     start = start_local.astimezone(timezone.utc)
     existing = session.execute(
         select(AttendanceSession).where(
@@ -70,7 +88,7 @@ def schedule_extra_class(
     row = AttendanceSession(
         teaching_assignment_id=assignment.id, course_id=assignment.course_id, faculty_id=assignment.faculty_id,
         timetable_slot_id=None, session_date=start_local.date(), scheduled_start=start,
-        scheduled_end=start + timedelta(minutes=minutes), room=room or "Block A - Room 206",
+        scheduled_end=end_local.astimezone(timezone.utc), room=room or "Block A - Room 206",
         status=AttendanceSessionStatus.SCHEDULED, note="Extra class",
     )
     session.add(row)

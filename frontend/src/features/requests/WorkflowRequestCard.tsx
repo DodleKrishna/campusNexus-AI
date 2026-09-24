@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { MARK, STANDING, WORKFLOW_STATUS } from "@/components/dashboard/status";
 import type { WorkflowRequest } from "@/types/api";
-import { formatDate, formatDateTime, formatTime } from "@/utils/format";
+import { formatDate, formatDateTime, formatTime, titleCase } from "@/utils/format";
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -206,6 +206,21 @@ export function WorkflowRequestCard({ request, viewer, actions }: { request: Wor
       <RequestContextView request={request} />
 
       {request.status === "needs_review" && <p className="text-xs text-warning">{request.routing_note}</p>}
+      {viewer === "faculty" && (request.routing_history?.length ?? 0) > 0 && (
+        <details className="rounded-lg border border-border px-3 py-2">
+          <summary className="cursor-pointer text-xs font-medium text-muted">
+            Routing history ({request.routing_history!.length}) · {request.requester_role ? `${titleCase(request.requester_role)} · ` : ""}
+            {request.department_code ?? ""} · current reviewer: {request.reviewer_name ?? "none"}
+          </summary>
+          <ol className="mt-2 space-y-1">
+            {request.routing_history!.map((h, i) => (
+              <li key={i} className="text-xs">
+                <span className="text-subtle">{formatDateTime(h.at)}</span> · <span className="font-medium">{titleCase(h.basis)}</span> → {h.reviewer}: {h.note}
+              </li>
+            ))}
+          </ol>
+        </details>
+      )}
       {decided && (
         <div className={request.status === "approved" ? "rounded-lg border border-success/20 bg-success-soft px-4 py-3" : "rounded-lg border border-danger/20 bg-danger-soft px-4 py-3"}>
           <p className="text-sm font-medium">

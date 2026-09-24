@@ -1413,6 +1413,56 @@ entry point.
 - A department head's own requests need review, because there is no administration workflow yet.
 - Delayed-class warnings are created when an HOD views the dashboard, not by a background job.
 
+## Admin Console & Institution Operations (Phase 18)
+
+### Scope and reuse
+
+`current_admin` accepts only an active ADMIN account. `admin_ops.institution_scope` returns every department,
+or one real department when a filter is given (an unknown code is a 404). `department_ops` read-only
+analytics now take either an `HodScope` or an `InstitutionScope` and only ever read `scope.department_ids`,
+so HOD and admin figures come from the same code: class state, attendance, risk, complaints.
+
+### Routing chain
+
+```
+student → class faculty / mentor → HOD (hod_escalation) → Administration (admin_escalation)
+faculty → HOD (department_hod) → Administration (admin_escalation, when no HOD is recorded)
+HOD     → Administration (administration)
+```
+
+`workflow_requests.reviewer_role = "admin"` marks an admin-routed request (no `reviewer_faculty_id`).
+`decide_as_admin` requires that marker and a PENDING status, and refuses the decider's own request.
+`escalate_unassigned_to_admin` moves every submitted NEEDS_REVIEW request with no reviewer to the
+administration when an admin opens the inbox; it is audited (`request_escalated`) and idempotent.
+`routing_history` (JSON) records every step. New HOD request types: HOD_LEAVE, DEPARTMENT_RESOURCE and
+ADMIN_ESCALATION (the last two need no date). Admins are notified through `account_notifications`.
+
+### Console
+
+Dashboard (institution metrics plus activity, with a department filter), Departments (with detail),
+Users & Roles (safe operations only), Attendance (by department, course and section; active and
+incomplete sessions), Requests (admin inbox with routing history), Complaints (with filters), AI
+Operations, Audit Log, Agents and Settings.
+
+- **AI Operations** reads missions, agent runs, `provider_unavailable` audit events (rate limits are those
+  with `kind="rate_limit"` or HTTP 429), workflow-failure events, pending and stale approvals, requests
+  needing review, RAG chunk count and DB readiness. Token usage is reported as "Not recorded" because it
+  isn't recorded.
+- **Audit Log** is the merged, newest-first view of `audit_logs` (missions and agents) and
+  `operation_audit_events` (attendance, requests, escalations, account operations, sign-ins). It is
+  read-only.
+- **Settings/System** shows component readiness (Database, RAG, LLM provider; mock is "degraded") and a
+  configuration summary with booleans for whether keys and secrets are set.
+- **Admin agents** (`app/agents/enquiry/admin.py`, `AdminQueryPlan` with an optional department code) cover
+  Enquiry, Academic, Complaints, Permission and Events. "Is the campus running normally today?" combines
+  class operations, attendance, requests, complaints and system errors from the services above.
+
+### Known limitations
+
+- No "request changes" step; no editing of complaints, timetables or departments.
+- Any active admin can decide an admin-routed request; there is no per-admin assignment.
+- Delayed-class warnings are still generated on HOD view; admins read the class state live.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

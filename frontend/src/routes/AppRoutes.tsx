@@ -24,7 +24,20 @@ import {
   HodRequestsPage,
   HodStudentsPage,
 } from "@/pages/hod/HodPages";
-import { RoleWorkspacePage } from "@/pages/RoleWorkspacePage";
+import {
+  AdminAgentPage,
+  AdminAgentsPage,
+  AdminAIOperationsPage,
+  AdminAttendancePage,
+  AdminAuditPage,
+  AdminComplaintsPage,
+  AdminDashboardPage,
+  AdminDepartmentPage,
+  AdminDepartmentsPage,
+  AdminRequestsPage,
+  AdminSettingsPage,
+  AdminUsersPage,
+} from "@/pages/admin/AdminPages";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { StudentAcademicsPage } from "@/pages/student/StudentAcademicsPage";
 import { StudentAgentPage } from "@/pages/student/StudentAgentPage";
@@ -91,15 +104,25 @@ export function AppRoutes() {
         <Route path="agents/:agentKey" element={<HodAgentPage />} />
         <Route path="requests" element={<HodRequestsPage />} />
         <Route path="complaints" element={<HodComplaintsPage />} />
+        <Route path="my-requests" element={<FacultyMyRequestsPage />} />
+        <Route path="my-requests/new" element={<FacultyNewRequestPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
 
-      {(["admin"] as const).map((role) => (
-        <Route key={role} path={`/${role}`} element={<StaffRoutes role={role} />}>
-          <Route index element={<RoleWorkspacePage />} />
-          <Route path="settings" element={<SettingsPage />} />
-        </Route>
-      ))}
+      <Route path="/admin" element={<StaffRoutes role="admin" />}>
+        <Route index element={<AdminDashboardPage />} />
+        <Route path="departments" element={<AdminDepartmentsPage />} />
+        <Route path="departments/:code" element={<AdminDepartmentPage />} />
+        <Route path="users" element={<AdminUsersPage />} />
+        <Route path="attendance" element={<AdminAttendancePage />} />
+        <Route path="requests" element={<AdminRequestsPage />} />
+        <Route path="complaints" element={<AdminComplaintsPage />} />
+        <Route path="ai-operations" element={<AdminAIOperationsPage />} />
+        <Route path="audit" element={<AdminAuditPage />} />
+        <Route path="agents" element={<AdminAgentsPage />} />
+        <Route path="agents/:agentKey" element={<AdminAgentPage />} />
+        <Route path="settings" element={<AdminSettingsPage />} />
+      </Route>
 
       <Route path="*" element={<NotFoundPage />} />
     </Routes>

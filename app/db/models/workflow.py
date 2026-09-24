@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import JSON, Enum as SAEnum
 from sqlalchemy import ForeignKey, String, Text
@@ -30,6 +30,10 @@ class WorkflowRequestType(str, enum.Enum):
     FACULTY_LEAVE = "faculty_leave"
     CLASS_SUBSTITUTION = "class_substitution"
     DEPARTMENT_PERMISSION = "department_permission"
+    # Phase 18: head-of-department requests, routed to the administration.
+    HOD_LEAVE = "hod_leave"
+    DEPARTMENT_RESOURCE = "department_resource"
+    ADMIN_ESCALATION = "admin_escalation"
 
 
 class WorkflowRequestStatus(str, enum.Enum):
@@ -61,6 +65,11 @@ class WorkflowRequest(Base):
     requester_faculty_id: Mapped[Optional[int]] = mapped_column(ForeignKey("faculty_profiles.id"), index=True, default=None)
     student_id: Mapped[Optional[str]] = mapped_column(ForeignKey("students.student_code"), index=True, default=None)
     reviewer_faculty_id: Mapped[Optional[int]] = mapped_column(ForeignKey("faculty_profiles.id"), index=True, default=None)
+    # Phase 18 (nullable, additive): "admin" when the request is routed to the administration
+    # (any active admin account may decide it); null for a faculty/HOD reviewer.
+    reviewer_role: Mapped[Optional[str]] = mapped_column(String(20), default=None)
+    # Phase 18: every routing step, oldest first: {at, basis, reviewer, note}.
+    routing_history: Mapped[Optional[List[Dict[str, Any]]]] = mapped_column(JSON, default=None)
     department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), default=None)
     title: Mapped[str] = mapped_column(String(200))
     reason: Mapped[str] = mapped_column(Text)
