@@ -58,6 +58,10 @@ from app.llm.providers.anthropic_provider import (
     _SYSTEM_SERVICES_RESPONSE_PROMPT,
     _SYSTEM_ENQUIRY_PROMPT,
     _ENQUIRY_TOOL_NAME,
+    _FACULTY_QUERY_TOOL_NAME,
+    _PERMISSION_TOOL_NAME,
+    _SYSTEM_FACULTY_QUERY_PROMPT,
+    _SYSTEM_PERMISSION_PROMPT,
     _CAREER_INTENT_TOOL_NAME,
     _EVENTS_INTENT_TOOL_NAME,
     _INTENT_TOOL_NAME,
@@ -70,8 +74,10 @@ from app.schemas.agent_chat import EnquiryPlan
 from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
+from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.mission import MissionPlan
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
+from app.schemas.workflow import PermissionIntent
 
 DEFAULT_MODEL = "openai/gpt-oss-120b"
 DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
@@ -498,6 +504,18 @@ class GroqLLMProvider(LLMProvider):
         return self._structured(
             max_tokens=_PLAN_MAX_TOKENS, system=_SYSTEM_ENQUIRY_PROMPT, content=f"Student question: {query}",
             tool_name=_ENQUIRY_TOOL_NAME, description="Record which specialists to consult.", schema_cls=EnquiryPlan,
+        )
+
+    def plan_permission_request(self, message: str) -> PermissionIntent:
+        return self._structured(
+            max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_PERMISSION_PROMPT, content=f"Student message: {message}",
+            tool_name=_PERMISSION_TOOL_NAME, description="Record the interpreted request.", schema_cls=PermissionIntent,
+        )
+
+    def plan_faculty_query(self, message: str) -> FacultyQueryPlan:
+        return self._structured(
+            max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_FACULTY_QUERY_PROMPT, content=f"Faculty question: {message}",
+            tool_name=_FACULTY_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=FacultyQueryPlan,
         )
 
     def plan_mission(

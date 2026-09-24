@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 import { ApiError } from "@/api/client";
-import { api } from "@/api/endpoints";
+import { api, type ChatScope } from "@/api/endpoints";
 import type { AgentQueryResponse } from "@/types/api";
 
 export interface ChatTurn {
@@ -12,7 +12,8 @@ export interface ChatTurn {
   pending?: boolean;
 }
 
-const storageKey = (userId: number, agentKey: string) => `campusnexus.chat.${userId}.${agentKey}`;
+const storageKey = (userId: number, agentKey: string, scope: ChatScope) =>
+  scope === "student" ? `campusnexus.chat.${userId}.${agentKey}` : `campusnexus.chat.${scope}.${userId}.${agentKey}`;
 
 function load(key: string): ChatTurn[] {
   try {
@@ -25,8 +26,8 @@ function load(key: string): ChatTurn[] {
 }
 
 /** One agent conversation. Kept for the browser session (per user and agent) so it survives navigation. */
-export function useAgentChat(agentKey: string, userId: number) {
-  const key = storageKey(userId, agentKey);
+export function useAgentChat(agentKey: string, userId: number, scope: ChatScope = "student") {
+  const key = storageKey(userId, agentKey, scope);
   const [turns, setTurns] = useState<ChatTurn[]>(() => load(key));
 
   useEffect(() => {
@@ -38,7 +39,7 @@ export function useAgentChat(agentKey: string, userId: number) {
   }, [key, turns]);
 
   const mutation = useMutation({
-    mutationFn: ({ message }: { id: string; message: string }) => api.askAgent(agentKey, message),
+    mutationFn: ({ message }: { id: string; message: string }) => api.askAgent(agentKey, message, scope),
     onSuccess: (response, { id }) => setTurns((all) => all.map((t) => (t.id === id ? { ...t, response, pending: false } : t))),
     onError: (error, { id }) =>
       setTurns((all) =>

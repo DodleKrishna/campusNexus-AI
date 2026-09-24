@@ -38,6 +38,8 @@ from app.rag.config import get_rag_config
 from app.rag.embeddings import get_embedding_provider
 from app.rag.ingest import ingest_policy_directory
 from app.rag.vector_store import PolicyVectorStore
+from app.services.class_schedule import local
+from scripts.schedule_demo_class import schedule_extra_class
 from scripts.seed_data import build_summary, run_seed
 
 DEMO_DIR = REPO_ROOT / "data" / "demo"
@@ -82,6 +84,10 @@ def parse_args() -> argparse.Namespace:
         help="Embedding provider for the demo policy store: onnx_minilm (default) or deterministic. "
         "The API must be started with the same CAMPUSNEXUS_EMBEDDING_PROVIDER value.",
     )
+    parser.add_argument(
+        "--no-demo-class", action="store_true",
+        help="Do not schedule the Phase 16 extra class (CS303, Dr. Ashok Verma) starting now.",
+    )
     return parser.parse_args()
 
 
@@ -98,6 +104,12 @@ def main() -> None:
         run_seed(session)
         seed_dev_accounts(session, password)
         summary = build_summary(session)
+        demo_class = None if args.no_demo_class else schedule_extra_class(session)
+        demo_class_line = (
+            f"{demo_class.course.title} by {demo_class.faculty.full_name}, "
+            f"{local(demo_class.scheduled_start):%H:%M}-{local(demo_class.scheduled_end):%H:%M} IST today"
+            if demo_class else None
+        )
     engine.dispose()
 
     config = get_rag_config(chroma_path=DEMO_CHROMA_PATH, embedding_provider=args.embedding)
@@ -124,6 +136,9 @@ def main() -> None:
     print("    export CAMPUSNEXUS_VECTOR_STORE_PATH=data/demo/chroma")
     print(f"    export CAMPUSNEXUS_EMBEDDING_PROVIDER={config.embedding_provider}")
     print("\nThen: python scripts/demo_preflight.py")
+    if demo_class_line:
+        print(f"\nPhase 16 extra class (scheduled, not started): {demo_class_line}.")
+        print("  Demo more than an hour from now? Re-run: python scripts/schedule_demo_class.py")
     print("\nReact app sign-in (development accounts, password from " + password_source + "):")
     for spec in DEV_ACCOUNTS:
         print(f"  {spec.email:<28} {spec.role.value}")

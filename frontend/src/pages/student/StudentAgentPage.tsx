@@ -4,6 +4,7 @@ import { useAuth } from "@/auth/useAuth";
 import { AgentWorkspace } from "@/components/agents/AgentWorkspace";
 import { Card } from "@/components/ui/card";
 import { agentByKey } from "@/features/agents/catalog";
+import { PermissionAgentPanel } from "@/features/requests/PermissionAgentPanel";
 
 export function StudentAgentPage() {
   const { agentKey } = useParams();
@@ -30,5 +31,7 @@ export function StudentAgentPage() {
       </Card>
     );
   }
+  // The Permission Agent prepares a request for confirmation rather than chatting.
+  if (agent.key === "permission") return <PermissionAgentPanel />;
   return <AgentWorkspace key={agent.key} agent={agent} userId={user.id} initialQuestion={question} onInitialQuestionSent={consumeQuestion} />;
 }

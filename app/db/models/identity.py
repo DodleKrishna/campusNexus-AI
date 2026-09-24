@@ -61,6 +61,10 @@ class Student(Base):
     cgpa: Mapped[float]
     interests: Mapped[Optional[str]] = mapped_column(String(500), default=None)
     career_goal: Mapped[Optional[str]] = mapped_column(String(255), default=None)
+    # Phase 16 (nullable, additive): class section within year/semester, and the
+    # faculty mentor who reviews requests no specific class faculty owns.
+    section: Mapped[Optional[str]] = mapped_column(String(10), default=None)
+    mentor_faculty_id: Mapped[Optional[int]] = mapped_column(ForeignKey("faculty_profiles.id"), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="student")

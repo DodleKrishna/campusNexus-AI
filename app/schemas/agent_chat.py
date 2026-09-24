@@ -16,7 +16,7 @@ from app.schemas.enums import AgentName
 from app.schemas.evidence import Evidence
 
 SpecialistKey = Literal["academic", "events", "placements", "complaints"]
-ChatAgentKey = Literal["academic", "events", "placements", "complaints", "enquiry"]
+ChatAgentKey = Literal["academic", "events", "placements", "complaints", "enquiry", "permission"]
 
 SPECIALIST_AGENTS: Dict[str, AgentName] = {
     "academic": AgentName.ACADEMIC_AGENT,
@@ -31,6 +31,7 @@ DISPLAY_NAMES = {
     "placements": "Placement Agent",
     "complaints": "Complaints Agent",
     "enquiry": "Enquiry Agent",
+    "permission": "Permission Agent",
 }
 
 
@@ -107,7 +108,11 @@ class EnquiryPlan(BaseModel):
         default=None, description="Which specialist area the requested action belongs to, if any.",
     )
     asks_live_class_status: bool = Field(
-        default=False, description="True when the student asks whether a class has actually started right now.",
+        default=False,
+        description=(
+            "True when the student asks whether a class has actually started, whether attendance is being taken, "
+            "whether they were marked present, or which class is happening now or next."
+        ),
     )
     out_of_scope: Optional[str] = Field(
         default=None, description="Short note when part of the question is outside every specialist's scope.",

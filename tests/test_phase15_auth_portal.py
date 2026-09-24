@@ -227,7 +227,8 @@ def test_catalog_lists_ui_names_over_backend_agents(client) -> None:
     agents = {a["key"]: a for a in body["agents"]}
     assert agents["placements"]["display_name"] == "Placement Agent" and agents["placements"]["backend_agent"] == "career_agent"
     assert agents["complaints"]["backend_agent"] == "campus_services_agent"
-    assert agents["permission"]["available"] is False and body["live_ai"] is False
+    # Phase 16: the Permission Agent is live (prepare -> preview -> Confirm & Send).
+    assert agents["permission"]["available"] is True and body["live_ai"] is False
 
 
 def test_agent_query_is_scoped_to_the_signed_in_student(client) -> None:

@@ -18,6 +18,9 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_session
 from app.auth.accounts import get_account
 from app.auth.tokens import TokenError, decode_token
+from app.db.models.auth import AuthAccount
+from app.db.models.faculty import FacultyProfile
+from app.services.faculty_ops import faculty_for_account
 from app.schemas.enums import UserRole
 
 _bearer = HTTPBearer(auto_error=False)
@@ -74,3 +77,31 @@ def current_student(user: AuthenticatedUser = Depends(require_roles(UserRole.STU
 
 def current_faculty(user: AuthenticatedUser = Depends(require_roles(UserRole.FACULTY, UserRole.HOD))) -> AuthenticatedUser:
     return user
+
+
+@dataclass(frozen=True)
+class FacultyCaller:
+    """The signed-in faculty member: their account and the faculty profile it is linked to."""
+
+    account: AuthAccount
+    faculty: FacultyProfile
+
+
+def current_faculty_profile(
+    user: AuthenticatedUser = Depends(current_faculty), session: Session = Depends(get_session),
+) -> FacultyCaller:
+    """Phase 16: the faculty profile comes only from the account's server-side link."""
+    account = get_account(session, user.account_id)
+    faculty = faculty_for_account(session, user.account_id)
+    if account is None or faculty is None:
+        raise HTTPException(status_code=403, detail="This account is not linked to a faculty profile.")
+    return FacultyCaller(account=account, faculty=faculty)
+
+
+def current_student_account(
+    user: AuthenticatedUser = Depends(require_roles(UserRole.STUDENT)), session: Session = Depends(get_session),
+) -> AuthAccount:
+    account = get_account(session, user.account_id)
+    if account is None or not account.linked_student_id:
+        raise HTTPException(status_code=403, detail="This account is not linked to a student record.")
+    return account

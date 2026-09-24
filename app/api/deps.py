@@ -9,6 +9,7 @@ or a singleton built once at app startup and stored on ``app.state`` by
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Iterator, Optional
 
 from fastapi import Depends, Header, HTTPException, Request
@@ -51,6 +52,12 @@ def get_tool_gateway(request: Request) -> ToolGateway:
 
 def get_knowledge_service(request: Request) -> KnowledgeService:
     return request.app.state.knowledge_service
+
+
+def get_now(request: Request) -> datetime:
+    """Phase 16: the current instant (timezone-aware UTC) from the app's clock, so
+    tests can pin time for class-session rules without touching the system clock."""
+    return request.app.state.clock()
 
 
 def get_identity(

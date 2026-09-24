@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/input";
 import { ErrorState } from "@/components/ui/states";
+import type { ChatScope } from "@/api/endpoints";
 import type { AgentDefinition } from "@/features/agents/catalog";
 import { useAgentChat } from "@/hooks/useAgentChat";
 
@@ -19,13 +20,15 @@ export function AgentWorkspace({
   userId,
   initialQuestion,
   onInitialQuestionSent,
+  scope = "student",
 }: {
   agent: AgentDefinition;
+  scope?: ChatScope;
   userId: number;
   initialQuestion?: string;
   onInitialQuestionSent?: () => void;
 }) {
-  const { turns, send, clear, isSending } = useAgentChat(agent.key, userId);
+  const { turns, send, clear, isSending } = useAgentChat(agent.key, userId, scope);
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
 
@@ -68,7 +71,7 @@ export function AgentWorkspace({
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-lg font-semibold">{agent.name}</h1>
             <Badge tone="success">Available</Badge>
-            {agent.key === "enquiry" && <Badge tone="info">Read-only</Badge>}
+            {(agent.key === "enquiry" || scope === "faculty") && <Badge tone="info">Read-only</Badge>}
           </div>
           <p className="mt-0.5 text-sm text-muted">{agent.responsibility}</p>
         </div>
@@ -87,7 +90,11 @@ export function AgentWorkspace({
           {turns.length === 0 && (
             <div className="mx-auto max-w-xl py-8 text-center">
               <p className="text-sm font-medium">Ask {agent.name} a question</p>
-              <p className="mt-1 text-xs text-muted">Answers use your own records. Every figure is computed by CampusNexus's rules and verified before you see it.</p>
+              <p className="mt-1 text-xs text-muted">
+                {scope === "faculty"
+                  ? "Answers use only your own classes and the requests routed to you. Every count is computed from attendance records."
+                  : "Answers use your own records. Every figure is computed by CampusNexus's rules and verified before you see it."}
+              </p>
             </div>
           )}
           {turns.map((turn) => (
@@ -99,7 +106,7 @@ export function AgentWorkspace({
                 {turn.pending && (
                   <div className="flex items-center gap-2 text-sm text-muted" role="status">
                     <Loader2 className="size-4 animate-spin text-accent" />
-                    {agent.key === "enquiry" ? "Consulting the specialist agents…" : `${agent.name} is checking your records…`}
+                    {agent.key === "enquiry" && scope === "student" ? "Consulting the specialist agents…" : `${agent.name} is checking the records…`}
                   </div>
                 )}
                 {turn.error && <ErrorState message={turn.error} />}

@@ -5,13 +5,15 @@ accepts a student id from the client.
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.auth_deps import current_student
-from app.api.deps import get_knowledge_service, get_session
+from app.api.deps import get_knowledge_service, get_now, get_session
+from app.schemas.faculty import LiveClassStatus
 from app.schemas.student_portal import (
     CourseAttendance,
     DashboardSummary,
@@ -21,7 +23,7 @@ from app.schemas.student_portal import (
     StudentProfile,
     TodaySchedule,
 )
-from app.services import student_portal
+from app.services import class_schedule, student_portal
 from app.services.knowledge import KnowledgeService
 
 router = APIRouter(prefix="/me", tags=["student portal"])
@@ -75,6 +77,14 @@ def get_course_attendance(
 @router.get("/timetable/today", response_model=TodaySchedule)
 def get_today(student_id: str = Depends(current_student), session: Session = Depends(get_session)) -> TodaySchedule:
     return student_portal.today_schedule(session, student_id)
+
+
+@router.get("/live-class", response_model=LiveClassStatus)
+def get_live_class(
+    student_id: str = Depends(current_student), session: Session = Depends(get_session), now: datetime = Depends(get_now),
+) -> LiveClassStatus:
+    """Phase 16: the student's current class from real attendance-session data."""
+    return class_schedule.get_current_class(session, student_id, now)
 
 
 @router.get("/exams", response_model=List[ExamItem])

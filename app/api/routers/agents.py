@@ -7,6 +7,7 @@ write anything. Provider problems become clean messages, never tracebacks.
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,6 +15,8 @@ from pydantic import BaseModel
 
 from app.agents.enquiry.agent import EnquiryAgent
 from app.api.auth_deps import current_student
+from app.api.deps import get_now
+from app.services.class_schedule import get_current_class
 from app.llm.base import LLMProviderError, LLMTransientError
 from app.schemas.agent_chat import (
     CHAT_AGENT_KEYS,
@@ -33,7 +36,7 @@ _DESCRIPTIONS = {
     "placements": "Internship eligibility, skill gaps and application status.",
     "complaints": "Your grievance cases, SLA status and the escalation procedure.",
     "enquiry": "General campus questions answered by consulting the other agents. Read-only.",
-    "permission": "Leave and permission requests with faculty approval.",
+    "permission": "Prepares event permission, attendance permission, leave and OD requests and routes them to the right faculty.",
 }
 
 
@@ -56,6 +59,15 @@ def _gateway(request: Request) -> SpecialistGateway:
     return request.app.state.specialist_gateway
 
 
+def _live_class(request: Request, student_id: str, now: datetime):
+    """Deterministic live class status (read-only) for the Enquiry Agent."""
+    session = request.app.state.session_factory()
+    try:
+        return get_current_class(session, student_id, now)
+    finally:
+        session.close()
+
+
 @router.get("", response_model=AgentCatalog)
 def catalog(request: Request, _: str = Depends(current_student)) -> AgentCatalog:
     provider = request.app.state.llm_provider
@@ -66,9 +78,10 @@ def catalog(request: Request, _: str = Depends(current_student)) -> AgentCatalog
         )
         for key in CHAT_AGENT_KEYS
     ]
+    # Phase 16: the Permission Agent works through /requests/prepare (preview, then Confirm & Send).
     items.append(AgentCatalogItem(
         key="permission", display_name="Permission Agent", description=_DESCRIPTIONS["permission"],
-        backend_agent=None, available=False,
+        backend_agent=None, available=True,
     ))
     return AgentCatalog(live_ai=bool(provider.is_live), provider=provider.name, model=provider.model_name, agents=items)
 
@@ -80,6 +93,7 @@ def query(
     request: Request,
     student_id: str = Depends(current_student),
     gateway: SpecialistGateway = Depends(_gateway),
+    now: datetime = Depends(get_now),
 ) -> AgentQueryResponse:
     if agent_key not in CHAT_AGENT_KEYS:
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
@@ -89,8 +103,9 @@ def query(
             agent = EnquiryAgent(
                 llm_provider=provider,
                 consult=lambda key, objective: gateway.consult(key, objective, student_id=student_id),
+                live_class=lambda at: _live_class(request, student_id, at),
             )
-            return agent.handle(body.message)
+            return agent.handle(body.message, now=now)
         answer = gateway.consult(agent_key, body.message, student_id=student_id)
     except LLMTransientError as exc:
         logger.warning("agent chat: provider unavailable (%s)", exc.details())

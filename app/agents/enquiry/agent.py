@@ -12,6 +12,12 @@ ever answered with where that action belongs.
 The synthesis is plain code over verified facts and the specialists' own
 verified answers. The LLM chooses whom to ask; it never writes the answer, so
 the answer cannot contain a fact no specialist returned.
+
+Phase 16: live class questions ("has my class started?", "was I marked
+present?", "what class is next?") are answered from the real attendance
+session through the ``live_class`` callable (``class_schedule.get_current_class``),
+whose deterministic message is used verbatim. Without that callable the agent
+still says honestly that live status is unavailable.
 """
 from __future__ import annotations
 
@@ -27,6 +33,7 @@ from app.schemas.agent_chat import (
     SpecialistAnswer,
 )
 from app.schemas.enums import VerificationStatus
+from app.schemas.faculty import LiveClassStatus
 
 CAMPUS_TZ = timezone(timedelta(hours=5, minutes=30))
 _WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
@@ -40,6 +47,7 @@ _ACTION_DESTINATIONS = {
 _LIVE_CLASS_UNAVAILABLE = "live class-start status is not currently available."
 
 Consult = Callable[[str, str], SpecialistAnswer]
+LiveClass = Callable[[datetime], LiveClassStatus]
 
 
 def _local(now: datetime) -> datetime:
@@ -124,9 +132,10 @@ def _headline(answer: SpecialistAnswer, now: datetime) -> Optional[str]:
 
 
 class EnquiryAgent:
-    def __init__(self, *, llm_provider: LLMProvider, consult: Consult) -> None:
+    def __init__(self, *, llm_provider: LLMProvider, consult: Consult, live_class: Optional[LiveClass] = None) -> None:
         self._llm = llm_provider
         self._consult = consult
+        self._live_class = live_class
 
     def handle(self, message: str, *, now: Optional[datetime] = None) -> AgentQueryResponse:
         now = now or datetime.now(timezone.utc)
@@ -135,7 +144,15 @@ class EnquiryAgent:
         verified = [a for a in answers if a.verification_status == VerificationStatus.VERIFIED.value]
 
         lines: List[str] = []
-        if plan.asks_live_class_status:
+        facts: Dict[str, object] = {"plan": plan.model_dump(mode="json")}
+        if plan.asks_live_class_status and self._live_class is not None:
+            live = self._live_class(now)
+            lines.append(live.message)
+            upcoming = live.next_class
+            if upcoming is not None and live.state in ("live", "scheduled"):
+                lines.append(f"Next class today: {upcoming.course_title} at {upcoming.start_local} ({upcoming.room}).")
+            facts["live_class"] = live.model_dump(mode="json")
+        elif plan.asks_live_class_status:
             academic = next((a for a in verified if a.agent_key == "academic" and _today_classes(a, now) is not None), None)
             lines.append(_live_class_line(academic, now) if academic else f"Your timetable could not be verified, and {_LIVE_CLASS_UNAVAILABLE}")
         seen: set = set()
@@ -166,7 +183,7 @@ class EnquiryAgent:
             lines.append(action_hint.message if action_hint else "None of the campus agents could verify an answer to that.")
 
         if not answers:
-            status = "not_applicable"
+            status = VerificationStatus.VERIFIED.value if "live_class" in facts else "not_applicable"
         elif len(verified) == len(answers):
             status = VerificationStatus.VERIFIED.value
         elif verified:
@@ -175,7 +192,7 @@ class EnquiryAgent:
             status = VerificationStatus.FAILED.value
         return AgentQueryResponse(
             agent_key="enquiry", display_name=DISPLAY_NAMES["enquiry"], verification_status=status,
-            answer="\n".join(lines), facts={"plan": plan.model_dump(mode="json")},
+            answer="\n".join(lines), facts=facts,
             evidence=[e for a in verified for e in a.evidence], consulted=answers, notices=notices,
             action_hint=action_hint, live_ai=bool(getattr(self._llm, "is_live", False)),
         )

@@ -76,15 +76,15 @@ export const AGENTS: AgentDefinition[] = [
     responsibility: "General campus questions, answered by consulting the other agents. Read-only.",
     icon: Sparkles,
     available: true,
-    suggestions: ["Do I have anything important today?", "Has my class started?", "What's coming up this week?"],
+    suggestions: ["Has my class started?", "Was I marked present?", "What class is next?", "Do I have anything important today?"],
   },
   {
     key: "permission",
     name: "Permission Agent",
     backendAgent: null,
-    responsibility: "Leave and permission requests with faculty approval.",
+    responsibility: "Prepares event permission, attendance permission, leave and OD requests and routes them to the right faculty.",
     icon: FileCheck2,
-    available: false,
+    available: true,
     suggestions: [],
   },
 ];

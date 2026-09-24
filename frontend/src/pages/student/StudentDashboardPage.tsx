@@ -1,6 +1,7 @@
 import { AgentsGrid } from "@/components/dashboard/AgentsGrid";
 import { AttendanceCard } from "@/components/dashboard/AttendanceCard";
 import { ExamsCard } from "@/components/dashboard/ExamsCard";
+import { LiveClassCard } from "@/components/dashboard/LiveClassCard";
 import { NotificationsCard } from "@/components/dashboard/NotificationsCard";
 import { RequestsCard } from "@/components/dashboard/RequestsCard";
 import { SummaryCards, SummaryCardsSkeleton } from "@/components/dashboard/SummaryCards";
@@ -39,6 +40,7 @@ export function StudentDashboardPage() {
 
       <div className="grid gap-6 xl:grid-cols-3">
         <div className="space-y-6 xl:col-span-2">
+          <LiveClassCard />
           <TodayScheduleCard />
           <AttendanceCard />
           <NotificationsCard />

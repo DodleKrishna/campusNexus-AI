@@ -44,6 +44,7 @@ from app.db.models import (  # noqa: F401  (import registers all mapped classes)
     EventRegistration,
     EventStatus,
     Exam,
+    FacultyProfile,
     Notification,
     NotificationStatus,
     Opportunity,
@@ -56,6 +57,7 @@ from app.db.models import (  # noqa: F401  (import registers all mapped classes)
     Skill,
     Student,
     StudentSkill,
+    TeachingAssignment,
     TimetableSlot,
     User,
 )
@@ -891,6 +893,127 @@ def seed_communication(
 
 
 # ---------------------------------------------------------------------------
+# 9. Faculty, sections, teaching assignments (Phase 16)
+# ---------------------------------------------------------------------------
+
+# (employee_code, full_name, dept_code, designation, phone). Every course
+# instructor in COURSE_SEED has a profile; Course.instructor stays as it was.
+FACULTY_SEED: list[tuple[str, str, str, str, str]] = [
+    ("EMP-CSE-001", "Dr. Kavita Iyer", "CSE", "Professor & Head of Department", "+91 80 4000 1001"),
+    ("EMP-CSE-002", "Dr. Manoj Pillai", "CSE", "Associate Professor", "+91 80 4000 1002"),
+    ("EMP-CSE-003", "Dr. Sunita Rao", "CSE", "Associate Professor", "+91 80 4000 1003"),
+    ("EMP-CSE-004", "Dr. Ashok Verma", "CSE", "Assistant Professor", "+91 80 4000 1004"),
+    ("EMP-CSE-005", "Dr. Leela Nair", "CSE", "Assistant Professor", "+91 80 4000 1005"),
+    ("EMP-CSE-006", "Dr. Nikhil Bhatt", "CSE", "Assistant Professor", "+91 80 4000 1006"),
+    ("EMP-ECE-001", "Dr. Ramesh Kumar", "ECE", "Associate Professor", "+91 80 4000 2001"),
+    ("EMP-ECE-002", "Dr. Anjali Menon", "ECE", "Professor", "+91 80 4000 2002"),
+    ("EMP-ECE-003", "Dr. Suresh Pillai", "ECE", "Assistant Professor", "+91 80 4000 2003"),
+    ("EMP-MECH-001", "Dr. Ganesh Iyer", "MECH", "Associate Professor", "+91 80 4000 3001"),
+    ("EMP-MECH-002", "Dr. Vinod Rao", "MECH", "Professor", "+91 80 4000 3002"),
+    ("EMP-CIVIL-001", "Dr. Meenakshi Nair", "CIVIL", "Associate Professor", "+91 80 4000 4001"),
+    ("EMP-CIVIL-002", "Dr. Prakash Reddy", "CIVIL", "Professor", "+91 80 4000 4002"),
+]
+
+DEFAULT_SECTION = "1"
+
+# Mentor per (department, semester); CSE semester 5 section 1 (Aditi's
+# class) is mentored by Dr. Ashok Verma.
+MENTOR_PLAN: dict[tuple[str, int], str] = {
+    ("CSE", 5): "EMP-CSE-004", ("CSE", 3): "EMP-CSE-001", ("CSE", 7): "EMP-CSE-006", ("CSE", 1): "EMP-CSE-001",
+    ("ECE", 5): "EMP-ECE-002", ("ECE", 3): "EMP-ECE-001", ("ECE", 7): "EMP-ECE-002", ("ECE", 1): "EMP-ECE-001",
+    ("MECH", 5): "EMP-MECH-002", ("MECH", 3): "EMP-MECH-001", ("MECH", 1): "EMP-MECH-001",
+    ("CIVIL", 5): "EMP-CIVIL-002", ("CIVIL", 3): "EMP-CIVIL-001",
+}
+
+# More CSE semester-5 section-1 students, so a class roster is realistic.
+# (student_code, full_name, cgpa, {course: (attended, conducted)})
+CLASSMATE_SEED: list[tuple[str, str, float, dict[str, tuple[int, int]]]] = [
+    ("STU2023021", "Nikhil Joshi", 7.4, {"CS303": (46, 50), "CS302": (45, 50)}),
+    ("STU2023022", "Pooja Hegde", 8.2, {"CS303": (49, 50)}),
+    ("STU2023023", "Farhan Ali", 6.6, {"CS303": (33, 50), "CS301": (35, 50)}),
+    ("STU2023024", "Sneha Kulkarni", 7.9, {"CS303": (41, 50)}),
+    ("STU2023025", "Harsh Vardhan", 6.9, {"CS303": (36, 50), "CS302": (34, 50)}),
+    ("STU2023026", "Lakshmi Narayan", 8.7, {}),
+    ("STU2023027", "Omkar Patil", 7.2, {"CS304": (35, 50)}),
+    ("STU2023028", "Zoya Khan", 8.0, {}),
+]
+CLASSMATE_DEFAULT_ATTENDANCE = (44, 50)
+
+
+def _faculty_email(full_name: str) -> str:
+    return ".".join(full_name.replace("Dr. ", "").lower().split()) + "@meridian.edu"
+
+
+def seed_faculty(session: Session, departments: dict[str, Department]) -> dict[str, FacultyProfile]:
+    result: dict[str, FacultyProfile] = {}
+    for code, full_name, dept_code, designation, phone in FACULTY_SEED:
+        email = _faculty_email(full_name)
+        user, _ = get_or_create(session, User, email=email, defaults={"full_name": full_name, "role": UserRole.FACULTY})
+        profile, _ = get_or_create(
+            session, FacultyProfile, employee_code=code,
+            defaults={
+                "user_id": user.id, "full_name": full_name, "department_id": departments[dept_code].id,
+                "designation": designation, "email": email, "phone": phone,
+            },
+        )
+        result[code] = profile
+    return result
+
+
+def seed_classmates(
+    session: Session, departments: dict[str, Department], courses: dict[str, Course]
+) -> dict[str, Student]:
+    result: dict[str, Student] = {}
+    for student_code, full_name, cgpa, attendance in CLASSMATE_SEED:
+        user, _ = get_or_create(
+            session, User, email=f"{student_code.lower()}@meridian.edu",
+            defaults={"full_name": full_name, "role": UserRole.STUDENT},
+        )
+        student, _ = get_or_create(
+            session, Student, student_code=student_code,
+            defaults={
+                "user_id": user.id, "department_id": departments["CSE"].id, "year": 3, "semester": 5, "cgpa": cgpa,
+                "section": DEFAULT_SECTION,
+            },
+        )
+        for course_code in DEPT_SEMESTER_COURSES["CSE"][5]:
+            enrollment, _ = get_or_create(
+                session, Enrollment, student_id=student.id, course_id=courses[course_code].id,
+                academic_year=ACADEMIC_YEAR, defaults={"semester": 5},
+            )
+            attended, conducted = attendance.get(course_code, CLASSMATE_DEFAULT_ATTENDANCE)
+            get_or_create(
+                session, AttendanceRecord, enrollment_id=enrollment.id,
+                defaults={"classes_attended": attended, "classes_conducted": conducted},
+            )
+        result[student_code] = student
+    return result
+
+
+def seed_teaching(session: Session, courses: dict[str, Course], faculty: dict[str, FacultyProfile]) -> None:
+    by_name = {f.full_name: f for f in faculty.values()}
+    for code, _title, dept_code, _credits, semester, instructor in COURSE_SEED:
+        course = courses[code]
+        get_or_create(
+            session, TeachingAssignment, course_id=course.id, section=DEFAULT_SECTION, academic_term=ACADEMIC_YEAR,
+            defaults={
+                "faculty_id": by_name[instructor].id, "department_id": course.department_id,
+                "year": (semester + 1) // 2, "semester": semester,
+            },
+        )
+    # Sections and mentors are only filled in where still empty (idempotent,
+    # never overwriting a later change).
+    for student in session.execute(select(Student)).scalars():
+        if student.section is None:
+            student.section = DEFAULT_SECTION
+        if student.mentor_faculty_id is None:
+            mentor = MENTOR_PLAN.get((student.department.code, student.semester))
+            if mentor in faculty:
+                student.mentor_faculty_id = faculty[mentor].id
+    session.flush()
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -916,6 +1039,8 @@ class SeedSummary:
     case_slas: int
     notifications: int
     calendar_events: int
+    faculty_profiles: int = 0
+    teaching_assignments: int = 0
 
 
 def _count(session: Session, model: type) -> int:
@@ -943,6 +1068,8 @@ def build_summary(session: Session) -> SeedSummary:
         case_slas=_count(session, CaseSLA),
         notifications=_count(session, Notification),
         calendar_events=_count(session, CalendarEvent),
+        faculty_profiles=_count(session, FacultyProfile),
+        teaching_assignments=_count(session, TeachingAssignment),
     )
 
 
@@ -956,6 +1083,9 @@ def run_seed(session: Session) -> SeedSummary:
     events = seed_events(session, clubs, students)
     seed_cases(session, students)
     seed_communication(session, students, events, courses)
+    faculty = seed_faculty(session, departments)
+    seed_classmates(session, departments, courses)
+    seed_teaching(session, courses, faculty)
     session.commit()
     return build_summary(session)
 

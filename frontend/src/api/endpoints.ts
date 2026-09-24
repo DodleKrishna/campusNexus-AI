@@ -3,17 +3,29 @@ import { apiRequest } from "@/api/client";
 import type {
   AgentCatalog,
   AgentQueryResponse,
+  AssignmentStanding,
   AuthUser,
   CourseAttendance,
   DashboardSummary,
   ExamItem,
+  FacultyAgentCatalog,
+  FacultyClass,
+  FacultyClassDetail,
+  FacultyDashboard,
+  FacultyProfile,
   Health,
+  LiveClassStatus,
   LoginResponse,
+  MarkStatus,
   NotificationItem,
+  PermissionPreview,
   RequestItem,
   StudentProfile,
   TodaySchedule,
+  WorkflowRequest,
 } from "@/types/api";
+
+export type ChatScope = "student" | "faculty";
 
 export const api = {
   health: () => apiRequest<Health>("/health", { auth: false }),
@@ -28,13 +40,44 @@ export const api = {
   attendance: () => apiRequest<CourseAttendance[]>("/me/attendance"),
   courseAttendance: (courseCode: string) => apiRequest<CourseAttendance>(`/me/attendance/${encodeURIComponent(courseCode)}`),
   todaySchedule: () => apiRequest<TodaySchedule>("/me/timetable/today"),
+  liveClass: () => apiRequest<LiveClassStatus>("/me/live-class"),
   exams: () => apiRequest<ExamItem[]>("/me/exams"),
   requests: () => apiRequest<RequestItem[]>("/me/requests"),
   notifications: () => apiRequest<NotificationItem[]>("/me/notifications"),
 
   agentCatalog: () => apiRequest<AgentCatalog>("/agents"),
-  askAgent: (agentKey: string, message: string) =>
-    apiRequest<AgentQueryResponse>(`/agents/${encodeURIComponent(agentKey)}/query`, { method: "POST", body: { message } }),
+  askAgent: (agentKey: string, message: string, scope: ChatScope = "student") =>
+    apiRequest<AgentQueryResponse>(`${scope === "faculty" ? "/faculty/agents" : "/agents"}/${encodeURIComponent(agentKey)}/query`, {
+      method: "POST",
+      body: { message },
+    }),
+
+  // Workflow requests (permission / leave / OD) -- students and their reviewers.
+  workflowRequests: () => apiRequest<WorkflowRequest[]>("/requests"),
+  prepareRequest: (message: string) => apiRequest<PermissionPreview>("/requests/prepare", { method: "POST", body: { message } }),
+  submitRequest: (requestId: string, reason?: string) =>
+    apiRequest<WorkflowRequest>("/requests", { method: "POST", body: { request_id: requestId, ...(reason ? { reason } : {}) } }),
+  cancelRequest: (requestId: string) => apiRequest<WorkflowRequest>(`/requests/${encodeURIComponent(requestId)}/cancel`, { method: "POST" }),
+  decideRequest: (requestId: string, decision: "approve" | "reject", comment?: string) =>
+    apiRequest<WorkflowRequest>(`/requests/${encodeURIComponent(requestId)}/${decision}`, {
+      method: "POST",
+      body: comment ? { comment } : {},
+    }),
+
+  // Faculty workspace.
+  facultyProfile: () => apiRequest<FacultyProfile>("/faculty/me"),
+  facultyDashboard: () => apiRequest<FacultyDashboard>("/faculty/dashboard"),
+  facultyToday: () => apiRequest<FacultyClass[]>("/faculty/classes/today"),
+  facultyAttendance: () => apiRequest<AssignmentStanding[]>("/faculty/attendance"),
+  facultyClass: (sessionId: number) => apiRequest<FacultyClassDetail>(`/faculty/classes/${sessionId}`),
+  startClass: (sessionId: number) => apiRequest<FacultyClassDetail>(`/faculty/classes/${sessionId}/start`, { method: "POST" }),
+  closeClass: (sessionId: number) => apiRequest<FacultyClassDetail>(`/faculty/classes/${sessionId}/close`, { method: "POST" }),
+  cancelClass: (sessionId: number) => apiRequest<FacultyClassDetail>(`/faculty/classes/${sessionId}/cancel`, { method: "POST", body: {} }),
+  markAttendance: (sessionId: number, marks: { student_id: string; status: MarkStatus }[]) =>
+    apiRequest<FacultyClassDetail>(`/faculty/classes/${sessionId}/attendance`, { method: "POST", body: { marks } }),
+  markAll: (sessionId: number, status: MarkStatus = "present") =>
+    apiRequest<FacultyClassDetail>(`/faculty/classes/${sessionId}/attendance/all`, { method: "POST", body: { status } }),
+  facultyAgentCatalog: () => apiRequest<FacultyAgentCatalog>("/faculty/agents"),
 };
 
 export const queryKeys = {
@@ -44,8 +87,15 @@ export const queryKeys = {
   dashboard: ["student", "dashboard"] as const,
   attendance: ["student", "attendance"] as const,
   todaySchedule: ["student", "timetable", "today"] as const,
+  liveClass: ["student", "live-class"] as const,
   exams: ["student", "exams"] as const,
   requests: ["student", "requests"] as const,
   notifications: ["student", "notifications"] as const,
   agentCatalog: ["agents", "catalog"] as const,
+  workflowRequests: ["workflow-requests"] as const,
+  facultyProfile: ["faculty", "profile"] as const,
+  facultyDashboard: ["faculty", "dashboard"] as const,
+  facultyToday: ["faculty", "classes", "today"] as const,
+  facultyAttendance: ["faculty", "attendance"] as const,
+  facultyClass: (sessionId: number) => ["faculty", "class", sessionId] as const,
 };

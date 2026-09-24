@@ -9,6 +9,7 @@ reimplements agent/rule/verification logic; every route composes existing
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import AsyncContextManager, AsyncIterator, Callable
 
 from fastapi import FastAPI
@@ -19,7 +20,7 @@ from app.agents.action.agent import ActionAgent
 from app.agents.career.agent import CareerAgent
 from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
-from app.api.routers import admin, agents, approvals, auth, health, me, missions, students
+from app.api.routers import admin, agents, approvals, auth, faculty, health, me, missions, requests, students
 from app.db.session import create_db_engine, create_session_factory, upgrade_schema
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
@@ -53,6 +54,7 @@ def create_app(
     llm_provider: LLMProvider,
     tool_gateway: ToolGateway | None = None,
     lifespan: Callable[[FastAPI], AsyncContextManager[None]] | None = None,
+    clock: Callable[[], datetime] | None = None,
 ) -> FastAPI:
     """Build a fully-wired FastAPI app.
 
@@ -80,6 +82,7 @@ def create_app(
     fastapi_app.state.knowledge_service = knowledge_service
     fastapi_app.state.llm_provider = llm_provider
     fastapi_app.state.specialist_gateway = SpecialistGateway(registry=registry, session_factory=session_factory)
+    fastapi_app.state.clock = clock or (lambda: datetime.now(timezone.utc))
 
     fastapi_app.include_router(health.router)
     fastapi_app.include_router(students.router)
@@ -90,6 +93,9 @@ def create_app(
     fastapi_app.include_router(auth.router)
     fastapi_app.include_router(me.router)
     fastapi_app.include_router(agents.router)
+    # Phase 16: faculty operations, live attendance and workflow requests.
+    fastapi_app.include_router(faculty.router)
+    fastapi_app.include_router(requests.router)
     return fastapi_app
 
 

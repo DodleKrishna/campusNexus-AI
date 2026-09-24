@@ -5,6 +5,7 @@ import { VerificationBadge } from "@/components/agents/VerificationBadge";
 import { Notice } from "@/components/ui/states";
 import { agentByKey } from "@/features/agents/catalog";
 import { EnquiryAnswer } from "@/features/enquiry/EnquiryAnswer";
+import { FacultyAnswer } from "@/features/faculty/FacultyAnswer";
 import { SpecialistFacts } from "@/features/SpecialistFacts";
 import type { AgentQueryResponse } from "@/types/api";
 
@@ -17,7 +18,9 @@ export function ResponseRenderer({ response }: { response: AgentQueryResponse })
         <span className="text-xs font-semibold text-muted">{response.display_name}</span>
         <VerificationBadge status={response.verification_status} />
       </div>
-      {response.agent_key === "enquiry" ? (
+      {response.facts.scope === "faculty" ? (
+        <FacultyAnswer response={response} />
+      ) : response.agent_key === "enquiry" || response.agent_key === "permission" ? (
         <EnquiryAnswer response={response} />
       ) : (
         <SpecialistFacts answer={{ ...response, agent_key: response.agent_key }} />

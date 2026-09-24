@@ -29,7 +29,8 @@ class AuthAccount(Base):
     role: Mapped[UserRole] = mapped_column(SAEnum(UserRole, values_callable=lambda e: [m.value for m in e]))
     display_name: Mapped[str] = mapped_column(String(120))
     linked_student_id: Mapped[Optional[str]] = mapped_column(ForeignKey("students.student_code"), default=None)
-    # No faculty table exists yet; a later phase links this to one.
+    # Phase 16: faculty_profiles.id for a FACULTY/HOD account. Faculty-scoped
+    # endpoints derive the faculty only from this link.
     linked_faculty_id: Mapped[Optional[int]] = mapped_column(default=None)
     department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), default=None)
     is_active: Mapped[bool] = mapped_column(default=True)

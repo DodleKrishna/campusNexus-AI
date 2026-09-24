@@ -30,8 +30,10 @@ from app.schemas.agent_chat import EnquiryPlan
 from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
+from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.mission import MissionPlan
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
+from app.schemas.workflow import PermissionIntent
 
 
 class LLMProviderError(RuntimeError):
@@ -137,6 +139,17 @@ class LLMProvider(ABC):
         consult for ``query`` (structured output only -- it never answers).
         Providers that don't support it fail visibly rather than guess."""
         raise LLMProviderError(f"LLM provider {getattr(self, 'name', type(self).__name__)!r} does not support enquiry planning.")
+
+    def plan_permission_request(self, message: str) -> PermissionIntent:
+        """Phase 16: interpret a student's permission/leave/OD message into a
+        structured ``PermissionIntent``. It never chooses a reviewer, resolves an
+        event or computes a date -- deterministic code does all of that."""
+        raise LLMProviderError(f"LLM provider {getattr(self, 'name', type(self).__name__)!r} does not support permission requests.")
+
+    def plan_faculty_query(self, message: str) -> FacultyQueryPlan:
+        """Phase 16: classify a faculty member's question (structured output only).
+        Counts and lists are computed in code over the faculty member's own classes."""
+        raise LLMProviderError(f"LLM provider {getattr(self, 'name', type(self).__name__)!r} does not support faculty queries.")
 
     @abstractmethod
     def plan_mission(

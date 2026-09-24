@@ -28,8 +28,10 @@ from app.schemas.agent_chat import EnquiryConsultation, EnquiryPlan
 from app.schemas.career import CareerIntent, CareerIntentResult, CareerResponseContext, OpportunityEligibilityStatus
 from app.schemas.enums import AgentName, VerificationStatus
 from app.schemas.events import EventsIntent, EventsIntentResult, EventsResponseContext
+from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.services import ServicesIntent, ServicesIntentResult, ServicesResponseContext
+from app.schemas.workflow import PermissionIntent
 
 _WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _ACRONYM_STOPWORDS = {"of", "and", "the", "for", "in", "to"}
@@ -180,6 +182,88 @@ _UNNAMED_EVENT_NOTE = (
 
 def _mentions(goal_lower: str, words: tuple) -> bool:
     return any(word in goal_lower for word in words)
+
+
+# Phase 16: live-class questions ("has my class started?", "was I marked present?").
+_LIVE_CLASS_PHRASES = (
+    "class started", "class begun", "class begin", "class start", "class on now", "attendance being taken",
+    "taking attendance", "attendance taken", "marked present", "marked me", "was i marked", "am i marked",
+    "class is happening", "class happening", "class now", "class is now", "next class", "class is next", "class next",
+    "current class",
+)
+_PERMISSION_EVENT_WORDS = ("contest", "workshop", "hackathon", "event", "fest", "competition", "seminar", "talk",
+                           "expo", "summit", "exhibition", "meet", "camp", "fair", "night")
+_EVENT_REF_RE = re.compile(
+    r"(?:attend|participate in|join|for|in)\s+(?:the\s+)?([a-z0-9][a-z0-9 &'-]*?)(?:\s+(?:on|tomorrow|today|next|this|because|since|as)\b|[.,!?]|$)"
+)
+
+
+def _event_reference(q: str) -> Optional[str]:
+    for match in _EVENT_REF_RE.finditer(q):
+        phrase = match.group(1).strip()
+        if any(word in phrase for word in _PERMISSION_EVENT_WORDS):
+            return phrase
+    return None
+
+
+def _permission_intent(message: str) -> PermissionIntent:
+    q = message.lower().strip()
+    if any(k in q for k in (" od ", " od.", "on duty", "on-duty")) or q.startswith("od "):
+        request_type = "od_request"
+    elif "leave" in q:
+        request_type = "leave_request"
+    elif any(k in q for k in ("was absent", "missed", "i was sick", "attendance permission", "excuse my absence", "absent yesterday")):
+        request_type = "attendance_permission"
+    elif any(w in q for w in _PERMISSION_EVENT_WORDS) and any(k in q for k in ("permission", "attend", "participate", "join")):
+        request_type = "event_permission"
+    else:
+        request_type = "unclear"
+    date_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", q)
+    if date_match:
+        date_reference, specific = "specific_date", date_match.group(1)
+    else:
+        specific = None
+        date_reference = next((d for d in ("yesterday", "tomorrow", "today") if d in q), "none")
+    day_part = "afternoon" if "afternoon" in q else "morning" if "morning" in q else "full_day"
+    reason_match = re.search(r"\b(?:because|since|as)\s+(?:of\s+)?(.+?)(?:[.!?](?:\s|$)|$)", message.strip(), flags=re.IGNORECASE)
+    event_reference = _event_reference(q) if request_type in ("event_permission", "od_request") else None
+    return PermissionIntent(
+        request_type=request_type, event_reference=event_reference, date_reference=date_reference,
+        specific_date=specific, day_part=day_part, reason=reason_match.group(1).strip() if reason_match else None,
+    )
+
+
+def _faculty_plan(message: str) -> FacultyQueryPlan:
+    q = message.lower()
+    if "request" in q or "pending" in q or "permission" in q:
+        intent = "pending_requests"
+    elif "below" in q or "%" in q or "shortage" in q or "less than" in q:
+        intent = "below_threshold"
+    elif "absent" in q or "not marked" in q or "who is missing" in q:
+        intent = "absent_students"
+    elif "present" in q or "how many students" in q:
+        intent = "class_attendance"
+    elif "next class" in q or "class is next" in q:
+        intent = "next_class"
+    elif any(k in q for k in ("happening", "right now", "current class", "class now", "started", "in session")):
+        intent = "current_class"
+    elif "class" in q and ("today" in q or "how many" in q or "schedule" in q):
+        intent = "classes_today"
+    else:
+        intent = "unknown"
+    course = re.search(r"\bmy\s+([a-z][a-z0-9 &]*?)\s+(?:class|course|section)\b", q)
+    code = re.search(r"\b([a-z]{2}\d{3})\b", q)
+    section = re.search(r"\bsection\s*([a-z0-9]{1,3})\b", q)
+    year = re.search(r"\b([1-6])(?:st|nd|rd|th)\s+year\b", q)
+    reference = code.group(1).upper() if code else (course.group(1).strip() if course else None)
+    if reference in {"current", "next", "today's", "todays"}:
+        reference = None
+    if reference and reference.lower() not in q:
+        reference = None
+    return FacultyQueryPlan(
+        intent=intent, course_reference=message[q.find(reference.lower()):q.find(reference.lower()) + len(reference)] if reference else None,
+        section_reference=section.group(1).upper() if section else None, year_reference=int(year.group(1)) if year else None,
+    )
 
 
 def _is_campus_services_goal(goal: str) -> bool:
@@ -479,7 +563,7 @@ class MockLLMProvider(LLMProvider):
             if not any(c.agent == agent and c.objective == objective for c in consults):
                 consults.append(EnquiryConsultation(agent=agent, objective=objective))
 
-        live_class = any(k in q for k in ("class started", "class begun", "class begin", "class start", "class on now"))
+        live_class = any(k in q for k in _LIVE_CLASS_PHRASES)
         action_agent = None
         if _mentions(q, _REGISTRATION_WORDS) or "apply for" in q or "apply to" in q:
             action_agent = "placements" if _mentions(q, _CAREER_WORDS) else "events"
@@ -493,7 +577,7 @@ class MockLLMProvider(LLMProvider):
             ask("academic", "What is my timetable?")
         if broad or "exam" in q:
             ask("academic", "When are my exams?")
-        if "attend" in q:
+        if "attend" in q and not live_class:
             ask("academic", query)
         if broad or _mentions(q, _EVENTS_WORDS):
             ask("events", _EVENTS_DISCOVERY_OBJECTIVE)
@@ -508,6 +592,14 @@ class MockLLMProvider(LLMProvider):
             consultations=consults[:6], action_requested=action_agent is not None, action_agent=action_agent,
             asks_live_class_status=live_class, out_of_scope=out_of_scope,
         )
+
+    def plan_permission_request(self, message: str) -> PermissionIntent:
+        """Deterministic keyword interpretation for the Permission Agent."""
+        return _permission_intent(message)
+
+    def plan_faculty_query(self, message: str) -> FacultyQueryPlan:
+        """Deterministic keyword classification for the faculty agents."""
+        return _faculty_plan(message)
 
     def plan_mission(
         self, mission_id: str, goal: str, *, supported_agents: List[AgentName]

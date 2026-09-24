@@ -46,8 +46,10 @@ from app.schemas.agent_chat import EnquiryPlan
 from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
+from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
+from app.schemas.workflow import PermissionIntent
 
 DEFAULT_MODEL = "claude-sonnet-5"
 DEFAULT_TIMEOUT_SECONDS = 60.0
@@ -77,8 +79,25 @@ _SYSTEM_ENQUIRY_PROMPT = (
     "'anything important', consult academic twice (timetable, and exam schedule), plus events, placements "
     "(deadlines and application status) and complaints (overdue cases). If the student asks to perform an action "
     "(register, apply, file or cancel something), set action_requested and action_agent -- no action is ever taken "
-    "here. If the student asks whether a class has actually started, set asks_live_class_status and consult "
-    "academic for the timetable. Put anything outside all four specialists in out_of_scope."
+    "here. If the student asks whether a class has actually started, whether attendance is being taken, whether "
+    "they were marked present, or which class is happening now or next, set asks_live_class_status (live attendance "
+    "session data answers that part; no consultation is needed for it). Put anything outside all four specialists "
+    "in out_of_scope."
+)
+
+_PERMISSION_TOOL_NAME = "interpret_permission_request"
+_SYSTEM_PERMISSION_PROMPT = (
+    "You interpret a student's request for permission, leave or on-duty (OD) into a structured form for a campus "
+    "workflow. You never grant anything, never choose who reviews it, never invent an event, date or reason, and "
+    "never compute a date: report the day only as today, tomorrow, yesterday or an explicit date the student wrote. "
+    "event_reference must be words copied from the message. If the student gave no reason, leave reason null."
+)
+
+_FACULTY_QUERY_TOOL_NAME = "classify_faculty_query"
+_SYSTEM_FACULTY_QUERY_PROMPT = (
+    "You classify a faculty member's question about their own classes into a structured intent for a campus "
+    "assistant. You never answer, count or compute anything -- the system computes every number from attendance "
+    "records. Copy any course or section reference from the question verbatim; never invent one."
 )
 
 _SYSTEM_INTENT_PROMPT = (
@@ -434,6 +453,18 @@ class AnthropicLLMProvider(LLMProvider):
         return self._structured(
             max_tokens=_PLAN_MAX_TOKENS, system=_SYSTEM_ENQUIRY_PROMPT, content=f"Student question: {query}",
             tool_name=_ENQUIRY_TOOL_NAME, description="Record which specialists to consult.", schema_cls=EnquiryPlan,
+        )
+
+    def plan_permission_request(self, message: str) -> PermissionIntent:
+        return self._structured(
+            max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_PERMISSION_PROMPT, content=f"Student message: {message}",
+            tool_name=_PERMISSION_TOOL_NAME, description="Record the interpreted request.", schema_cls=PermissionIntent,
+        )
+
+    def plan_faculty_query(self, message: str) -> FacultyQueryPlan:
+        return self._structured(
+            max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_FACULTY_QUERY_PROMPT, content=f"Faculty question: {message}",
+            tool_name=_FACULTY_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=FacultyQueryPlan,
         )
 
     def plan_mission(

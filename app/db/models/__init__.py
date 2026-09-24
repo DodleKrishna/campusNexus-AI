@@ -27,6 +27,14 @@ from app.db.models.career import (
 from app.db.models.auth import AuthAccount
 from app.db.models.communication import CalendarEvent, Notification, NotificationStatus
 from app.db.models.events import Club, Event, EventRegistration, EventStatus, RegistrationStatus
+from app.db.models.faculty import (
+    AttendanceMarkStatus,
+    AttendanceSession,
+    AttendanceSessionStatus,
+    FacultyProfile,
+    SessionAttendanceMark,
+    TeachingAssignment,
+)
 from app.db.models.identity import Department, Student, User
 from app.db.models.mission import (
     ActionCandidateRecord,
@@ -40,6 +48,12 @@ from app.db.models.mission import (
     ToolCallRecord,
 )
 from app.db.models.services import CampusCase, CaseAssignment, CasePriority, CaseSLA, CaseStatus
+from app.db.models.workflow import (
+    OperationAuditEvent,
+    WorkflowRequest,
+    WorkflowRequestStatus,
+    WorkflowRequestType,
+)
 
 __all__ = [
     "AuthAccount",
@@ -85,4 +99,14 @@ __all__ = [
     "CasePriority",
     "CaseSLA",
     "CaseStatus",
+    "AttendanceMarkStatus",
+    "AttendanceSession",
+    "AttendanceSessionStatus",
+    "FacultyProfile",
+    "SessionAttendanceMark",
+    "TeachingAssignment",
+    "OperationAuditEvent",
+    "WorkflowRequest",
+    "WorkflowRequestStatus",
+    "WorkflowRequestType",
 ]

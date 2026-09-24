@@ -13,3 +13,8 @@ export const useNotifications = () => useQuery({ queryKey: queryKeys.notificatio
 export const useTodaySchedule = () =>
   useQuery({ queryKey: queryKeys.todaySchedule, queryFn: api.todaySchedule, refetchInterval: 60_000, staleTime: 30_000 });
 export const useHealth = () => useQuery({ queryKey: queryKeys.health, queryFn: api.health, staleTime: 5 * STALE, retry: 1 });
+// Phase 16: the live class moves when the faculty starts or closes it -- refresh every 30 s.
+export const useLiveClass = () =>
+  useQuery({ queryKey: queryKeys.liveClass, queryFn: api.liveClass, refetchInterval: 30_000, staleTime: 15_000 });
+export const useWorkflowRequests = () =>
+  useQuery({ queryKey: queryKeys.workflowRequests, queryFn: api.workflowRequests, staleTime: 15_000, refetchInterval: 60_000 });

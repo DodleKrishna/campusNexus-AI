@@ -260,9 +260,35 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - The Enquiry Agent (`app/agents/enquiry/`, added by explicit user decision) is read-only. The LLM only
   plans (`LLMProvider.plan_enquiry`, structured `EnquiryPlan`). The answer is synthesized in code from
   VERIFIED specialist results only. An action request gets a pointer to its workflow, never an execution.
-  Live class-start status does not exist yet; say so rather than infer it.
+  Live class status comes only from Phase 16 attendance sessions (`class_schedule.get_current_class`); never
+  infer it from the timetable.
 - Attendance standing (`app/rules/attendance_standing.py`) derives only from `compute_attendance`. The
   frontend never calculates eligibility.
+
+## Faculty Operations & Student Permissions (Phase 16)
+
+- Attendance is written only by the explicit faculty endpoints (`app/api/routers/faculty.py` →
+  `app/services/faculty_ops.py`), never by an LLM or agent. Lifecycle rules live in
+  `app/rules/class_session.py`: start from 15 min before scheduled start until scheduled end, mark only while
+  ACTIVE, close only when every rostered student is marked. `session_attendance_marks` is unique per
+  (session, student). Closing folds the session into `attendance_records` exactly once (PRESENT/LATE count
+  as attended; EXCUSED does not).
+- Faculty scope is structural: the faculty member comes only from `auth_accounts.linked_faculty_id`
+  (`current_faculty_profile`). Every query starts from their own `teaching_assignments`, or from requests
+  routed to them. Never widen a query and then filter it with a prompt.
+- `workflow_requests` is not `approval_records`. The Permission Agent (`app/agents/permission/`, added by
+  explicit user decision) interprets the message (`LLMProvider.plan_permission_request`, `PermissionIntent`)
+  and prepares a DRAFT. It never grants anything. Context and reviewer come from deterministic code
+  (`app/services/workflow_requests.py`, `app/rules/request_routing.py`); the LLM never names a recipient.
+  A request is sent only by the student confirming that draft, and decided only by its routed reviewer,
+  once, while PENDING. With no reviewer it becomes `NEEDS_REVIEW`, never a guess.
+- Faculty agent chat (`/faculty/agents/{academic|enquiry|permission}/query`) is read-only
+  (`app/agents/enquiry/faculty.py`). Every number is computed from DB rows; the threshold comes from policy
+  evidence.
+- Attendance and request operations are audited in `operation_audit_events` (append-only). Decisions notify
+  the student through the existing `notifications` table.
+- Time comes from `app.state.clock` (`get_now`) so class-window rules are testable; never call
+  `datetime.now()` inside those rules.
 
 ## Idempotency Requirement
 
@@ -410,6 +436,12 @@ uvicorn app.api.main:app --host 127.0.0.1 --port 8000
 cd frontend; npm install; npm run dev
 # Frontend checks
 cd frontend; npm run typecheck; npm run lint; npm test; npm run build
+
+# Phase 16: faculty/student acceptance demo. reset_demo_env.py seeds faculty, sections and an extra
+# Computer Networks class starting now (Dr. Ashok Verma = faculty@campusnexus.local). If the demo is more
+# than an hour after the reset, schedule a fresh one (the API does not need a restart):
+python scripts/schedule_demo_class.py
+pytest tests/test_phase16_faculty_ops.py -v
 
 # Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
 # resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,

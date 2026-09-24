@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional, Tuple
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.schemas.student_portal import (
@@ -29,6 +29,7 @@ from app.schemas.student_portal import (
 )
 from app.db.models.communication import Notification, NotificationStatus
 from app.db.models.mission import ApprovalRecord, Mission, ToolCallRecord
+from app.db.models.workflow import WorkflowRequest, WorkflowRequestStatus
 from app.db.repositories.students import get_student_by_id
 from app.rules.attendance import compute_attendance
 from app.rules.attendance_standing import attendance_standing, slot_status
@@ -69,6 +70,11 @@ def _threshold(knowledge: KnowledgeService, today: date) -> Tuple[PolicyThreshol
     return threshold, PolicySource(
         document_id=threshold.document_id, title=title, version=threshold.policy_version, section=threshold.section
     )
+
+
+def attendance_threshold(knowledge: KnowledgeService, today: date) -> Tuple[PolicyThreshold, Optional[PolicySource]]:
+    """The attendance policy threshold from retrieved policy evidence (Phase 16: shared with the faculty side)."""
+    return _threshold(knowledge, today)
 
 
 def _instructors(session: Session, student_id: str) -> Dict[str, str]:
@@ -182,6 +188,16 @@ def notifications(session: Session, student_id: str, limit: int = 20) -> List[No
     ]
 
 
+def _open_workflow_requests(session: Session, student_id: str) -> int:
+    """Phase 16: permission/leave/OD requests sent and still waiting for a decision."""
+    return session.execute(
+        select(func.count()).select_from(WorkflowRequest).where(
+            WorkflowRequest.student_id == student_id,
+            WorkflowRequest.status.in_([WorkflowRequestStatus.PENDING, WorkflowRequestStatus.NEEDS_REVIEW]),
+        )
+    ).scalar_one()
+
+
 def dashboard(session: Session, knowledge: KnowledgeService, student_id: str) -> Optional[DashboardSummary]:
     student = profile(session, student_id)
     if student is None:
@@ -193,6 +209,7 @@ def dashboard(session: Session, knowledge: KnowledgeService, student_id: str) ->
         profile=student, cgpa=student.cgpa, overall_attendance=overall_attendance(courses),
         courses_below_requirement=sum(1 for c in courses if c.standing == "below_requirement"),
         next_exam=upcoming[0] if upcoming else None,
-        pending_requests=sum(1 for r in requests(session, student_id) if r.status == ApprovalStatus.PENDING.value),
+        pending_requests=sum(1 for r in requests(session, student_id) if r.status == ApprovalStatus.PENDING.value)
+        + _open_workflow_requests(session, student_id),
         unread_notifications=sum(1 for n in notes if n.status != NotificationStatus.READ.value),
     )

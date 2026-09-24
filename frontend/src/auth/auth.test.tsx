@@ -69,7 +69,9 @@ describe("authentication and routing", () => {
     signIn(FACULTY);
     mockApi((url) => (url.endsWith("/auth/me") ? { body: FACULTY } : url.endsWith("/health") ? { body: { ready: true, llm: { provider: "mock", live: false, model: null } } } : undefined));
     renderApp("/student");
-    expect(await screen.findByText(/workspace is coming in the next phase/)).toBeInTheDocument();
+    // Phase 16: a faculty member sent to a student route lands on the faculty workspace.
+    expect(await screen.findByRole("link", { name: "My Classes" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "My Academics" })).not.toBeInTheDocument();
   });
 
   it("signs out with a clear message when the session expires", async () => {

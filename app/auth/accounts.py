@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.auth.passwords import hash_password, verify_password
 from app.db.base import utc_now
 from app.db.models.auth import AuthAccount
+from app.db.models.faculty import FacultyProfile
 from app.db.models.identity import Department, Student
 from app.schemas.enums import UserRole
 
@@ -32,15 +33,22 @@ class SeedAccount:
     display_name: str
     student_code: Optional[str] = None
     department_code: Optional[str] = None
+    # Phase 16: faculty_profiles.employee_code for FACULTY/HOD accounts.
+    faculty_code: Optional[str] = None
 
 
-# Faculty/HOD names are real seeded course instructors (scripts/seed_data.py),
-# so later phases can link them to course records.
+# Faculty/HOD accounts are linked to the seeded faculty profiles of real course
+# instructors (scripts/seed_data.py FACULTY_SEED). faculty@ is Dr. Ashok Verma,
+# who teaches Computer Networks to Aditi's section and is its mentor; the other
+# semester-5 CSE instructors can sign in too, so any routed request can be decided.
 DEV_ACCOUNTS: List[SeedAccount] = [
     SeedAccount("student@campusnexus.local", UserRole.STUDENT, "Aditi Rao", student_code="STU-DEMO-001", department_code="CSE"),
-    SeedAccount("faculty@campusnexus.local", UserRole.FACULTY, "Dr. Ashok Verma", department_code="CSE"),
-    SeedAccount("hod@campusnexus.local", UserRole.HOD, "Dr. Kavita Iyer", department_code="CSE"),
+    SeedAccount("faculty@campusnexus.local", UserRole.FACULTY, "Dr. Ashok Verma", department_code="CSE", faculty_code="EMP-CSE-004"),
+    SeedAccount("hod@campusnexus.local", UserRole.HOD, "Dr. Kavita Iyer", department_code="CSE", faculty_code="EMP-CSE-001"),
     SeedAccount("admin@campusnexus.local", UserRole.ADMIN, "Priya Desai"),
+    SeedAccount("manoj.pillai@campusnexus.local", UserRole.FACULTY, "Dr. Manoj Pillai", department_code="CSE", faculty_code="EMP-CSE-002"),
+    SeedAccount("sunita.rao@campusnexus.local", UserRole.FACULTY, "Dr. Sunita Rao", department_code="CSE", faculty_code="EMP-CSE-003"),
+    SeedAccount("leela.nair@campusnexus.local", UserRole.FACULTY, "Dr. Leela Nair", department_code="CSE", faculty_code="EMP-CSE-005"),
 ]
 
 
@@ -94,12 +102,25 @@ def resolve_seed_password(credentials_file: Path) -> Tuple[str, str]:
     return password, str(credentials_file)
 
 
+def _faculty_id(session: Session, employee_code: Optional[str]) -> Optional[int]:
+    if not employee_code:
+        return None
+    return session.execute(
+        select(FacultyProfile.id).where(FacultyProfile.employee_code == employee_code)
+    ).scalar_one_or_none()
+
+
 def seed_dev_accounts(session: Session, password: str) -> List[str]:
     """Create the development accounts that don't exist yet (idempotent; an
-    existing account's password is never changed). Returns created emails."""
+    existing account's password is never changed). Returns created emails.
+    A faculty account created before its profile existed is linked now."""
     created: List[str] = []
     for spec in DEV_ACCOUNTS:
-        if get_account_by_email(session, spec.email) is not None:
+        faculty_id = _faculty_id(session, spec.faculty_code)
+        existing = get_account_by_email(session, spec.email)
+        if existing is not None:
+            if existing.linked_faculty_id is None and faculty_id is not None:
+                existing.linked_faculty_id = faculty_id
             continue
         department_id = None
         if spec.department_code:
@@ -111,7 +132,7 @@ def seed_dev_accounts(session: Session, password: str) -> List[str]:
             continue  # the student must be seeded first
         session.add(AuthAccount(
             email=spec.email, password_hash=hash_password(password), role=spec.role, display_name=spec.display_name,
-            linked_student_id=spec.student_code, department_id=department_id, is_active=True,
+            linked_student_id=spec.student_code, linked_faculty_id=faculty_id, department_id=department_id, is_active=True,
         ))
         created.append(spec.email)
     session.commit()

@@ -1,4 +1,4 @@
-import { Bot, Briefcase, CalendarDays, ClipboardList, GraduationCap, LayoutDashboard, MessageSquareWarning, type LucideIcon } from "lucide-react";
+import { Bot, Briefcase, CalendarDays, ClipboardCheck, ClipboardList, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, type LucideIcon } from "lucide-react";
 import type { Role } from "@/types/api";
 
 export interface NavItem {
@@ -18,9 +18,18 @@ const STUDENT_NAV: NavItem[] = [
   { label: "Complaints", to: "/student/agents/complaints", icon: MessageSquareWarning },
 ];
 
+const FACULTY_NAV: NavItem[] = [
+  { label: "Overview", to: "/faculty", icon: LayoutDashboard, end: true },
+  { label: "My Classes", to: "/faculty/classes", icon: School },
+  { label: "Attendance", to: "/faculty/attendance", icon: ClipboardCheck },
+  { label: "Agents", to: "/faculty/agents", icon: Bot },
+  { label: "Student Requests", to: "/faculty/requests", icon: Inbox },
+];
+
 export function navigationFor(role: Role): NavItem[] {
   if (role === "student") return STUDENT_NAV;
-  const home = role === "hod" ? "/hod" : role === "faculty" ? "/faculty" : "/admin";
+  if (role === "faculty") return FACULTY_NAV;
+  const home = role === "hod" ? "/hod" : "/admin";
   return [{ label: "Overview", to: home, icon: LayoutDashboard, end: true }];
 }
 

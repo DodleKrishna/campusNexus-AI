@@ -28,3 +28,28 @@ export const REQUEST_STATUS: Record<string, { label: string; tone: BadgeTone }> 
   stale: { label: "Expired", tone: "neutral" },
   edit_required: { label: "Replaced", tone: "neutral" },
 };
+
+// Phase 16
+export const SESSION: Record<string, { label: string; tone: BadgeTone }> = {
+  scheduled: { label: "Scheduled", tone: "info" },
+  active: { label: "Live", tone: "accent" },
+  closed: { label: "Closed", tone: "neutral" },
+  cancelled: { label: "Cancelled", tone: "danger" },
+};
+
+export const MARK: Record<string, { label: string; tone: BadgeTone }> = {
+  present: { label: "Present", tone: "success" },
+  late: { label: "Late", tone: "warning" },
+  absent: { label: "Absent", tone: "danger" },
+  excused: { label: "Excused", tone: "info" },
+  not_marked: { label: "Not marked yet", tone: "neutral" },
+};
+
+export const WORKFLOW_STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  draft: { label: "Draft", tone: "neutral" },
+  pending: { label: "Pending", tone: "warning" },
+  needs_review: { label: "Needs review", tone: "warning" },
+  approved: { label: "Approved", tone: "success" },
+  rejected: { label: "Rejected", tone: "danger" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+};

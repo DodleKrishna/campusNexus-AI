@@ -1253,6 +1253,99 @@ Presentation only. No agent, rule or verification behaviour changed.
     the demo DB and policy store.
 - Raw structured facts and document ids are shown only with **Show technical details** in the sidebar.
 
+## Faculty Operations, Live Attendance & Student Permissions (Phase 16)
+
+This phase adds the first cross-role workflow. A faculty member starts a class and marks attendance. The
+student sees the live class, and the Enquiry Agent can answer "has my class started?". The student asks the
+Permission Agent for a request, and the routed faculty member approves or rejects it. The student then sees
+the decision and gets a notification.
+
+### Data (all new tables; two nullable columns on `students`)
+
+| Table | Purpose |
+|---|---|
+| `faculty_profiles` | One per instructor (employee code, department, designation, contact). `auth_accounts.linked_faculty_id` points here. |
+| `teaching_assignments` | Faculty × course × section × year/semester × academic term. Unique per course/section/term. |
+| `attendance_sessions` | One class meeting: `SCHEDULED → ACTIVE → CLOSED`, or `SCHEDULED → CANCELLED`. Unique per assignment and scheduled start. `timetable_slot_id` is null for an extra class. |
+| `session_attendance_marks` | PRESENT / ABSENT / LATE / EXCUSED. Unique per (session, student); changing a mark updates the row. |
+| `workflow_requests` | Student permission, leave and OD requests (`DRAFT → PENDING → APPROVED/REJECTED`, `NEEDS_REVIEW`, `CANCELLED`). |
+| `operation_audit_events` | Append-only audit trail for attendance and request operations, which have no mission for `audit_logs`. |
+
+`students.section` and `students.mentor_faculty_id` are nullable and are added by `upgrade_schema`. A class
+roster is every student enrolled in the course for the assignment's term whose section matches.
+`attendance_records` (the per-course counters that every attendance rule reads) is unchanged.
+
+### Deterministic rules (`app/rules/class_session.py`, `app/rules/request_routing.py`)
+
+- A class can be started from 15 minutes before its scheduled start until its scheduled end, from SCHEDULED
+  only. A faculty member can have only one ACTIVE class.
+- Marks can be set only while the class is ACTIVE. A class closes only when every rostered student has a
+  mark. Unmarked students are never silently recorded as absent.
+- Closing folds the session into `attendance_records` exactly once, using the policy formula
+  (attended ÷ conducted). Conducted goes up by 1 for everyone on the roster; attended goes up by 1 for
+  PRESENT and LATE. EXCUSED is recorded but does not count as attended, because condonation stays with the
+  Academic Office, per the attendance policy.
+- Routing: event permission, OD and attendance permission go to the affected class's faculty member when
+  exactly one faculty member is affected, otherwise to the mentor. Leave goes to the mentor, otherwise to
+  the one affected faculty member. With no reviewer the request becomes `NEEDS_REVIEW` with no reviewer.
+  The LLM never names a recipient: `PermissionIntent` has no reviewer, status or computed-date field.
+
+### Services
+
+- `app/services/class_schedule.py` works out a day's classes: recurring slots plus extra-class sessions, with
+  session rows overriding scheduled status. It also answers the live-class questions:
+  `get_current_class(student, now)`, `get_live_session(assignment, now)` and
+  `get_student_attendance_for_session(...)`. Student reads never write. The faculty view creates the day's
+  SCHEDULED rows idempotently.
+- `app/services/faculty_ops.py` handles start, mark, mark all, close and cancel, and builds the dashboard,
+  class detail and attendance overview. Every function takes the caller's `FacultyProfile` and rejects a
+  session from another faculty member's assignment (`FacultyAccessError` → 403).
+- `app/services/workflow_requests.py` collects context. It resolves the event against real events (an
+  LLM-proposed reference counts only if it appears in the message), computes the date from the campus
+  clock, and finds the affected classes, their faculty, attendance and marks. It also persists drafts,
+  handles submit, cancel and decide, and creates notifications.
+
+### Agents
+
+- **Permission Agent** (`app/agents/permission/`): the LLM produces a structured `PermissionIntent`;
+  everything after that is the deterministic service. It prepares and routes a DRAFT and never grants
+  anything. The request is sent only when the student confirms that exact draft (`POST /requests` with the
+  draft id; routing and context stay server-side). Only the routed faculty member can decide it, and only
+  while it is PENDING.
+- **Enquiry Agent** (student): for live-class questions it uses the message from
+  `class_schedule.get_current_class` verbatim. Without a live-class source it still says that live status
+  is unavailable.
+- **Faculty agents** (`app/agents/enquiry/faculty.py`: Academic, Enquiry, Permission): the LLM classifies
+  the question into a `FacultyQueryPlan`. Access control is structural: every lookup starts from the
+  faculty member's own assignments, or from requests routed to them, so another course or section resolves
+  to "not one of your classes". Counts and lists are computed from the rows, and the 75% threshold comes
+  from retrieved policy evidence, which is attached to the answer.
+
+### API (JWT; identity only from the token)
+
+`/faculty/me`, `/faculty/dashboard`, `/faculty/classes/today`, `/faculty/classes/{id}`,
+`POST /faculty/classes/{id}/start|attendance|attendance/all|close|cancel`, `/faculty/attendance`,
+`/faculty/agents`, `POST /faculty/agents/{key}/query`; `/me/live-class` (the student path follows the
+existing `/me/*` pattern); `GET /requests`, `GET /requests/{id}`, `POST /requests/prepare`,
+`POST /requests`, `POST /requests/{id}/approve|reject|cancel`. `create_app(clock=...)` injects the time
+that every class-window rule uses, so tests can pin it.
+
+### Demo data
+
+Each course instructor has a faculty profile and one teaching assignment (section 1). Aditi's section has
+12 students; Dr. Ashok Verma teaches Computer Networks to that section and is its mentor. Development
+accounts are provided for the four semester-5 CSE instructors. The recurring timetable only meets at 10:00,
+so `scripts/schedule_demo_class.py` (which `reset_demo_env.py` runs) records one extra Computer Networks
+class starting now. The faculty member still starts it, marks it and closes it through the API.
+
+### Known limitations
+
+- There is no automatic close. A class left ACTIVE stays live until the faculty member closes it, and the
+  dashboard keeps showing it as the active class.
+- One section per course and one extra-class helper; no timetable editing UI.
+- No HOD escalation. `NEEDS_REVIEW` requests wait for an administrator workflow that does not exist yet.
+- The live views poll (30–60 s); there are no WebSockets or push notifications.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

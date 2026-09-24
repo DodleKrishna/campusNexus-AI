@@ -6,6 +6,12 @@ import { AppShell } from "@/components/layout/AppShell";
 import { FullPageLoader } from "@/components/ui/full-page-loader";
 import { LoginPage } from "@/pages/LoginPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
+import { FacultyAgentPage, FacultyAgentsPage } from "@/pages/faculty/FacultyAgentsPage";
+import { FacultyAttendancePage } from "@/pages/faculty/FacultyAttendancePage";
+import { FacultyClassesPage } from "@/pages/faculty/FacultyClassesPage";
+import { FacultyClassPage } from "@/pages/faculty/FacultyClassPage";
+import { FacultyDashboardPage } from "@/pages/faculty/FacultyDashboardPage";
+import { FacultyRequestsPage } from "@/pages/faculty/FacultyRequestsPage";
 import { RoleWorkspacePage } from "@/pages/RoleWorkspacePage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { StudentAcademicsPage } from "@/pages/student/StudentAcademicsPage";
@@ -50,7 +56,18 @@ export function AppRoutes() {
         <Route path="settings" element={<SettingsPage />} />
       </Route>
 
-      {(["faculty", "hod", "admin"] as const).map((role) => (
+      <Route path="/faculty" element={<StaffRoutes role="faculty" />}>
+        <Route index element={<FacultyDashboardPage />} />
+        <Route path="classes" element={<FacultyClassesPage />} />
+        <Route path="classes/:sessionId" element={<FacultyClassPage />} />
+        <Route path="attendance" element={<FacultyAttendancePage />} />
+        <Route path="agents" element={<FacultyAgentsPage />} />
+        <Route path="agents/:agentKey" element={<FacultyAgentPage />} />
+        <Route path="requests" element={<FacultyRequestsPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+      </Route>
+
+      {(["hod", "admin"] as const).map((role) => (
         <Route key={role} path={`/${role}`} element={<StaffRoutes role={role} />}>
           <Route index element={<RoleWorkspacePage />} />
           <Route path="settings" element={<SettingsPage />} />
