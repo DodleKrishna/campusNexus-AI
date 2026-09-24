@@ -3,6 +3,9 @@
 # to the LAN. Override deliberately with --server.address if ever needed.
 [server]
 address = "127.0.0.1"
+# No first-run email prompt (it blocks a fresh machine's startup window) and no
+# auto-opened browser tab -- scripts/start_demo.ps1 opens the UI once it's up.
+headless = true
 
 [browser]
 gatherUsageStats = false

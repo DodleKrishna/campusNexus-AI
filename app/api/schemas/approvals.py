@@ -30,6 +30,9 @@ class ApprovalView(BaseModel):
     parameters: Dict[str, JsonValue] = {}
     verification_status: Optional[str] = None
     evidence: List[Evidence] = []
+    # Issues the propose-time Deterministic Verifier pre-check raised (empty =
+    # every pre-check passed) -- what the approver needs to know before deciding.
+    precheck_issues: List[str] = []
 
 
 class ApprovalDecisionRequest(BaseModel):

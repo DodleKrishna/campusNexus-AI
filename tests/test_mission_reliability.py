@@ -257,3 +257,12 @@ def test_synthesis_skips_an_answer_already_contained_in_an_earlier_one(session_f
     )
     final = orchestrator.run_mission("goal", user_id="u1", user_role=UserRole.STUDENT)
     assert final["final_result"] == "[verified] same answer [verified] different"
+
+
+def test_pending_approval_exposes_the_precheck_issues_to_the_approver(api_client) -> None:
+    goal = "Find the workshop titled 'Competitive Coding Contest', verify there are no conflicts with my classes or exams, and register me for it."
+    mission = api_client.post("/missions", json={"goal": goal}, headers={"X-Demo-Identity": "student-demo"}).json()
+    assert mission["status"] == "needs_approval"
+    pending = [a for a in api_client.get("/approvals/pending", headers={"X-Demo-Identity": "admin-demo"}).json()
+               if a["mission_id"] == mission["mission_id"]]
+    assert pending[0]["precheck_issues"] == ["No timetable/exam data was available to check for schedule conflicts."]

@@ -102,6 +102,11 @@ with st.sidebar:
     st.caption(f"Signed in as **{_IDENTITY_LABELS.get(selected_key, selected_key)}**")
 
 theme.render_hero("CampusNexus AI", "From Campus Goals to Verified Actions.")
+st.caption(
+    f"👤 Viewing as **{_IDENTITY_LABELS.get(selected_key, selected_key)}**"
+    + (f" · student `{student_id}`" if identity_def.role != UserRole.STUDENT else "")
+    + " · Local demo: fictional campus data, no production authentication · LLM mode shown in the sidebar"
+)
 
 try:
     if page == "Dashboard":

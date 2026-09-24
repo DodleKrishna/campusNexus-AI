@@ -39,6 +39,7 @@ def _enrich(session: Session, approval: ApprovalRecord) -> ApprovalView:
         view.parameters = proposal.get("parameters") or {}
         view.verification_status = proposing_run.status.value
         view.evidence = [Evidence.model_validate(e) for e in (proposing_run.evidence or [])]
+        view.precheck_issues = list(proposing_run.errors or [])
     return view
 
 

@@ -165,3 +165,8 @@ def test_checked_events_without_clashes_are_described_as_conflict_free() -> None
     text = _render(_assessment(timetable=[]))
     assert text.startswith("Events with no schedule conflicts:")
     assert "NOT checked" not in text
+
+
+def test_sentence_initial_word_is_not_carried_as_part_of_the_course_name() -> None:
+    plan, _ = _shape("My Operating Systems attendance is low. Can I write the exam, and how can I recover?")
+    assert plan.tasks[1].objective == "how can I recover? in Operating Systems"

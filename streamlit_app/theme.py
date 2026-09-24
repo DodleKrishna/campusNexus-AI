@@ -40,6 +40,7 @@ _STATUS_COLORS = {
     "success": ("#E7F8EE", "#1E8E5A"),
     "partial": ("#FFF1E0", "#C2660D"),
     "verified": ("#E7F8EE", "#1E8E5A"),
+    "needs_review": ("#FFF1E0", "#C2660D"),
     "approved": ("#E7F8EE", "#1E8E5A"),
     "rejected": ("#FDEAEA", "#C23B3B"),
     "open": ("#FFF1E0", "#C2660D"),
@@ -90,6 +91,20 @@ def status_badge(status: str) -> str:
     bg, fg = _STATUS_COLORS.get(status, ("#F1F3F7", MUTED))
     label = status.replace("_", " ").upper()
     return f'<span class="cn-badge" style="background:{bg};color:{fg};">{label}</span>'
+
+
+# An agent run's persisted status is derived 1:1 from its Deterministic
+# Verifier result (VERIFIED -> success, NEEDS_REVIEW -> partial, FAILED ->
+# failed); the UI shows the verifier's vocabulary, which is what it means.
+_VERIFICATION_LABELS = {"success": "verified", "partial": "needs_review", "failed": "failed"}
+
+
+def verification_label(agent_status: str) -> str:
+    return _VERIFICATION_LABELS.get(agent_status, agent_status)
+
+
+def verification_badge(agent_status: str) -> str:
+    return status_badge(verification_label(agent_status))
 
 
 def render_hero(title: str, tagline: str) -> None:

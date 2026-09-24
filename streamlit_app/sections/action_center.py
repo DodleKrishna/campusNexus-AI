@@ -57,10 +57,16 @@ def _render_card(client: ApiClient, approval: dict, can_decide: bool) -> None:
         info_cols[0].markdown(f"Tool  \n`{approval.get('tool_name') or 'n/a'}`")
         info_cols[1].markdown(f"Target resource  \n`{approval.get('target_resource') or 'n/a'}`")
         info_cols[2].markdown(f"Student  \n`{approval.get('student_id') or 'n/a'}`")
+        issues = approval.get("precheck_issues") or []
         info_cols[3].markdown(
-            f"Verification  \n{theme.status_badge(approval.get('verification_status') or approval['status'])}",
+            f"Deterministic pre-check  \n{theme.status_badge('needs_review' if issues else 'verified')}",
             unsafe_allow_html=True,
         )
+        if issues:
+            st.warning(
+                "Pre-check flagged for the approver: " + "; ".join(issues)
+                + " All preconditions are re-checked against current data before execution."
+            )
 
         with st.expander("Validated parameters & supporting evidence"):
             st.json(approval.get("parameters") or {})

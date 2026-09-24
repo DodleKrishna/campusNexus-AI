@@ -158,8 +158,11 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
             # A task runs again after an approval (resume) or a replan; each
             # run is a separate, persisted record -- label it, don't hide it.
             label += f" (run {attempt_seen[run['task_id']]} of {runs_per_task[run['task_id']]})"
-        with st.expander(f"{label} · {_agent_label(run['agent'])} · {run['status'].upper()}"):
-            st.markdown(theme.status_badge(run["status"]), unsafe_allow_html=True)
+        awaiting = bool(run["facts"].get("awaiting_approval"))
+        verdict = "WAITING FOR APPROVAL" if awaiting else theme.verification_label(run["status"]).upper()
+        with st.expander(f"{label} · {_agent_label(run['agent'])} · {verdict}"):
+            badge = theme.status_badge("WAITING_FOR_APPROVAL") if awaiting else theme.verification_badge(run["status"])
+            st.markdown(f"Verifier result: {badge}", unsafe_allow_html=True)
             if run["errors"]:
                 st.warning("; ".join(run["errors"]))
             if run.get("response_text"):
@@ -174,6 +177,21 @@ def _render_mission(client: ApiClient, mission_id: str) -> None:
 
     st.markdown("#### Evidence & Trust")
     _render_evidence(client, mission_id, short_ids)
+
+    # The latest Action Agent run per task, once it is past the approval pause:
+    # its outcome is the single most important line of an action mission.
+    latest_action_runs = {
+        run["task_id"]: run for run in mission["agent_results"] if run["agent"] == "action_agent"
+    }
+    finished_actions = [run for run in latest_action_runs.values() if not run["facts"].get("awaiting_approval")]
+    if finished_actions:
+        st.markdown("#### Action Result")
+        for run in finished_actions:
+            text = run.get("response_text") or "; ".join(run["errors"]) or run["status"]
+            if run["status"] == "success":
+                st.success(f"✅ {text}")
+            else:
+                st.error(f"⛔ {text}")
 
     if mission.get("final_result"):
         st.markdown("#### Final Response")

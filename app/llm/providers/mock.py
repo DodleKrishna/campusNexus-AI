@@ -84,9 +84,19 @@ def _split_goal_clauses(goal: str) -> List[str]:
     return parts or ([cleaned] if cleaned else [])
 
 
+_SUBJECT_LEADING_WORDS = {"My", "The", "Our", "Check", "Can", "Is", "Am", "What", "When", "How"}
+
+
 def _extract_shared_subject(goal: str) -> Optional[str]:
     match = _SUBJECT_RE.search(goal)
-    return match.group(1) if match else None
+    if not match:
+        return None
+    # A sentence-initial capitalised word ("My Operating Systems ...") is not
+    # part of the course name.
+    words = match.group(1).split()
+    while len(words) > 1 and words[0] in _SUBJECT_LEADING_WORDS:
+        words = words[1:]
+    return " ".join(words)
 
 
 _RECOVERY_PHRASES = ("how many classes", "how many more classes", "need to attend", "classes do i need")
