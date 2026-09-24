@@ -52,6 +52,8 @@ _EVENT_TYPE_TO_STATUS = {
     "approval_invalidated": "NEEDS_REVIEW",
     # Phase 12B: not a failure -- the student has to pick the target themselves.
     "action_target_unconfirmed": "NEEDS_REVIEW",
+    # Phase 12C: an LLM provider outage paused the task; resuming re-runs it.
+    "provider_unavailable": "NEEDS_REVIEW",
 }
 
 

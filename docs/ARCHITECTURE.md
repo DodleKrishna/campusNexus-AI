@@ -1080,6 +1080,82 @@ The rule is enforced in two layers:
 - Relevance matching is still keyword overlap. Stopwords remove planner filler but cannot anticipate every
   phrasing.
 
+## Groq Free-Tier Rate-Limit Resilience (Phase 12C)
+
+The live Phase 12B run lost scenario C (the unnamed registration) to HTTP 429. The cause was a chain:
+
+1. Three independent DAG tasks called Groq at the same time, which exhausted the free tier's 8,000
+   tokens-per-minute (TPM) budget.
+2. Each 429 became an ordinary task failure.
+3. Each failure triggered a semantic replan, and every replan made another planner call against the same
+   exhausted budget.
+
+It never produced an approval or a tool call, but the mission ended FAILED after two pointless replans.
+
+### Provider level (`app/llm/providers/groq.py`)
+
+- **Concurrency limit.** A `BoundedSemaphore` of `CAMPUSNEXUS_LLM_MAX_CONCURRENCY` (default 1) is held
+  for each Groq call, including its retry waits. The limit applies per provider instance, and the app
+  builds one. The Orchestrator still dispatches independent tasks in parallel; only their HTTP calls
+  queue. The Mock and Anthropic providers are not throttled.
+- **Waiting out a 429.** The provider waits for the time Groq asks for. It reads the `retry-after` header
+  first, then `x-ratelimit-reset-tokens`, then the "try again in 6.165s" text in the error body. The wait
+  is capped at 30 s, and with no guidance at all it backs off 1 s, 2 s. While it waits, a shared cooldown
+  stops every thread from sending, even when the concurrency limit is above 1.
+- **Typed transient errors.** A rate limit, timeout, network error or 5xx that outlasts `max_retries` (2)
+  raises `LLMTransientError`, or `LLMRateLimitError` for a 429. Both are subclasses of `LLMProviderError`,
+  so nothing ever falls back to the mock. `details()` returns kind, provider, model, HTTP status,
+  retry-after and the retry count, with no secrets. Authentication, configuration and malformed-output
+  errors are not transient.
+- **Counters.** `stats()` reports requests, `rate_limit_retries`, `transient_retries`,
+  `rate_limit_wait_seconds`, `max_observed_concurrency`, and the largest completion-token count seen per
+  operation.
+- **Output budgets per operation.** These are the `max_completion_tokens` values. On gpt-oss they also
+  cover reasoning tokens.
+
+  | Operation | Old budget | New budget |
+  |---|---|---|
+  | Intent classification (a two-field schema) | 1024 | 512 |
+  | Mission plan | 4096 | 2048 |
+  | User-facing answer | 1024 | 1024 (unchanged) |
+
+  A truncated response is still discarded. Check `max_completion_tokens_used` before changing a budget.
+
+### Orchestrator level
+
+- The dispatcher catches `LLMTransientError` and reports its `details()` as `provider_unavailable` instead
+  of a plain error string.
+- `_dispatch_and_collect` keeps that task PENDING. It takes no failure fingerprint and records no FAILED
+  `AgentRun`. It writes a `provider_unavailable` audit event, which the API timeline shows as NEEDS_REVIEW.
+- `_update_mission_state` checks for a provider outage *before* the replan branch. The mission stops
+  FAILED, with the final text "Mission paused: the LLM provider … is unavailable (rate limit, HTTP 429,
+  retry after Ns) … Nothing was replanned". Results from the same round are kept, and
+  `replan_count` is untouched.
+- `resume_mission` re-runs only the PENDING task(s), under the same plan and with no planner call.
+- A planner outage still fails the mission through `plan_generation_failed`. Its metadata now carries the
+  transient details.
+- Genuine agent and verifier failures replan exactly as before.
+
+### Live evaluation
+
+- `--case NAME` runs exactly one E2E scenario from the existing definitions (`SCENARIOS_BY_NAME`), and
+  can be repeated. It runs no structured checks and no other scenarios.
+- Each run records the provider's counters as deltas and its replan count. A provider outage is labelled
+  PROVIDER UNAVAILABLE rather than a wrong answer.
+
+### Known limitations
+
+- The concurrency limit and cooldown are per process. Two processes sharing one Groq key (for example the
+  API and `check_live_llm.py` at the same time) can still collide.
+- A paused mission shows FAILED, because no paused status exists and none was added. The
+  `provider_unavailable` event and the "Mission paused" text are what tell it apart from a genuine failure.
+  Resuming it works through `POST /missions/{id}/resume`. The Streamlit Resume button is only shown for
+  `needs_approval` missions.
+- The LangGraph `LangChainPendingDeprecationWarning` comes from a module-level `Reviver()` inside
+  `langgraph/checkpoint/serde/jsonplus.py` (langgraph-checkpoint 2.1.2), which runs at import time. Our
+  checkpointer never constructs a serializer that could take `allowed_objects`, so it is left unchanged
+  rather than filtered.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

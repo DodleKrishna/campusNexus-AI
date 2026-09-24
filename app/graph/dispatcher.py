@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.graph.registry import AgentRegistry, UnsupportedAgentError
 from app.graph.results import AgentOutcome
+from app.llm.base import LLMTransientError
 from app.schemas.agent import AgentMessage, AgentResult
 from app.schemas.common import JsonValue
 from app.schemas.enums import AgentName
@@ -52,6 +53,10 @@ class DispatchOutcome:
     task_id: str
     outcome: Optional[AgentOutcome]
     error: Optional[str] = None
+    # Phase 12C: set when the error was an LLM provider outage that outlasted
+    # the provider's own retries (``LLMTransientError.details()``). Nothing
+    # about the task itself failed, so the Orchestrator must not replan.
+    provider_unavailable: Optional[Dict[str, JsonValue]] = None
 
 
 # Set by the Orchestrator only (Phase 12B): the student's own words, which the
@@ -112,6 +117,10 @@ def _run_one(
         return DispatchOutcome(task_id=task.task_id, outcome=outcome)
     except UnsupportedAgentError as exc:
         return DispatchOutcome(task_id=task.task_id, outcome=None, error=str(exc))
+    except LLMTransientError as exc:
+        return DispatchOutcome(
+            task_id=task.task_id, outcome=None, error=f"{type(exc).__name__}: {exc}", provider_unavailable=exc.details()
+        )
     except Exception as exc:  # noqa: BLE001 -- any agent-internal failure becomes a task failure, not a crash
         return DispatchOutcome(task_id=task.task_id, outcome=None, error=f"{type(exc).__name__}: {exc}")
     finally:

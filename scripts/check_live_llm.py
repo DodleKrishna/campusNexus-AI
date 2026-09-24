@@ -49,6 +49,12 @@ Usage:
     python scripts/check_live_llm.py --smoke --out data/demo/live_smoke_report.json
     python scripts/check_live_llm.py --provider groq --affected --out data/demo/live_affected_report.json
     python scripts/check_live_llm.py --provider groq --e2e --pause 20   # space missions out under a TPM limit
+    python scripts/check_live_llm.py --provider groq --case C_unnamed_registration --out data/demo/live_case_c.json
+
+Phase 12C: ``--case NAME`` runs exactly one E2E scenario (repeatable) and
+nothing else. Each run reports the provider's own counters -- requests, 429
+retries, seconds waited, peak concurrent calls -- and a provider outage is
+labelled PROVIDER UNAVAILABLE rather than a wrong answer.
 """
 from __future__ import annotations
 
@@ -159,6 +165,10 @@ AFFECTED_SCENARIOS = [
     ("B_events_skill_gaps", GOALS["events"][0], "completed", "events_match_skill_gaps"),
     ("C_unnamed_registration", UNNAMED_REGISTRATION_GOAL, "clarification", None),
 ]
+# --case NAME: any single scenario above, by name (Phase 12C). One lookup over
+# the existing definitions, so nothing is defined twice.
+SCENARIOS_BY_NAME = {scenario[0]: scenario for scenario in E2E_SCENARIOS + AFFECTED_SCENARIOS}
+PROVIDER_COUNTERS = ("requests", "rate_limit_retries", "transient_retries", "rate_limit_wait_seconds")
 OUTCOME_LABELS = {
     "completed": "COMPLETED",
     "clarification": "SAFE CLARIFICATION / USER SELECTION REQUIRED",
@@ -527,13 +537,25 @@ def run_e2e(provider, report: Dict[str, Any], scenarios=None, pause_seconds: flo
         if index and pause_seconds:
             time.sleep(pause_seconds)  # stay under a per-minute token limit; not part of any latency figure
         first_call, first_dispatch = len(llm_calls), len(dispatches)
+        stats_before = provider_stats(provider)
         started = time.perf_counter()
         state = orchestrator.run_mission(goal, user_id="STU-DEMO-001", user_role=UserRole.STUDENT, student_id="STU-DEMO-001")
         seconds = round(time.perf_counter() - started, 1)
         record = _mission_record(session_factory, state, llm_calls[first_call:], dispatches[first_dispatch:])
         record.update(scenario=name, goal=goal, seconds=seconds, expected=expected, extra_check=extra_check)
+        stats_after = provider_stats(provider)
+        record["provider_stats"] = {
+            key: round(stats_after.get(key, 0) - stats_before.get(key, 0), 3) for key in PROVIDER_COUNTERS if key in stats_after
+        }
         record.update(evaluate_e2e(record, expected, extra_check))
         report["e2e"].append(record)
+    report["provider_stats"] = provider_stats(provider)
+
+
+def provider_stats(provider) -> Dict[str, Any]:
+    """The provider's own call counters (Groq: retries, waits, peak concurrency); {} if it keeps none."""
+    stats = getattr(provider, "stats", None)
+    return stats() if callable(stats) else {}
 
 
 def _mission_record(session_factory, state, llm_calls: List[Dict[str, Any]], dispatches: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -604,9 +626,17 @@ def evaluate_e2e(record: Dict[str, Any], expected: str, extra_check: Optional[st
     status = record["mission_status"]
     approvals, tool_calls = record["approvals"], record["tool_calls"]
     selection_events = [e for e in record["audit"] if e["event_type"] == "action_target_unconfirmed"]
+    # Phase 12C: an LLM outage is reported as such, not as a wrong answer.
+    outages = [
+        e for e in record["audit"]
+        if e["event_type"] == "provider_unavailable"
+        or (e["event_type"] == "plan_generation_failed" and (e.get("metadata") or {}).get("kind"))
+    ]
     executed = [t for t in tool_calls if t["status"] != "pending"]
     if executed:
         problems.append(f"tool call(s) executed without an approval decision: {executed}")
+    if outages:
+        problems.append(f"LLM provider unavailable: {outages[-1]['message'][:200]}")
 
     if plan is None:
         problems.append("planner produced no plan")
@@ -640,8 +670,13 @@ def evaluate_e2e(record: Dict[str, Any], expected: str, extra_check: Optional[st
             problems.append("a read-only mission created an approval")
     problems += _extra_check_problems(record, extra_check)
 
+    if outages:
+        label = f"PROVIDER UNAVAILABLE ({(outages[-1].get('metadata') or {}).get('kind', 'outage')})"
+    else:
+        label = OUTCOME_LABELS[expected] if not problems else f"UNEXPECTED ({status})"
     return {
-        "outcome_label": OUTCOME_LABELS[expected] if not problems else f"UNEXPECTED ({status})",
+        "outcome_label": label,
+        "replans": sum(1 for e in record["audit"] if e["event_type"] == "replan_triggered"),
         "user_selection_required": bool(selection_events),
         "problems": problems,
         "pass": not problems,
@@ -692,7 +727,9 @@ def print_e2e(report: Dict[str, Any]) -> None:
                   f"verification={verification.get('status', 'n/a')} intent={facts.get('intent', '-')} "
                   f"evidence={len(dispatch.get('evidence', []))} issues={verification.get('issues', dispatch.get('error'))}")
         print(f"      approvals={run['approvals']} tool_calls={run['tool_calls']} "
-              f"user_selection_required={run['user_selection_required']}")
+              f"user_selection_required={run['user_selection_required']} replans={run['replans']}")
+        if run.get("provider_stats"):
+            print(f"      provider: {run['provider_stats']}")
         for problem in run["problems"]:
             print(f"      problem: {problem}")
         print(f"      final: {(run['final_result'] or '')[:400]}")
@@ -719,6 +756,10 @@ def main() -> None:
         "--affected", action="store_true",
         help="Run only the three scenarios the first live E2E run got wrong (intent + missions, with full traces).",
     )
+    parser.add_argument(
+        "--case", action="append", choices=sorted(SCENARIOS_BY_NAME), default=None, metavar="NAME",
+        help=f"Run only this E2E scenario (repeatable), nothing else. One of: {', '.join(sorted(SCENARIOS_BY_NAME))}.",
+    )
     parser.add_argument("--pause", type=float, default=0.0, help="Seconds to wait between E2E missions (rate limits).")
     parser.add_argument("--out", default=None, help="Write the full JSON report to this path.")
     args = parser.parse_args()
@@ -733,7 +774,7 @@ def main() -> None:
         print(f"UNAVAILABLE: provider {provider_name!r} is not a real LLM provider.")
         sys.exit(2)
 
-    mode = "smoke" if args.smoke else "affected" if args.affected else "full"
+    mode = "smoke" if args.smoke else "case" if args.case else "affected" if args.affected else "full"
     report: Dict[str, Any] = {
         "provider": provider.name, "model": provider.model_name, "mode": mode,
         "checks": [], "smoke": [], "e2e": [],
@@ -742,13 +783,15 @@ def main() -> None:
     if args.smoke:
         run_smoke(provider, report)
         print_smoke(report)
+    elif args.case:
+        run_e2e(provider, report, scenarios=[SCENARIOS_BY_NAME[name] for name in args.case], pause_seconds=args.pause)
     elif args.affected:
         check_intents(provider, report, academic_intents=AFFECTED_INTENTS, specialist_intents=[SPECIALIST_INTENTS[1]])
         run_e2e(provider, report, scenarios=AFFECTED_SCENARIOS, pause_seconds=args.pause)
     else:
         check_intents(provider, report)
         check_plans(provider, report)
-    if args.e2e and not args.affected:
+    if args.e2e and not (args.affected or args.case):
         run_e2e(provider, report, pause_seconds=args.pause)
 
     results = report["smoke"] if args.smoke else report["checks"]
@@ -768,6 +811,8 @@ def main() -> None:
                 print(f"         validation: {error}")
     print_e2e(report)
     print_latency(report["latency"])
+    if report.get("provider_stats"):
+        print(f"\nProvider call stats: {report['provider_stats']}")
 
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)

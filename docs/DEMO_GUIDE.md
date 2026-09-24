@@ -240,7 +240,14 @@ schedule data. The conflict check is done by T4's pre-check, using T2 and T3's v
 python scripts/check_live_llm.py            # structured intents + plans for every demo goal
 python scripts/check_live_llm.py --e2e --pause 20 --out data/demo/live_report.json   # + full missions
 python scripts/check_live_llm.py --affected --out data/demo/live_affected_report.json  # the 3 Phase 12B scenarios
+python scripts/check_live_llm.py --case C_unnamed_registration --out data/demo/live_case_c.json  # one scenario only
 ```
+
+On the Groq free tier, keep `CAMPUSNEXUS_LLM_MAX_CONCURRENCY=1` (the default). Tasks still run in parallel;
+only their Groq calls queue, and a 429 waits for the time Groq asks for. If the rate limit still wins, the
+mission ends with "Mission paused: the LLM provider … is unavailable". Nothing is replanned. Once the limit
+clears, `POST /missions/{mission_id}/resume` continues it. The UI's Resume button only appears for missions
+that are waiting for an approval.
 
 Without a key it prints `UNAVAILABLE` and exits 2. It never falls back to mock. With a key, it checks
 four things:

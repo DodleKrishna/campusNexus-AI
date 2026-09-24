@@ -23,7 +23,7 @@ CLAUDE.md allows free text:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from app.schemas.academic import AcademicIntentResult, AcademicResponseContext, CourseSummary
 from app.schemas.career import CareerIntentResult, CareerResponseContext
@@ -42,6 +42,55 @@ class LLMProviderError(RuntimeError):
     Pydantic validation). Callers must surface it as a failure -- never
     substitute a mock/default answer in its place.
     """
+
+
+class LLMTransientError(LLMProviderError):
+    """An infrastructure failure that persisted through the provider's own
+    bounded retries: rate limit, timeout, network error or 5xx (Phase 12C).
+
+    It says nothing about whether the mission plan is right, so the
+    Orchestrator never replans on it: the affected task stays PENDING, the
+    mission stops with a provider-unavailable reason, and a resume continues
+    from there. ``details()`` carries no secrets.
+    """
+
+    kind = "transient"
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        model: Optional[str],
+        status_code: Optional[int] = None,
+        retry_after_seconds: Optional[float] = None,
+        retries: int = 0,
+        kind: Optional[str] = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
+        self.retries = retries
+        if kind is not None:
+            self.kind = kind
+
+    def details(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "provider": self.provider,
+            "model": self.model,
+            "status_code": self.status_code,
+            "retry_after_seconds": self.retry_after_seconds,
+            "retries": self.retries,
+        }
+
+
+class LLMRateLimitError(LLMTransientError):
+    """HTTP 429 from the provider after honoring its retry-after guidance."""
+
+    kind = "rate_limit"
 
 
 class LLMProvider(ABC):

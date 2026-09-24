@@ -52,5 +52,10 @@ class OrchestratorState(TypedDict, total=False):
     round_failures: Dict[str, Dict[str, object]]
     duplicate_failure_stop: bool
 
+    # Phase 12C: set when an LLM provider outage (rate limit, timeout, network,
+    # 5xx) outlasted the provider's retries during a dispatch round. The
+    # affected tasks stay PENDING and the mission stops without replanning.
+    provider_unavailable: Optional[Dict[str, object]]
+
     errors: List[str]
     final_result: Optional[str]

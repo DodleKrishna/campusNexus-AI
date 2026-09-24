@@ -23,17 +23,27 @@ Every failure -- missing key, auth, rate limit, unknown model, timeout/network
 error, truncated or malformed output, schema-validation failure -- raises
 ``LLMProviderError`` with the API key redacted. Nothing here ever falls back
 to the mock provider.
+
+Phase 12C (free-tier resilience): at most ``CAMPUSNEXUS_LLM_MAX_CONCURRENCY``
+(default 1) Groq calls are in flight at once; the Orchestrator's DAG still
+schedules independent tasks in parallel, only their HTTP calls queue. A 429
+is retried after the wait Groq asks for, and nothing is sent in the meantime.
+Rate limits, timeouts, network errors and 5xx that outlast the bounded retries
+raise ``LLMTransientError`` (``LLMRateLimitError`` for 429), which the
+Orchestrator treats as "provider unavailable", never as a reason to replan.
 """
 from __future__ import annotations
 
 import json
 import os
+import re
+import threading
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, ValidationError
 
-from app.llm.base import LLMProvider, LLMProviderError
+from app.llm.base import LLMProvider, LLMProviderError, LLMRateLimitError, LLMTransientError
 from app.llm.providers.anthropic_provider import (
     AGENT_CAPABILITIES,
     _PLAN_TOOL_NAME,
@@ -67,14 +77,49 @@ DEFAULT_MAX_RETRIES = 2
 # Upper bound on how long one retry waits for a rate limit to clear, so a
 # demo never hangs on a long ``retry-after``.
 MAX_RETRY_WAIT_SECONDS = 30.0
+# Phase 12C: Groq API calls in flight at once, per provider instance (the app
+# builds one). The free tier's tokens-per-minute limit is exhausted by the
+# DAG's parallel tasks, so the default is 1. The DAG still schedules tasks in
+# parallel; only the HTTP calls queue. Raise it on a higher tier.
+DEFAULT_MAX_CONCURRENCY = 1
+MAX_CONCURRENCY_ENV = "CAMPUSNEXUS_LLM_MAX_CONCURRENCY"
 
-# Groq counts ``max_completion_tokens`` against the per-minute token limit, so
-# budgets stay modest; reasoning models spend part of it on reasoning.
-_CLASSIFY_MAX_TOKENS = 1024
-_PLAN_MAX_TOKENS = 4096
+# Output budgets per operation (Phase 12C review). gpt-oss spends part of
+# ``max_completion_tokens`` on reasoning, even at reasoning_effort=low, so each
+# budget leaves room for that on top of the output itself:
+# - classification returns a two-field schema (tens of tokens);
+# - a MissionPlan is a few tasks of JSON (a few hundred tokens);
+# - a user-facing answer can list a dozen events.
+# A truncated response is still discarded (finish_reason=length), never
+# repaired, so these are headroom limits, not squeeze limits.
+_CLASSIFY_MAX_TOKENS = 512
+_PLAN_MAX_TOKENS = 2048
 _RESPONSE_MAX_TOKENS = 1024
 
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_SERVER_ERROR_STATUS = {500, 502, 503, 504}
+# Groq durations look like "6.165s", "1m2.5s" or "250ms".
+_DURATION_PART_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
+_TRY_AGAIN_RE = re.compile(r"try again in ((?:\d+(?:\.\d+)?(?:ms|h|m|s))+)", re.IGNORECASE)
+_DURATION_UNITS = {"ms": 0.001, "s": 1.0, "m": 60.0, "h": 3600.0}
+
+
+def _parse_duration(text: str) -> Optional[float]:
+    parts = _DURATION_PART_RE.findall(text or "")
+    return sum(float(value) * _DURATION_UNITS[unit] for value, unit in parts) if parts else None
+
+
+def _max_concurrency_from_env() -> int:
+    raw = (os.environ.get(MAX_CONCURRENCY_ENV) or "").strip()
+    if not raw:
+        return DEFAULT_MAX_CONCURRENCY
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        raise LLMProviderError(f"{MAX_CONCURRENCY_ENV}={raw!r} must be a positive integer.")
+    return value
 
 
 def _inline_refs(schema: Dict[str, Any]) -> Dict[str, Any]:
@@ -126,14 +171,37 @@ class GroqLLMProvider(LLMProvider):
         base_url: Optional[str] = None,
         client: Any = None,
         sleep: Callable[[float], None] = time.sleep,
+        max_concurrency: Optional[int] = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """``client`` is a test seam: an ``httpx.Client``-like object exposing
         ``post(path, json=...)``. When omitted, a real ``httpx.Client`` is built
-        against ``base_url`` with the key in its ``Authorization`` header."""
+        against ``base_url`` with the key in its ``Authorization`` header.
+
+        ``max_concurrency`` bounds Groq calls in flight at once (default:
+        ``CAMPUSNEXUS_LLM_MAX_CONCURRENCY``, else 1)."""
         self._model = model or os.environ.get("CAMPUSNEXUS_LLM_MODEL") or DEFAULT_MODEL
         _check_model_compatible(self._model)
         self._max_retries = DEFAULT_MAX_RETRIES if max_retries is None else max_retries
         self._sleep = sleep
+        self._clock = clock
+        if max_concurrency is not None and max_concurrency < 1:
+            raise LLMProviderError(f"max_concurrency must be a positive integer, got {max_concurrency!r}.")
+        self._max_concurrency = max_concurrency if max_concurrency is not None else _max_concurrency_from_env()
+        self._slots = threading.BoundedSemaphore(self._max_concurrency)
+        self._state_lock = threading.Lock()
+        # A 429 tells us when the token window reopens; no request (from any
+        # thread) is sent before then.
+        self._cooldown_until = 0.0
+        self._in_flight = 0
+        self._stats: Dict[str, Any] = {
+            "requests": 0,
+            "rate_limit_retries": 0,
+            "transient_retries": 0,
+            "rate_limit_wait_seconds": 0.0,
+            "max_observed_concurrency": 0,
+            "max_completion_tokens_used": {},
+        }
         self._api_key = api_key or os.environ.get("GROQ_API_KEY") or ""
 
         try:
@@ -167,6 +235,20 @@ class GroqLLMProvider(LLMProvider):
     def model_name(self) -> str:
         return self._model
 
+    @property
+    def max_concurrency(self) -> int:
+        return self._max_concurrency
+
+    def stats(self) -> Dict[str, Any]:
+        """Counters for live evaluation: requests sent, 429/transient retries,
+        seconds waited for rate limits, the most calls ever in flight at once,
+        and the largest completion-token count seen per operation."""
+        with self._state_lock:
+            snapshot = dict(self._stats)
+            snapshot["max_completion_tokens_used"] = dict(self._stats["max_completion_tokens_used"])
+        snapshot["max_concurrency"] = self._max_concurrency
+        return snapshot
+
     # ------------------------------------------------------------------
     # Request plumbing -- every call goes through _create, so every call gets
     # the same retry/error/finish_reason handling.
@@ -178,40 +260,112 @@ class GroqLLMProvider(LLMProvider):
     def _fail(self, message: str) -> LLMProviderError:
         return LLMProviderError(self._redact(message))
 
-    def _post(self, body: Dict[str, Any]) -> Any:
-        """POST once per attempt, retrying rate limits, 5xx and transport errors."""
-        attempt = 0
-        while True:
-            try:
-                response = self._client.post("/chat/completions", json=body)
-            except self._httpx.TimeoutException as exc:
-                if attempt < self._max_retries:
-                    attempt += 1
-                    self._sleep(float(attempt))
-                    continue
-                raise self._fail(f"Groq API request timed out ({type(exc).__name__}).") from exc
-            except self._httpx.HTTPError as exc:
-                if attempt < self._max_retries:
-                    attempt += 1
-                    self._sleep(float(attempt))
-                    continue
-                raise self._fail(f"Groq API network error ({type(exc).__name__}): {exc}") from exc
+    def _transient(self, message: str, error_cls: type = LLMTransientError, **details: Any) -> LLMTransientError:
+        return error_cls(self._redact(message), provider=self.name, model=self._model, **details)
 
-            if response.status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
-                attempt += 1
-                self._sleep(self._retry_wait(response, attempt))
-                continue
-            return response
+    def _post(self, body: Dict[str, Any]) -> tuple:
+        """POST once per attempt, retrying rate limits, 5xx and transport errors.
+
+        Holds one concurrency slot for the whole call, including retry waits,
+        so with the default limit of 1 nothing else is sent while a rate limit
+        clears. Returns ``(response, retries_used)``.
+        """
+        with self._slots:
+            attempt = 0
+            while True:
+                self._wait_for_cooldown()
+                try:
+                    response = self._send(body)
+                except self._httpx.TimeoutException as exc:
+                    if attempt < self._max_retries:
+                        attempt += 1
+                        self._count_retry("transient_retries")
+                        self._sleep(float(attempt))
+                        continue
+                    raise self._transient(
+                        f"Groq API request timed out ({type(exc).__name__}).", kind="timeout", retries=attempt
+                    ) from exc
+                except self._httpx.HTTPError as exc:
+                    if attempt < self._max_retries:
+                        attempt += 1
+                        self._count_retry("transient_retries")
+                        self._sleep(float(attempt))
+                        continue
+                    raise self._transient(
+                        f"Groq API network error ({type(exc).__name__}): {exc}", kind="network", retries=attempt
+                    ) from exc
+
+                if response.status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
+                    attempt += 1
+                    wait = self._retry_wait(response, attempt)
+                    if response.status_code == 429:
+                        self._wait_out_rate_limit(wait)
+                    else:
+                        self._count_retry("transient_retries")
+                        self._sleep(wait)
+                    continue
+                return response, attempt
+
+    def _send(self, body: Dict[str, Any]) -> Any:
+        with self._state_lock:
+            self._in_flight += 1
+            self._stats["requests"] += 1
+            self._stats["max_observed_concurrency"] = max(self._stats["max_observed_concurrency"], self._in_flight)
+        try:
+            return self._client.post("/chat/completions", json=body)
+        finally:
+            with self._state_lock:
+                self._in_flight -= 1
+
+    def _count_retry(self, counter: str) -> None:
+        with self._state_lock:
+            self._stats[counter] += 1
+
+    def _wait_for_cooldown(self) -> None:
+        with self._state_lock:
+            remaining = self._cooldown_until - self._clock()
+        if remaining > 0:
+            self._sleep(remaining)
+
+    def _wait_out_rate_limit(self, wait: float) -> None:
+        """Block every request until the provider's window reopens, then retry."""
+        with self._state_lock:
+            until = self._clock() + wait
+            self._cooldown_until = max(self._cooldown_until, until)
+            self._stats["rate_limit_retries"] += 1
+            self._stats["rate_limit_wait_seconds"] = round(self._stats["rate_limit_wait_seconds"] + wait, 3)
+        self._sleep(wait)
+        with self._state_lock:
+            if self._cooldown_until <= until:
+                self._cooldown_until = 0.0  # this wait is over; don't make the retry wait it again
 
     @staticmethod
-    def _retry_wait(response: Any, attempt: int) -> float:
+    def _retry_after_seconds(response: Any) -> Optional[float]:
+        """Seconds until Groq accepts another request, from the most specific
+        signal available: the ``retry-after`` header, then the token-window
+        reset header, then the "try again in 6.165s" text in the error body
+        (Groq exposes no other structured field; this parsing stays here)."""
+        headers = getattr(response, "headers", None) or {}
         try:
-            wait = float(response.headers.get("retry-after", attempt))
+            return float(headers.get("retry-after"))
         except (TypeError, ValueError):
-            wait = float(attempt)
-        return max(0.0, min(wait, MAX_RETRY_WAIT_SECONDS))
+            pass
+        reset = _parse_duration(headers.get("x-ratelimit-reset-tokens") or "")
+        if reset is not None:
+            return reset
+        try:
+            message = (response.json().get("error") or {}).get("message") or ""
+        except (ValueError, AttributeError):
+            return None
+        match = _TRY_AGAIN_RE.search(message)
+        return _parse_duration(match.group(1)) if match else None
 
-    def _raise_for_status(self, response: Any) -> None:
+    @classmethod
+    def _retry_wait(cls, response: Any, attempt: int) -> float:
+        wait = cls._retry_after_seconds(response)
+        return max(0.0, min(float(attempt) if wait is None else wait, MAX_RETRY_WAIT_SECONDS))
+
+    def _raise_for_status(self, response: Any, retries: int = 0) -> None:
         status = response.status_code
         if status < 400:
             return
@@ -224,7 +378,15 @@ class GroqLLMProvider(LLMProvider):
         if status in (401, 403):
             raise self._fail(f"Groq authentication failed (HTTP {status}): check GROQ_API_KEY. {detail}")
         if status == 429:
-            raise self._fail(f"Groq rate limit exceeded (HTTP 429) after {self._max_retries} retries: {detail}")
+            raise self._transient(
+                f"Groq rate limit exceeded (HTTP 429) after {retries} retries: {detail}",
+                LLMRateLimitError, status_code=429, retry_after_seconds=self._retry_after_seconds(response), retries=retries,
+            )
+        if status in _SERVER_ERROR_STATUS:
+            raise self._transient(
+                f"Groq API call failed (HTTP {status}{', ' + code if code else ''}) after {retries} retries: {detail}",
+                kind="server_error", status_code=status, retries=retries,
+            )
         if status == 404 or code == "model_not_found" or code == "model_decommissioned":
             raise self._fail(
                 f"Groq model {self._model!r} is not available to this account (HTTP {status}, {code or 'not found'}): "
@@ -235,7 +397,7 @@ class GroqLLMProvider(LLMProvider):
         raise self._fail(f"Groq API call failed (HTTP {status}{', ' + code if code else ''}): {detail}")
 
     def _create(
-        self, *, max_tokens: int, system: str, content: str, tool: Optional[Dict[str, Any]] = None
+        self, *, max_tokens: int, system: str, content: str, tool: Optional[Dict[str, Any]] = None, operation: str = "response"
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {
             "model": self._model,
@@ -250,16 +412,26 @@ class GroqLLMProvider(LLMProvider):
             # Reasoning tokens share max_completion_tokens; keep them small.
             body["reasoning_effort"] = "low"
 
-        response = self._post(body)
-        self._raise_for_status(response)
+        response, retries = self._post(body)
+        self._raise_for_status(response, retries)
         try:
             payload = response.json()
             choice = payload["choices"][0]
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise self._fail("Groq returned a response without any choices.") from exc
+        self._record_usage(operation, payload.get("usage"))
         if choice.get("finish_reason") == "length":
             raise self._fail(f"Groq response was truncated at max_completion_tokens={max_tokens}; output discarded.")
         return choice.get("message") or {}
+
+    def _record_usage(self, operation: str, usage: Any) -> None:
+        """Largest completion (reasoning + output) seen per operation, so the
+        budgets above can be checked against real traffic."""
+        tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        if isinstance(tokens, int):
+            with self._state_lock:
+                seen = self._stats["max_completion_tokens_used"]
+                seen[operation] = max(seen.get(operation, 0), tokens)
 
     def _structured(self, *, max_tokens: int, system: str, content: str, tool_name: str, description: str, schema_cls: type):
         message = self._create(
@@ -267,6 +439,7 @@ class GroqLLMProvider(LLMProvider):
             system=system,
             content=content,
             tool={"name": tool_name, "description": description, "parameters": _inline_refs(schema_cls.model_json_schema())},
+            operation=tool_name,
         )
         for call in message.get("tool_calls") or []:
             function = call.get("function") or {}

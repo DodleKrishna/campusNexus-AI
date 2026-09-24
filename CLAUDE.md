@@ -195,6 +195,25 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - Intent definitions belong in the structured-output schema's field descriptions, which both real
   providers send. Do not special-case evaluation sentences.
 
+## LLM Provider Outages (Phase 12C)
+
+- A provider outage is infrastructure, not evidence the plan is wrong. A rate limit, timeout, network error
+  or 5xx that outlasts the provider's own bounded retries raises `LLMTransientError` (`LLMRateLimitError`
+  for 429), which carries provider, model, status, retry-after and retry count, and never the key. The
+  Orchestrator then keeps the affected task PENDING and writes a `provider_unavailable` audit event. The
+  mission stops FAILED with a "Mission paused" reason and every result kept. It never replans, never
+  fingerprints the failure, and never spends the replan budget. A resume continues under the same plan.
+  Do not route transient errors into semantic replanning.
+- Groq calls are limited by `CAMPUSNEXUS_LLM_MAX_CONCURRENCY` (default 1) inside the Groq provider only.
+  The DAG still dispatches independent tasks in parallel. Do not serialize the Mock or Anthropic providers,
+  and do not remove DAG parallelism to work around a rate limit.
+- On 429, wait for the time Groq gives: the `retry-after` header, then `x-ratelimit-reset-tokens`, then
+  the "try again in" text (that parsing stays in `groq.py`). Nothing is sent from any thread until the
+  window reopens.
+- Output budgets are per operation (classify 512, plan 2048, response 1024). A truncated response is
+  discarded, never repaired. Change a budget only with evidence from `stats()["max_completion_tokens_used"]`.
+- Anthropic errors remain the generic `LLMProviderError`, unchanged from Phase 9.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -319,6 +338,9 @@ python scripts/check_live_llm.py --provider groq --smoke --out data/demo/live_sm
 # E2E outcomes are judged against the *correct* result (a safe refusal/clarification is a pass).
 python scripts/check_live_llm.py --provider groq --affected --out data/demo/live_affected_report.json
 python scripts/check_live_llm.py --provider groq --e2e --pause 20 --out data/demo/live_report.json
+# Phase 12C: run exactly one E2E scenario (repeatable), nothing else; reports 429 retries,
+# seconds waited and peak concurrent Groq calls.
+python scripts/check_live_llm.py --provider groq --case C_unnamed_registration --out data/demo/live_case_c.json
 
 # Phase 10 demo on a throwaway DB: conflict-free registration, known conflict blocked
 # before approval, schedule change after approval (TOCTOU), duplicate-failure stop --

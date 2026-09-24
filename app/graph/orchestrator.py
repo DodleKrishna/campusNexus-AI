@@ -25,7 +25,7 @@ a changed failure or changed input still gets its replan.
 from __future__ import annotations
 
 import uuid
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session, sessionmaker
@@ -39,7 +39,7 @@ from app.graph.registry import AgentRegistry
 from app.graph.scheduler import compute_ready_and_blocked, has_blocked_tasks, has_failed_tasks, is_mission_complete
 from app.graph.state import OrchestratorState
 from app.graph.validator import validate_plan
-from app.llm.base import LLMProvider
+from app.llm.base import LLMProvider, LLMTransientError
 from app.rules.action_preconditions import resolve_target_provenance
 from app.schemas.action import TargetProvenance
 from app.schemas.agent import AgentResult
@@ -103,6 +103,21 @@ _SELECTION_GUIDANCE = (
     "Choose one of the candidate events and ask to register for it by its exact title; it will then be "
     "checked against your timetable and exams and sent for your approval."
 )
+
+
+def _provider_unavailable_message(outage: Dict[str, object]) -> str:
+    """User-facing reason for a Phase 12C provider-outage stop."""
+    reason = {"rate_limit": "rate limit", "timeout": "timeout", "network": "network error", "server_error": "server error"}.get(
+        str(outage.get("kind")), "outage"
+    )
+    status = f", HTTP {outage['status_code']}" if outage.get("status_code") else ""
+    wait = f", retry after {outage['retry_after_seconds']}s" if outage.get("retry_after_seconds") is not None else ""
+    pending = ", ".join(str(t) for t in outage.get("task_ids", []))
+    return (
+        f"Mission paused: the LLM provider {outage.get('provider')} ({outage.get('model')}) is unavailable "
+        f"({reason}{status}{wait}) after {outage.get('retries', 0)} retries. Nothing was replanned; completed results "
+        f"are kept and the unfinished task(s) ({pending}) will run when the mission is resumed."
+    )
 
 
 def unconfirmed_action_targets(plan: MissionPlan, goal: str) -> Dict[str, TargetProvenance]:
@@ -216,6 +231,7 @@ class MissionOrchestrator:
             "failure_fingerprints": [],
             "round_failures": {},
             "duplicate_failure_stop": False,
+            "provider_unavailable": None,
             "errors": [],
             "final_result": None,
         }
@@ -276,6 +292,7 @@ class MissionOrchestrator:
             "failure_fingerprints": failure_fingerprints,
             "round_failures": {},
             "duplicate_failure_stop": False,
+            "provider_unavailable": None,
             "errors": [],
             "final_result": prior_final_result,
         }
@@ -424,7 +441,11 @@ class MissionOrchestrator:
                 event_type="plan_generation_failed",
                 actor="mission_orchestrator",
                 message=f"Planner failed: {message}",
-                metadata={"provider": getattr(self._llm_provider, "name", "unknown")},
+                metadata=(
+                    exc.details()
+                    if isinstance(exc, LLMTransientError)
+                    else {"provider": getattr(self._llm_provider, "name", "unknown")}
+                ),
             )
             context.update_mission_status(state["mission_id"], MissionStatus.FAILED)
         finally:
@@ -534,6 +555,7 @@ class MissionOrchestrator:
         errors = list(state.get("errors", []))
         known_fingerprints = list(state.get("failure_fingerprints", []))
         round_failures: Dict[str, Dict[str, object]] = {}
+        provider_unavailable: Optional[Dict[str, object]] = None
 
         def _fingerprint_failure(task_id: str, verification_status: str, reasons: List[str]) -> dict:
             task = _task_by_id(plan, task_id)
@@ -555,6 +577,27 @@ class MissionOrchestrator:
             context = ContextService(session)
             for task_id, dispatched in outcomes.items():
                 context.update_mission_step(task_id, status=TaskStatus.IN_PROGRESS, started_at=utc_now())
+
+                if dispatched.provider_unavailable is not None:
+                    # Phase 12C: an infrastructure outage, not a task failure.
+                    # The task stays PENDING (a resume runs it again), no
+                    # failure fingerprint is taken and no replan is triggered.
+                    task_status[task_id] = TaskStatus.PENDING
+                    errors.append(f"{task_id}: {dispatched.error}")
+                    provider_unavailable = {**dispatched.provider_unavailable, "task_ids": [
+                        *(provider_unavailable or {}).get("task_ids", []), task_id,
+                    ]}
+                    context.update_mission_step(task_id, status=TaskStatus.PENDING)
+                    context.append_audit_event(
+                        event_id=_event_id(),
+                        mission_id=state["mission_id"],
+                        step_id=task_id,
+                        event_type="provider_unavailable",
+                        actor="mission_orchestrator",
+                        message=f"Task {task_id} was not run: the LLM provider is unavailable ({dispatched.error}).",
+                        metadata=dict(dispatched.provider_unavailable),
+                    )
+                    continue
 
                 if dispatched.outcome is None:
                     task_status[task_id] = TaskStatus.FAILED
@@ -632,6 +675,7 @@ class MissionOrchestrator:
             "ready_task_ids": [],
             "failure_fingerprints": known_fingerprints,
             "round_failures": round_failures,
+            "provider_unavailable": provider_unavailable,
         }
 
     def _update_mission_state(self, state: OrchestratorState) -> dict:
@@ -652,6 +696,14 @@ class MissionOrchestrator:
         if newly_skipped:
             self._persist_skipped_tasks(state["mission_id"], newly_skipped)
         task_status = cascaded_status
+
+        if state.get("provider_unavailable"):
+            # Phase 12C: an LLM outage is not evidence the plan is wrong, so it
+            # never reaches the replan branch below and never spends the replan
+            # budget. Stop with every result kept; a resume re-runs the
+            # PENDING task(s) under the same plan.
+            self._persist_mission_status(state["mission_id"], MissionStatus.FAILED)
+            return {"mission_status": MissionStatus.FAILED, "task_status": task_status}
 
         if has_blocked_tasks(task_status):
             mission_status = MissionStatus.NEEDS_APPROVAL
@@ -911,6 +963,9 @@ class MissionOrchestrator:
             return "Mission failed: plan validation errors -- " + "; ".join(state["validation_errors"])
 
         text = gathered or f"Mission ended with status {state['mission_status'].value}."
+        outage = state.get("provider_unavailable")
+        if outage:
+            text = f"{_provider_unavailable_message(outage)} {gathered}".strip()
         if state.get("duplicate_failure_stop"):
             text = f"{DUPLICATE_FAILURE_MESSAGE} {gathered}".strip()
         if selection_notes:
