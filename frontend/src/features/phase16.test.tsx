@@ -42,11 +42,11 @@ const REQUEST: WorkflowRequest = {
 describe("Faculty dashboard", () => {
   it("shows real counts and starts a class through the API", async () => {
     signIn(FACULTY);
-    const calls = mockApi((url, init) => {
+    const calls = mockApi((url) => {
       if (url.endsWith("/auth/me")) return { body: FACULTY };
       if (url.endsWith("/health")) return { body: HEALTH };
       if (url.endsWith("/faculty/dashboard")) return { body: DASHBOARD };
-      if (url.endsWith("/requests") && (!init?.method || init.method === "GET")) return { body: [{ ...REQUEST, status: "pending", submitted_at: "2026-09-30T04:41:00Z" }] };
+      if (url.includes("/requests?box=inbox")) return { body: [{ ...REQUEST, status: "pending", submitted_at: "2026-09-30T04:41:00Z" }] };
       if (url.endsWith("/faculty/classes/7/start")) return { body: { class_info: { ...CN_CLASS, status: "active" }, roster: [], required_percentage: 75 } };
       if (url.endsWith("/faculty/classes/7")) return { body: { class_info: { ...CN_CLASS, status: "active", actual_started_at: "2026-09-30T04:34:00Z" }, roster: [], required_percentage: 75 } };
       return undefined;

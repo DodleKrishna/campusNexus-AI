@@ -11,7 +11,12 @@ REQUEST_TYPE_LABELS = {
     "attendance_permission": "Attendance Permission",
     "leave_request": "Leave Request",
     "od_request": "On-Duty (OD) Request",
+    "faculty_leave": "Faculty Leave",
+    "class_substitution": "Class Substitution",
+    "department_permission": "Department Permission",
 }
+STUDENT_REQUEST_TYPES = ("event_permission", "attendance_permission", "leave_request", "od_request")
+FACULTY_REQUEST_TYPES = ("faculty_leave", "class_substitution", "od_request", "department_permission")
 
 
 class RequestEvent(BaseModel):
@@ -35,6 +40,10 @@ class AffectedClass(BaseModel):
     session_status: str
     # The student's mark in that session, when one exists (attendance permission).
     my_mark: Optional[str] = None
+    # Phase 17 (faculty requests): the class group ("CSE 3-1"), roster size and cover.
+    class_label: Optional[str] = None
+    roster_size: Optional[int] = None
+    substitute: Optional[str] = None
     attendance_percentage: Optional[float] = None
     required_percentage: Optional[float] = None
     standing: str = "unknown"
@@ -54,6 +63,11 @@ class RequestContext(BaseModel):
     student_year: Optional[int] = None
     student_section: Optional[str] = None
     department_code: Optional[str] = None
+    # Phase 17: who is asking. "student" (default, Phase 16 rows) or "faculty".
+    requester_kind: str = "student"
+    faculty_name: Optional[str] = None
+    faculty_designation: Optional[str] = None
+    faculty_employee_code: Optional[str] = None
     notes: List[str] = Field(default_factory=list)
 
 
@@ -66,6 +80,8 @@ class WorkflowRequestView(BaseModel):
     reason: str
     student_id: Optional[str] = None
     student_name: Optional[str] = None
+    requester_kind: str = "student"
+    requester_name: Optional[str] = None
     reviewer_name: Optional[str] = None
     routing_basis: str
     routing_note: str
@@ -107,12 +123,18 @@ class PermissionPreview(BaseModel):
 
 
 class PermissionIntent(BaseModel):
-    request_type: Literal["event_permission", "attendance_permission", "leave_request", "od_request", "unclear"] = Field(
+    request_type: Literal[
+        "event_permission", "attendance_permission", "leave_request", "od_request",
+        "faculty_leave", "class_substitution", "department_permission", "unclear",
+    ] = Field(
         description=(
             "event_permission: permission to attend/participate in a campus event (contest, workshop, fest). "
             "attendance_permission: the student already missed a class and asks for it to be considered/excused. "
-            "leave_request: the student will be away (sick, personal, travel) and asks for leave. "
+            "leave_request: the person will be away (sick, personal, travel) and asks for leave. "
             "od_request: on-duty -- away on official college work (representing the college, placement drive). "
+            "faculty_leave: a faculty member asking for leave from their teaching duties. "
+            "class_substitution: a faculty member asking for someone to take their classes. "
+            "department_permission: a faculty member asking the department for permission (e.g. to hold or attend an event). "
             "unclear: none of these, or not a request."
         )
     )

@@ -168,7 +168,7 @@ class LiveClassStatus(BaseModel):
 
 FacultyIntent = Literal[
     "classes_today", "current_class", "next_class", "class_attendance", "absent_students",
-    "below_threshold", "pending_requests", "unknown",
+    "below_threshold", "pending_requests", "make_request", "unknown",
 ]
 
 
@@ -182,6 +182,7 @@ class FacultyQueryPlan(BaseModel):
             "absent_students: who is absent (or not yet marked) in a class session. "
             "below_threshold: which students are below the required attendance percentage in a class. "
             "pending_requests: student permission/leave requests waiting for this faculty member's decision. "
+            "make_request: the faculty member wants to ASK for something themselves (leave, substitution, OD, permission). "
             "unknown: anything else."
         )
     )

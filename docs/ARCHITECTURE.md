@@ -1346,6 +1346,73 @@ class starting now. The faculty member still starts it, marks it and closes it t
 - No HOD escalation. `NEEDS_REVIEW` requests wait for an administrator workflow that does not exist yet.
 - The live views poll (30–60 s); there are no WebSockets or push notifications.
 
+## HOD Operations & Faculty → HOD Workflows (Phase 17)
+
+### Scope
+
+`departments.hod_faculty_id` (nullable, additive) records who heads each department. `current_hod`
+(`app/api/auth_deps.py`) resolves the HOD scope as: account → role HOD → linked faculty profile → that
+profile's department → confirm the department names this profile as its head. The resulting `HodScope` is
+the only input to `app/services/department_ops.py`. Every query there filters by `scope.department`, so a
+client parameter cannot widen it.
+
+### Department monitoring (`department_ops`, read-only)
+
+- **Activity:** today's class meetings (recurring slots plus extra classes) for the department's teaching
+  assignments. Each gets a deterministic `ClassState` from `class_state(status, start, end, now, grace)`:
+  UPCOMING, DUE (inside the grace period), DELAYED (past start + grace with no session), NOT_HELD (end
+  passed, never started), ACTIVE, COMPLETED or CANCELLED. The grace period comes from
+  `CAMPUSNEXUS_CLASS_START_GRACE_MINUTES` (default 10).
+- **Faculty list:** courses, classes today, the active class, not-started count, and open requests.
+- **Student risk:** overall attended ÷ conducted, courses below the policy threshold (`compute_attendance`),
+  and open complaints. Factual indicators only; there is no scoring.
+- **Attendance insights:** figures by section and by course, per-course low-attendance entries, recent
+  sessions, live sessions with unmarked students, and classes not held today.
+- **Complaints:** cases filed by the department's students (the case's `department` field is the service
+  office). The SLA state comes from `compute_sla_breaches`.
+- **Idempotent side effects of an HOD view:** `escalate_unassigned` (audited as `request_escalated`) and
+  one delayed-class warning per class meeting (`staff_notifications.ref_key`).
+
+### Faculty → HOD requests
+
+`workflow_requests` gains `requester_faculty_id` and the types FACULTY_LEAVE, CLASS_SUBSTITUTION and
+DEPARTMENT_PERMISSION (OD_REQUEST is shared). `workflow_requests.Requester` is either a student or a faculty
+member. For faculty, `_collect_faculty` resolves the date and part of day, or an event, and lists the faculty
+member's own class meetings in that window (class group, room, roster size; substitute "Not assigned").
+`route_faculty_request` sends the request to the department head; a head's own request needs review.
+Lifecycle and ownership are unchanged: a DRAFT is sent only by its requester, and decided only by its routed
+reviewer, once, while PENDING. `decide` also refuses one's own request. The requester is notified in
+`notifications` (students) or `staff_notifications` (faculty), for example "Your Faculty Leave request for
+25 September was approved by the HOD, CSE." The reviewer is notified when a request arrives.
+
+Student routing gains a last step: with no class faculty member and no mentor, the request escalates to the
+student's department head (`hod_escalation`).
+
+### Agents
+
+- `HodAgent` (`app/agents/enquiry/hod.py`) serves the Academic, Enquiry, Permission, Complaints and Events
+  agents for an HOD. The LLM produces a `HodQueryPlan` (intent plus optional year/section, with no
+  department field). Answers are built in code from `department_ops`, and the policy threshold's evidence
+  is attached. The Enquiry Agent's broad check reads operations, attendance, requests and complaints, and
+  reports only what those services computed.
+- The faculty agent's new `make_request` intent returns an action hint to the Permission Agent instead of an
+  answer. The UI opens `/faculty/my-requests/new?q=…`, which prepares a draft to confirm.
+
+### Old databases
+
+`app/db/session.open_database()` = `create_db_engine` + the idempotent, additive `upgrade_schema`. Every eval
+and script that opens an existing database uses it (or `init_db`), always from runtime code, never at import
+time. The API still upgrades in its lifespan. A test builds a Phase 15-shaped database, shows that ORM
+reads fail on it, shows that `open_database` fixes it, and statically checks every `eval/` and `scripts/`
+entry point.
+
+### Known limitations
+
+- No "request changes" step: HODs approve or reject.
+- No automatic substitution; no timetable editing.
+- A department head's own requests need review, because there is no administration workflow yet.
+- Delayed-class warnings are created when an HOD views the dashboard, not by a background job.
+
 ## Non-Goals (for now)
 
 - No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,

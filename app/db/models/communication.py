@@ -9,7 +9,7 @@ import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, String, Text
+from sqlalchemy import Enum as SAEnum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, UTCDateTime, utc_now
@@ -37,6 +37,30 @@ class Notification(Base):
     sent_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
 
     student = relationship("Student")
+
+
+class StaffNotification(Base):
+    """Phase 17: an in-app notification for a faculty member or HOD.
+
+    ``notifications`` belongs to students (``student_id`` is required), so staff
+    get their own table. ``ref_key`` de-duplicates generated warnings (for example
+    one delayed-class warning per class meeting).
+    """
+
+    __tablename__ = "staff_notifications"
+    __table_args__ = (UniqueConstraint("faculty_id", "ref_key", name="uq_staff_notifications_faculty_ref"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    faculty_id: Mapped[int] = mapped_column(ForeignKey("faculty_profiles.id"), index=True)
+    title: Mapped[str] = mapped_column(String(150))
+    body: Mapped[str] = mapped_column(Text)
+    category: Mapped[str] = mapped_column(String(60))
+    status: Mapped[NotificationStatus] = mapped_column(
+        SAEnum(NotificationStatus, values_callable=lambda e: [m.value for m in e]),
+        default=NotificationStatus.SENT,
+    )
+    ref_key: Mapped[Optional[str]] = mapped_column(String(120), default=None)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
 class CalendarEvent(Base):

@@ -47,6 +47,7 @@ from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
 from app.schemas.faculty import FacultyQueryPlan
+from app.schemas.department import HodQueryPlan
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
 from app.schemas.workflow import PermissionIntent
@@ -91,6 +92,14 @@ _SYSTEM_PERMISSION_PROMPT = (
     "workflow. You never grant anything, never choose who reviews it, never invent an event, date or reason, and "
     "never compute a date: report the day only as today, tomorrow, yesterday or an explicit date the student wrote. "
     "event_reference must be words copied from the message. If the student gave no reason, leave reason null."
+)
+
+_HOD_QUERY_TOOL_NAME = "classify_hod_query"
+_SYSTEM_HOD_QUERY_PROMPT = (
+    "You classify a head of department's question about their own department into a structured intent for a "
+    "campus assistant. You never answer, count or compute anything, and you never decide whether a class is late "
+    "-- the system computes all of that from timetable and attendance records. Copy any year or section named in "
+    "the question; never invent one."
 )
 
 _FACULTY_QUERY_TOOL_NAME = "classify_faculty_query"
@@ -465,6 +474,12 @@ class AnthropicLLMProvider(LLMProvider):
         return self._structured(
             max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_FACULTY_QUERY_PROMPT, content=f"Faculty question: {message}",
             tool_name=_FACULTY_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=FacultyQueryPlan,
+        )
+
+    def plan_hod_query(self, message: str) -> HodQueryPlan:
+        return self._structured(
+            max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_HOD_QUERY_PROMPT, content=f"HOD question: {message}",
+            tool_name=_HOD_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=HodQueryPlan,
         )
 
     def plan_mission(

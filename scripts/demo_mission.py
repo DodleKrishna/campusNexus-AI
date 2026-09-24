@@ -29,7 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from app.agents.academic.agent import AcademicAgent
-from app.db.session import create_db_engine, create_session_factory
+from app.db.session import open_database, create_session_factory
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
 from app.llm.factory import get_llm_provider
@@ -66,7 +66,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_orchestrator(provider_name: str | None, max_replans: int):
-    engine = create_db_engine()
+    engine = open_database()
     session_factory = create_session_factory(engine)
 
     config = get_rag_config()

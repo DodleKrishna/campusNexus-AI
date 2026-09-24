@@ -30,7 +30,8 @@ from app.schemas.faculty import (
     MarkAllRequest,
     MarkAttendanceRequest,
 )
-from app.services import faculty_ops
+from app.schemas.department import StaffNotificationItem
+from app.services import faculty_ops, staff_notifications
 from app.services.faculty_ops import FacultyAccessError, OperationRefused
 from app.services.knowledge import KnowledgeService
 
@@ -160,6 +161,12 @@ def cancel_class(
 ) -> FacultyClassDetail:
     _run(lambda: faculty_ops.cancel_class(session, caller.faculty, caller.account, session_id, now, body.note))
     return _detail_after(session, knowledge, caller, session_id, now)
+
+
+@router.get("/notifications", response_model=List[StaffNotificationItem])
+def notifications(caller: FacultyCaller = Depends(current_faculty_profile), session: Session = Depends(get_session)) -> List[StaffNotificationItem]:
+    """Phase 17: the signed-in faculty member's (or HOD's) own in-app notifications."""
+    return staff_notifications.list_for(session, caller.faculty.id)
 
 
 # ---------------------------------------------------------------------------

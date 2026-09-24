@@ -25,7 +25,7 @@ from app.db.models.career import (
     StudentSkill,
 )
 from app.db.models.auth import AuthAccount
-from app.db.models.communication import CalendarEvent, Notification, NotificationStatus
+from app.db.models.communication import CalendarEvent, Notification, NotificationStatus, StaffNotification
 from app.db.models.events import Club, Event, EventRegistration, EventStatus, RegistrationStatus
 from app.db.models.faculty import (
     AttendanceMarkStatus,
@@ -77,6 +77,7 @@ __all__ = [
     "CalendarEvent",
     "Notification",
     "NotificationStatus",
+    "StaffNotification",
     "Club",
     "Event",
     "EventRegistration",

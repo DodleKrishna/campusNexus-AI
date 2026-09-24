@@ -8,6 +8,12 @@ with the faculty assigned to teach it) and the student's mentor:
   it. Otherwise (no affected class, or several faculty) the mentor reviews it.
 * LEAVE_REQUEST: the mentor reviews it; without a mentor, the one affected
   faculty member if there is exactly one.
+* Phase 17: when neither a class faculty member nor a mentor can be found, a
+  student request is escalated to the head of the student's department
+  (basis ``hod_escalation``).
+* Faculty requests (``route_faculty_request``) go to the head of the
+  requester's department (basis ``department_hod``). A department head's own
+  request has no one above them yet, so it needs review.
 * No reviewer found: status NEEDS_REVIEW, reviewer None. Never a guess.
 """
 from __future__ import annotations
@@ -18,6 +24,7 @@ from typing import Iterable, Optional
 CLASS_FIRST = frozenset({"event_permission", "od_request", "attendance_permission"})
 MENTOR_FIRST = frozenset({"leave_request"})
 REQUEST_TYPES = CLASS_FIRST | MENTOR_FIRST
+FACULTY_REQUEST_TYPES = frozenset({"faculty_leave", "class_substitution", "od_request", "department_permission"})
 
 
 @dataclass(frozen=True)
@@ -42,7 +49,30 @@ def _single(affected: Iterable[Reviewer]) -> Optional[Reviewer]:
     return next(iter(distinct.values())) if len(distinct) == 1 else None
 
 
-def route_request(request_type: str, affected_faculty: Iterable[Reviewer], mentor: Optional[Reviewer]) -> RoutingDecision:
+def route_request(
+    request_type: str, affected_faculty: Iterable[Reviewer], mentor: Optional[Reviewer],
+    hod: Optional[Reviewer] = None, department_code: str = "",
+) -> RoutingDecision:
+    decision = _route_student(request_type, affected_faculty, mentor)
+    if decision.resolved or hod is None:
+        return decision
+    why = decision.note.split(": ", 1)[-1].rstrip(".")
+    return RoutingDecision(
+        hod, "hod_escalation",
+        f"Escalated to {hod.name}, HOD{', ' + department_code if department_code else ''} ({why}).",
+    )
+
+
+def route_faculty_request(requester_faculty_id: int, hod: Optional[Reviewer], department_code: str = "") -> RoutingDecision:
+    label = f"HOD{', ' + department_code if department_code else ''}"
+    if hod is None:
+        return RoutingDecision(None, "unresolved", f"No reviewer could be determined: the department has no {label} on record.")
+    if hod.faculty_id == requester_faculty_id:
+        return RoutingDecision(None, "unresolved", "No reviewer could be determined: a department head's own requests go to the administration, which is not set up yet.")
+    return RoutingDecision(hod, "department_hod", f"Sent to {hod.name}, {label}.")
+
+
+def _route_student(request_type: str, affected_faculty: Iterable[Reviewer], mentor: Optional[Reviewer]) -> RoutingDecision:
     if request_type not in REQUEST_TYPES:
         raise ValueError(f"unknown request type {request_type!r}")
     affected = list(affected_faculty)

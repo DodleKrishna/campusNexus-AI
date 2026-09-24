@@ -39,7 +39,7 @@ from app.rag.embeddings import get_embedding_provider
 from app.rag.ingest import ingest_policy_directory
 from app.rag.vector_store import PolicyVectorStore
 from app.services.class_schedule import local
-from scripts.schedule_demo_class import schedule_extra_class
+from scripts.schedule_demo_class import schedule_extra_class, schedule_tomorrow_afternoon
 from scripts.seed_data import build_summary, run_seed
 
 DEMO_DIR = REPO_ROOT / "data" / "demo"
@@ -105,6 +105,12 @@ def main() -> None:
         seed_dev_accounts(session, password)
         summary = build_summary(session)
         demo_class = None if args.no_demo_class else schedule_extra_class(session)
+        # Phase 17: a real extra class tomorrow afternoon, so a faculty leave request has an affected class.
+        leave_class = None if args.no_demo_class else schedule_tomorrow_afternoon(session)
+        leave_class_line = (
+            f"{local(leave_class.scheduled_start):%a %d %b %H:%M}-{local(leave_class.scheduled_end):%H:%M} IST"
+            if leave_class else None
+        )
         demo_class_line = (
             f"{demo_class.course.title} by {demo_class.faculty.full_name}, "
             f"{local(demo_class.scheduled_start):%H:%M}-{local(demo_class.scheduled_end):%H:%M} IST today"
@@ -139,6 +145,9 @@ def main() -> None:
     if demo_class_line:
         print(f"\nPhase 16 extra class (scheduled, not started): {demo_class_line}.")
         print("  Demo more than an hour from now? Re-run: python scripts/schedule_demo_class.py")
+    if leave_class_line:
+        print(f"Phase 17 extra class for the faculty-leave demo: Computer Networks, {leave_class_line}.")
+    print("HOD sign-in: hod@campusnexus.local (Dr. Kavita Iyer, head of CSE).")
     print("\nReact app sign-in (development accounts, password from " + password_source + "):")
     for spec in DEV_ACCOUNTS:
         print(f"  {spec.email:<28} {spec.role.value}")

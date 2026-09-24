@@ -324,6 +324,9 @@ export interface AffectedClass {
   faculty_name: string;
   session_status: SessionStatus;
   my_mark: MarkStatus | null;
+  class_label?: string | null;
+  roster_size?: number | null;
+  substitute?: string | null;
   attendance_percentage: number | null;
   required_percentage: number | null;
   standing: AttendanceStanding;
@@ -341,20 +344,33 @@ export interface RequestContext {
   student_year: number | null;
   student_section: string | null;
   department_code: string | null;
+  requester_kind?: "student" | "faculty";
+  faculty_name?: string | null;
+  faculty_designation?: string | null;
+  faculty_employee_code?: string | null;
   notes: string[];
 }
 
 export interface WorkflowRequest {
   request_id: string;
-  request_type: "event_permission" | "attendance_permission" | "leave_request" | "od_request";
+  request_type:
+    | "event_permission"
+    | "attendance_permission"
+    | "leave_request"
+    | "od_request"
+    | "faculty_leave"
+    | "class_substitution"
+    | "department_permission";
   type_label: string;
   status: WorkflowRequestStatus;
   title: string;
   reason: string;
   student_id: string | null;
   student_name: string | null;
+  requester_kind?: "student" | "faculty";
+  requester_name?: string | null;
   reviewer_name: string | null;
-  routing_basis: "affected_course_faculty" | "mentor" | "unresolved";
+  routing_basis: "affected_course_faculty" | "mentor" | "unresolved" | "hod_escalation" | "department_hod";
   routing_note: string;
   context: RequestContext;
   created_at: string;
@@ -378,4 +394,169 @@ export interface FacultyAgentCatalog {
   provider: string;
   model: string | null;
   agents: { key: "academic" | "enquiry" | "permission"; display_name: string; description: string; available: boolean }[];
+}
+
+// ---------------------------------------------------------------------------
+// Phase 17: HOD / department operations
+// ---------------------------------------------------------------------------
+
+export type ClassState = "upcoming" | "due" | "delayed" | "not_held" | "active" | "completed" | "cancelled";
+
+export interface HodProfile {
+  faculty_id: number;
+  employee_code: string;
+  full_name: string;
+  designation: string;
+  email: string;
+  department_id: number;
+  department_code: string;
+  department_name: string;
+}
+
+export interface DepartmentClass {
+  session_id: number | null;
+  assignment_id: number;
+  course_code: string;
+  course_title: string;
+  class_label: string;
+  year: number;
+  section: string;
+  faculty_id: number;
+  faculty_name: string;
+  room: string;
+  scheduled_start: string;
+  scheduled_end: string;
+  start_local: string;
+  end_local: string;
+  session_status: SessionStatus;
+  state: ClassState;
+  is_extra_class: boolean;
+  actual_started_at: string | null;
+  actual_closed_at: string | null;
+  tally: MarkTally | null;
+}
+
+export interface DepartmentDashboard {
+  profile: HodProfile;
+  date: string;
+  now_local: string;
+  start_grace_minutes: number;
+  faculty_count: number;
+  student_count: number;
+  classes_today: number;
+  active_classes: number;
+  completed_classes: number;
+  not_started_classes: number;
+  pending_faculty_requests: number;
+  escalated_student_requests: number;
+  activity: DepartmentClass[];
+}
+
+export interface FacultySummary {
+  faculty_id: number;
+  employee_code: string;
+  full_name: string;
+  designation: string;
+  email: string;
+  is_hod: boolean;
+  courses: string[];
+  classes_today: number;
+  active_class: string | null;
+  not_started_today: number;
+  pending_requests_to_review: number;
+  own_open_requests: number;
+}
+
+export interface StudentRisk {
+  student_id: string;
+  full_name: string;
+  year: number;
+  semester: number;
+  section: string | null;
+  overall_percentage: number | null;
+  classes_attended: number;
+  classes_conducted: number;
+  courses_below_threshold: string[];
+  open_complaints: number;
+}
+
+export interface CourseAttendanceSummary {
+  assignment_id: number;
+  course_code: string;
+  course_title: string;
+  class_label: string;
+  faculty_name: string;
+  students: number;
+  classes_attended: number;
+  classes_conducted: number;
+  percentage: number | null;
+  below_threshold: number;
+}
+
+export interface SectionAttendanceSummary {
+  class_label: string;
+  year: number;
+  section: string;
+  students: number;
+  classes_attended: number;
+  classes_conducted: number;
+  percentage: number | null;
+  below_threshold: number;
+}
+
+export interface LowAttendanceEntry {
+  student_id: string;
+  full_name: string;
+  class_label: string;
+  course_code: string;
+  course_title: string;
+  classes_attended: number;
+  classes_conducted: number;
+  percentage: number;
+}
+
+export interface SessionSummary {
+  session_id: number;
+  course_code: string;
+  course_title: string;
+  class_label: string;
+  faculty_name: string;
+  session_date: string;
+  start_local: string;
+  status: SessionStatus;
+  actual_started_at: string | null;
+  tally: MarkTally;
+}
+
+export interface AttendanceInsights {
+  required_percentage: number | null;
+  sections: SectionAttendanceSummary[];
+  courses: CourseAttendanceSummary[];
+  low_attendance: LowAttendanceEntry[];
+  recent_sessions: SessionSummary[];
+  incomplete_sessions: SessionSummary[];
+  not_held_today: DepartmentClass[];
+}
+
+export interface DepartmentComplaint {
+  case_code: string;
+  student_id: string;
+  student_name: string;
+  category: string;
+  priority: string;
+  status: string;
+  office: string;
+  created_at: string;
+  response_due_at: string | null;
+  resolution_due_at: string | null;
+  response_breached: boolean;
+  resolution_breached: boolean;
+}
+
+export interface DepartmentOverview {
+  dashboard: DepartmentDashboard;
+  faculty: FacultySummary[];
+  at_risk_students: number;
+  below_threshold_entries: number;
+  required_percentage: number | null;
 }

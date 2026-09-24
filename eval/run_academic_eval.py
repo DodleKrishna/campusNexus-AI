@@ -34,7 +34,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 from app.agents.academic.agent import AcademicAgent
-from app.db.session import create_db_engine, create_session_factory
+from app.db.session import open_database, create_session_factory
 from app.llm.factory import get_llm_provider
 from app.rag.config import get_rag_config
 from app.rag.embeddings import get_embedding_provider
@@ -52,7 +52,7 @@ def load_scenarios() -> list[Dict[str, Any]]:
 
 
 def build_agent() -> AcademicAgent:
-    engine = create_db_engine()
+    engine = open_database()
     session = create_session_factory(engine)()
 
     config = get_rag_config()

@@ -26,6 +26,10 @@ class WorkflowRequestType(str, enum.Enum):
     ATTENDANCE_PERMISSION = "attendance_permission"
     LEAVE_REQUEST = "leave_request"
     OD_REQUEST = "od_request"
+    # Phase 17: faculty-originated requests, routed to the department HOD.
+    FACULTY_LEAVE = "faculty_leave"
+    CLASS_SUBSTITUTION = "class_substitution"
+    DEPARTMENT_PERMISSION = "department_permission"
 
 
 class WorkflowRequestStatus(str, enum.Enum):
@@ -53,6 +57,8 @@ class WorkflowRequest(Base):
     )
     requester_account_id: Mapped[int] = mapped_column(ForeignKey("auth_accounts.id"))
     requester_role: Mapped[str] = mapped_column(String(20))
+    # Phase 17 (nullable, additive): set when a faculty member (or HOD) is the requester.
+    requester_faculty_id: Mapped[Optional[int]] = mapped_column(ForeignKey("faculty_profiles.id"), index=True, default=None)
     student_id: Mapped[Optional[str]] = mapped_column(ForeignKey("students.student_code"), index=True, default=None)
     reviewer_faculty_id: Mapped[Optional[int]] = mapped_column(ForeignKey("faculty_profiles.id"), index=True, default=None)
     department_id: Mapped[Optional[int]] = mapped_column(ForeignKey("departments.id"), default=None)
@@ -60,7 +66,8 @@ class WorkflowRequest(Base):
     reason: Mapped[str] = mapped_column(Text)
     # Structured, server-collected context (event, affected classes, attendance...).
     context: Mapped[Dict[str, Any]] = mapped_column(JSON, default=dict)
-    # How the reviewer was chosen: affected_course_faculty / mentor / unresolved.
+    # How the reviewer was chosen: affected_course_faculty / mentor / hod_escalation /
+    # department_hod / unresolved.
     routing_basis: Mapped[str] = mapped_column(String(40))
     routing_note: Mapped[str] = mapped_column(String(300))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
@@ -69,7 +76,8 @@ class WorkflowRequest(Base):
     decided_by_account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("auth_accounts.id"), default=None)
     decision_reason: Mapped[Optional[str]] = mapped_column(Text, default=None)
 
-    reviewer = relationship("FacultyProfile")
+    reviewer = relationship("FacultyProfile", foreign_keys=[reviewer_faculty_id])
+    requester_faculty = relationship("FacultyProfile", foreign_keys=[requester_faculty_id])
 
 
 class OperationAuditEvent(Base):

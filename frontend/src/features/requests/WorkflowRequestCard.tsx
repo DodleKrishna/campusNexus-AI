@@ -18,8 +18,78 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 const DAY_PART: Record<string, string> = { full_day: "Full day", morning: "Morning", afternoon: "Afternoon" };
 
 /** The structured context collected for a request: event, day, affected classes and attendance. */
+function FacultyImpact({ request }: { request: WorkflowRequest }) {
+  const ctx = request.context;
+  return (
+    <div className="space-y-3">
+      <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+        <Field label="Faculty">
+          {ctx.faculty_name}
+          <div className="text-xs text-muted">
+            {ctx.faculty_designation} · {ctx.faculty_employee_code} · {ctx.department_code}
+          </div>
+        </Field>
+        {ctx.event ? (
+          <Field label="Event">
+            {ctx.event.title}
+            <div className="text-xs text-muted">
+              {formatDate(ctx.event.starts_at)}, {formatTime(ctx.event.starts_at)}–{formatTime(ctx.event.ends_at)}
+            </div>
+          </Field>
+        ) : (
+          ctx.request_date && (
+            <Field label="Date">
+              {formatDate(`${ctx.request_date}T12:00:00+05:30`)}
+              {ctx.day_part && <div className="text-xs text-muted">{DAY_PART[ctx.day_part]}</div>}
+            </Field>
+          )
+        )}
+        <Field label="Classes affected">{ctx.affected_classes.length || "None"}</Field>
+      </dl>
+      {ctx.affected_classes.length > 0 && (
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-border bg-surface-muted text-xs text-muted">
+                <th className="px-3 py-2 font-medium">Affected class</th>
+                <th className="px-3 py-2 font-medium">Group</th>
+                <th className="px-3 py-2 font-medium">Time</th>
+                <th className="px-3 py-2 font-medium">Students</th>
+                <th className="px-3 py-2 font-medium">Substitute</th>
+              </tr>
+            </thead>
+            <tbody>
+              {ctx.affected_classes.map((c) => (
+                <tr key={`${c.course_code}-${c.starts_at}`} className="border-b border-border last:border-0">
+                  <td className="px-3 py-2">
+                    {c.course_title}
+                    <div className="text-xs text-muted">{c.course_code} · {c.room}</div>
+                  </td>
+                  <td className="px-3 py-2">{c.class_label}</td>
+                  <td className="px-3 py-2 tabular-nums">
+                    {formatDate(c.starts_at)}
+                    <div className="text-xs text-muted">{c.start_local}–{c.end_local}</div>
+                  </td>
+                  <td className="px-3 py-2 tabular-nums">{c.roster_size ?? "—"}</td>
+                  <td className="px-3 py-2 text-muted">{c.substitute ?? "Not assigned"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {ctx.notes.map((note) => (
+        <p key={note} className="text-xs text-muted">
+          {note}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 export function RequestContextView({ request }: { request: WorkflowRequest }) {
   const ctx = request.context;
+  if (ctx.requester_kind === "faculty") return <FacultyImpact request={request} />;
   return (
     <div className="space-y-3">
       <dl className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -107,11 +177,12 @@ export function WorkflowRequestCard({ request, viewer, actions }: { request: Wor
             <Badge tone="primary">{request.type_label}</Badge>
             <span className="text-xs text-subtle">{request.request_id}</span>
           </div>
-          <h3 className="mt-1.5 text-base font-semibold">{viewer === "faculty" && request.student_name ? `${request.student_name} — ${request.title}` : request.title}</h3>
+          <h3 className="mt-1.5 text-base font-semibold">{viewer === "faculty" && request.requester_name ? `${request.requester_name} — ${request.title}` : request.title}</h3>
           <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
             <span className="inline-flex items-center gap-1">
               <Clock className="size-3.5" /> Submitted {formatDateTime(request.submitted_at ?? request.created_at)}
             </span>
+            {request.routing_basis === "hod_escalation" && <Badge tone="warning">Escalated to HOD</Badge>}
             {viewer === "student" && (
               <span className="inline-flex items-center gap-1">
                 <UserRound className="size-3.5" /> {request.reviewer_name ? `Reviewer: ${request.reviewer_name}` : "No reviewer assigned yet"}

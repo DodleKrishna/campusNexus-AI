@@ -40,7 +40,7 @@ class FacultyProfile(Base):
     phone: Mapped[Optional[str]] = mapped_column(String(20), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
-    department = relationship("Department")
+    department = relationship("Department", foreign_keys=[department_id])
 
 
 class TeachingAssignment(Base):

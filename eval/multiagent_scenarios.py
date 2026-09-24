@@ -25,7 +25,7 @@ from app.agents.academic.agent import AcademicAgent
 from app.agents.career.agent import CareerAgent
 from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
-from app.db.session import create_db_engine, create_session_factory
+from app.db.session import open_database, create_session_factory
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
 from app.llm.providers.mock import MockLLMProvider
@@ -48,7 +48,7 @@ CAMPUS_SERVICES_GOAL = (
 
 
 def build_orchestrator() -> MissionOrchestrator:
-    engine = create_db_engine()
+    engine = open_database()
     session_factory = create_session_factory(engine)
 
     config = get_rag_config()

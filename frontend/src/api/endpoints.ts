@@ -1,6 +1,14 @@
 /** Typed backend endpoints. Identity always comes from the bearer token. */
 import { apiRequest } from "@/api/client";
 import type {
+  AttendanceInsights,
+  DepartmentClass,
+  DepartmentComplaint,
+  DepartmentDashboard,
+  DepartmentOverview,
+  FacultySummary,
+  HodProfile,
+  StudentRisk,
   AgentCatalog,
   AgentQueryResponse,
   AssignmentStanding,
@@ -25,7 +33,9 @@ import type {
   WorkflowRequest,
 } from "@/types/api";
 
-export type ChatScope = "student" | "faculty";
+export type ChatScope = "student" | "faculty" | "hod";
+export type RequestBox = "inbox" | "mine";
+const CHAT_BASE: Record<ChatScope, string> = { student: "/agents", faculty: "/faculty/agents", hod: "/hod/agents" };
 
 export const api = {
   health: () => apiRequest<Health>("/health", { auth: false }),
@@ -47,13 +57,13 @@ export const api = {
 
   agentCatalog: () => apiRequest<AgentCatalog>("/agents"),
   askAgent: (agentKey: string, message: string, scope: ChatScope = "student") =>
-    apiRequest<AgentQueryResponse>(`${scope === "faculty" ? "/faculty/agents" : "/agents"}/${encodeURIComponent(agentKey)}/query`, {
+    apiRequest<AgentQueryResponse>(`${CHAT_BASE[scope]}/${encodeURIComponent(agentKey)}/query`, {
       method: "POST",
       body: { message },
     }),
 
   // Workflow requests (permission / leave / OD) -- students and their reviewers.
-  workflowRequests: () => apiRequest<WorkflowRequest[]>("/requests"),
+  workflowRequests: (box: RequestBox = "inbox") => apiRequest<WorkflowRequest[]>(`/requests?box=${box}`),
   prepareRequest: (message: string) => apiRequest<PermissionPreview>("/requests/prepare", { method: "POST", body: { message } }),
   submitRequest: (requestId: string, reason?: string) =>
     apiRequest<WorkflowRequest>("/requests", { method: "POST", body: { request_id: requestId, ...(reason ? { reason } : {}) } }),
@@ -78,6 +88,17 @@ export const api = {
   markAll: (sessionId: number, status: MarkStatus = "present") =>
     apiRequest<FacultyClassDetail>(`/faculty/classes/${sessionId}/attendance/all`, { method: "POST", body: { status } }),
   facultyAgentCatalog: () => apiRequest<FacultyAgentCatalog>("/faculty/agents"),
+  staffNotifications: () => apiRequest<NotificationItem[]>("/faculty/notifications"),
+
+  // HOD: department derived from the signed-in account, never passed by the client.
+  hodProfile: () => apiRequest<HodProfile>("/hod/me"),
+  hodDashboard: () => apiRequest<DepartmentDashboard>("/hod/dashboard"),
+  hodDepartment: () => apiRequest<DepartmentOverview>("/hod/department"),
+  hodActivity: () => apiRequest<DepartmentClass[]>("/hod/activity"),
+  hodFaculty: () => apiRequest<FacultySummary[]>("/hod/faculty"),
+  hodStudents: () => apiRequest<StudentRisk[]>("/hod/students"),
+  hodAttendance: () => apiRequest<AttendanceInsights>("/hod/attendance"),
+  hodComplaints: () => apiRequest<DepartmentComplaint[]>("/hod/complaints"),
 };
 
 export const queryKeys = {
@@ -93,6 +114,9 @@ export const queryKeys = {
   notifications: ["student", "notifications"] as const,
   agentCatalog: ["agents", "catalog"] as const,
   workflowRequests: ["workflow-requests"] as const,
+  workflowBox: (box: RequestBox) => ["workflow-requests", box] as const,
+  staffNotifications: ["staff", "notifications"] as const,
+  hod: (part: string) => ["hod", part] as const,
   facultyProfile: ["faculty", "profile"] as const,
   facultyDashboard: ["faculty", "dashboard"] as const,
   facultyToday: ["faculty", "classes", "today"] as const,

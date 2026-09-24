@@ -28,7 +28,7 @@ from app.rules.attendance import compute_attendance
 from app.rules.attendance_standing import AttendanceStanding, attendance_standing
 from app.rules.class_session import pick_current, tally
 from app.rules.policy_threshold import extract_attendance_threshold
-from app.schemas.agent_chat import AgentQueryResponse
+from app.schemas.agent_chat import ActionHint, AgentQueryResponse
 from app.schemas.faculty import FacultyQueryPlan
 from app.schemas.workflow import REQUEST_TYPE_LABELS
 from app.services import workflow_requests
@@ -94,6 +94,16 @@ class FacultyAgent:
         plan: FacultyQueryPlan = self._llm.plan_faculty_query(message)
         allowed = ALLOWED_INTENTS[agent_key]
         facts: Dict[str, object] = {"scope": "faculty", "plan": plan.model_dump(mode="json")}
+        if plan.intent == "make_request":
+            # Phase 17: asking for something (leave, substitution, OD) is a workflow, not a chat answer.
+            facts["route"] = "permission_request"
+            facts["request_message"] = message
+            hint = ActionHint(
+                agent_key="permission",
+                message="That is a request, so it goes through the Permission Agent: it prepares the request with your "
+                        "affected classes for you to confirm, then sends it to your HOD.",
+            )
+            return self._reply(agent_key, "not_applicable", hint.message, facts, hint=hint)
         if plan.intent == "unknown":
             return self._reply(agent_key, "not_applicable", self._help(agent_key), facts)
         if plan.intent not in allowed:
@@ -120,10 +130,11 @@ class FacultyAgent:
 
     # -- helpers ------------------------------------------------------------
 
-    def _reply(self, agent_key: str, status: str, answer: str, facts: Dict[str, object], evidence=None) -> AgentQueryResponse:
+    def _reply(self, agent_key: str, status: str, answer: str, facts: Dict[str, object], evidence=None, hint: Optional[ActionHint] = None) -> AgentQueryResponse:
         return AgentQueryResponse(
             agent_key=agent_key, display_name=FACULTY_DISPLAY_NAMES[agent_key], verification_status=status,
-            answer=answer, facts=facts, evidence=list(evidence or []), live_ai=bool(getattr(self._llm, "is_live", False)),
+            answer=answer, facts=facts, evidence=list(evidence or []), action_hint=hint,
+            live_ai=bool(getattr(self._llm, "is_live", False)),
         )
 
     @staticmethod

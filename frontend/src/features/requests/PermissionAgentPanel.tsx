@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, CheckCircle2, FileCheck2, Loader2, Send, X } from "lucide-react";
-import { useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ApiError } from "@/api/client";
 import { api, queryKeys } from "@/api/endpoints";
 import { ModeBadge } from "@/components/layout/ModeBadge";
@@ -12,11 +12,18 @@ import { ErrorState, Notice } from "@/components/ui/states";
 import { RequestContextView } from "@/features/requests/WorkflowRequestCard";
 import type { PermissionPreview, WorkflowRequest } from "@/types/api";
 
-const SUGGESTIONS = [
-  "I need permission to attend the coding contest.",
-  "I was absent yesterday because I was sick. I need attendance permission.",
-  "I need leave tomorrow afternoon.",
-];
+const SUGGESTIONS = {
+  student: [
+    "I need permission to attend the coding contest.",
+    "I was absent yesterday because I was sick. I need attendance permission.",
+    "I need leave tomorrow afternoon.",
+  ],
+  faculty: ["I need leave tomorrow afternoon.", "I need a substitute for my classes tomorrow.", "I need on duty leave tomorrow for an external workshop."],
+};
+const INTRO = {
+  student: "Describe what you need. The agent collects your event, classes and attendance, finds the right faculty member, and shows you the request before anything is sent.",
+  faculty: "Describe what you need. The agent collects the classes you would miss, sends the request to your HOD, and shows it to you before anything is sent.",
+};
 
 const errorText = (error: unknown) => (error instanceof ApiError ? error.message : "CampusNexus couldn't reach the Permission Agent.");
 
@@ -24,7 +31,15 @@ const errorText = (error: unknown) => (error instanceof ApiError ? error.message
  * Ask the Permission Agent -> structured preview -> Confirm & Send.
  * The agent only prepares a draft; nothing is sent until the student confirms it.
  */
-export function PermissionAgentPanel({ onSent }: { onSent?: (request: WorkflowRequest) => void }) {
+export function PermissionAgentPanel({
+  onSent,
+  role = "student",
+  initialMessage,
+}: {
+  onSent?: (request: WorkflowRequest) => void;
+  role?: "student" | "faculty";
+  initialMessage?: string;
+}) {
   const client = useQueryClient();
   const [message, setMessage] = useState("");
   const [preview, setPreview] = useState<PermissionPreview | null>(null);
@@ -69,6 +84,15 @@ export function PermissionAgentPanel({ onSent }: { onSent?: (request: WorkflowRe
   };
   const draft = preview?.request ?? null;
 
+  // A request handed over from agent chat ("I need leave tomorrow") is prepared once.
+  const handedOver = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialMessage || handedOver.current === initialMessage) return;
+    handedOver.current = initialMessage;
+    setMessage(initialMessage);
+    prepare.mutate(initialMessage);
+  }, [initialMessage, prepare]);
+
   return (
     <div className="space-y-4">
       <Card className="flex items-start gap-4 px-5 py-4">
@@ -80,16 +104,14 @@ export function PermissionAgentPanel({ onSent }: { onSent?: (request: WorkflowRe
             <h1 className="text-lg font-semibold">Permission Agent</h1>
             <Badge tone="success">Available</Badge>
           </div>
-          <p className="mt-0.5 text-sm text-muted">
-            Describe what you need. The agent collects your event, classes and attendance, finds the right faculty member, and shows you the request before anything is sent.
-          </p>
+          <p className="mt-0.5 text-sm text-muted">{INTRO[role]}</p>
         </div>
         <ModeBadge />
       </Card>
 
       <Card className="px-5 py-4">
         <div className="mb-3 flex flex-wrap gap-2">
-          {SUGGESTIONS.map((suggestion) => (
+          {SUGGESTIONS[role].map((suggestion) => (
             <button
               key={suggestion}
               type="button"

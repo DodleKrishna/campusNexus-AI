@@ -20,6 +20,7 @@ from app.auth.accounts import get_account
 from app.auth.tokens import TokenError, decode_token
 from app.db.models.auth import AuthAccount
 from app.db.models.faculty import FacultyProfile
+from app.services.department_ops import HodScope
 from app.services.faculty_ops import faculty_for_account
 from app.schemas.enums import UserRole
 
@@ -105,3 +106,17 @@ def current_student_account(
     if account is None or not account.linked_student_id:
         raise HTTPException(status_code=403, detail="This account is not linked to a student record.")
     return account
+
+
+def current_hod(
+    user: AuthenticatedUser = Depends(require_roles(UserRole.HOD)), session: Session = Depends(get_session),
+) -> "HodScope":
+    """Phase 17: HOD role AND a linked faculty profile AND that profile heads its department.
+
+    The department is derived here, never taken from the client."""
+    from app.services.department_ops import hod_scope
+
+    scope = hod_scope(session, user.account_id)
+    if scope is None:
+        raise HTTPException(status_code=403, detail="This account is not the recorded head of a department.")
+    return scope

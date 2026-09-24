@@ -5,7 +5,11 @@
     -> route (deterministic: ``app/rules/request_routing.py``)
     -> persist a DRAFT the student must confirm before it is sent
 
-The LLM only interprets the student's words. It cannot name a reviewer,
+Phase 17: the same agent serves faculty members. Their requests (leave,
+class substitution, OD, department permission) collect the faculty member's
+own affected classes and are routed to the department HOD.
+
+The LLM only interprets the requester's words. It cannot name a reviewer,
 pick an event the words do not name, compute a date or change a status.
 Sending (DRAFT -> PENDING) is the student's explicit confirmation through
 the API, and the decision belongs to the routed faculty member alone.
@@ -17,8 +21,6 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from app.db.models.auth import AuthAccount
-from app.db.models.identity import Student
 from app.llm.base import LLMProvider
 from app.schemas.workflow import PermissionIntent, PermissionPreview
 from app.services import workflow_requests as requests_service
@@ -29,22 +31,22 @@ class PermissionAgent:
         self._llm = llm_provider
 
     def prepare(
-        self, session: Session, *, account: AuthAccount, student: Student, message: str, now: datetime,
+        self, session: Session, *, requester: requests_service.Requester, message: str, now: datetime,
         required_percentage: Optional[float],
     ) -> PermissionPreview:
         live = bool(getattr(self._llm, "is_live", False))
         intent: PermissionIntent = self._llm.plan_permission_request(message)
         interpretation = intent.model_dump(mode="json")
-        collected = requests_service.collect_context(session, student, intent, message, now, required_percentage)
+        collected = requests_service.collect_context(session, requester, intent, message, now, required_percentage)
         if isinstance(collected, requests_service.NeedsInput):
             outcome = "not_supported" if intent.request_type == "unclear" else "needs_clarification"
             return PermissionPreview(
                 outcome=outcome, message=collected.message, options=collected.options,
                 interpretation=interpretation, live_ai=live,
             )
-        routing = requests_service.route(session, student, collected)
+        routing = requests_service.route(session, requester, collected)
         reason = (intent.reason or message).strip()
-        draft = requests_service.create_draft(session, account, student, collected, routing, reason, now)
+        draft = requests_service.create_draft(session, requester.account, requester, collected, routing, reason, now)
         if routing.resolved:
             summary = f"I prepared your {collected.title}. {routing.note} Review it and choose Confirm & Send."
         else:

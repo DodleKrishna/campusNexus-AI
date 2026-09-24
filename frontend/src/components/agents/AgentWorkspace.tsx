@@ -71,7 +71,7 @@ export function AgentWorkspace({
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-lg font-semibold">{agent.name}</h1>
             <Badge tone="success">Available</Badge>
-            {(agent.key === "enquiry" || scope === "faculty") && <Badge tone="info">Read-only</Badge>}
+            {(agent.key === "enquiry" || scope !== "student") && <Badge tone="info">Read-only</Badge>}
           </div>
           <p className="mt-0.5 text-sm text-muted">{agent.responsibility}</p>
         </div>
@@ -91,7 +91,9 @@ export function AgentWorkspace({
             <div className="mx-auto max-w-xl py-8 text-center">
               <p className="text-sm font-medium">Ask {agent.name} a question</p>
               <p className="mt-1 text-xs text-muted">
-                {scope === "faculty"
+                {scope === "hod"
+                  ? "Answers use only your department's classes, students, requests and complaints. Every count is computed from records."
+                  : scope === "faculty"
                   ? "Answers use only your own classes and the requests routed to you. Every count is computed from attendance records."
                   : "Answers use your own records. Every figure is computed by CampusNexus's rules and verified before you see it."}
               </p>
@@ -110,7 +112,7 @@ export function AgentWorkspace({
                   </div>
                 )}
                 {turn.error && <ErrorState message={turn.error} />}
-                {turn.response && <ResponseRenderer response={turn.response} />}
+                {turn.response && <ResponseRenderer response={turn.response} scope={scope} />}
               </div>
             </div>
           ))}

@@ -29,6 +29,7 @@ from app.schemas.career import CareerIntent, CareerIntentResult, CareerResponseC
 from app.schemas.enums import AgentName, VerificationStatus
 from app.schemas.events import EventsIntent, EventsIntentResult, EventsResponseContext
 from app.schemas.faculty import FacultyQueryPlan
+from app.schemas.department import HodQueryPlan
 from app.schemas.mission import MissionPlan, MissionTask
 from app.schemas.services import ServicesIntent, ServicesIntentResult, ServicesResponseContext
 from app.schemas.workflow import PermissionIntent
@@ -210,6 +211,10 @@ def _permission_intent(message: str) -> PermissionIntent:
     q = message.lower().strip()
     if any(k in q for k in (" od ", " od.", "on duty", "on-duty")) or q.startswith("od "):
         request_type = "od_request"
+    elif "substitut" in q:
+        request_type = "class_substitution"
+    elif "department permission" in q or "permission from the department" in q:
+        request_type = "department_permission"
     elif "leave" in q:
         request_type = "leave_request"
     elif any(k in q for k in ("was absent", "missed", "i was sick", "attendance permission", "excuse my absence", "absent yesterday")):
@@ -233,9 +238,56 @@ def _permission_intent(message: str) -> PermissionIntent:
     )
 
 
+_MAKE_REQUEST_PHRASES = (
+    "i need leave", "need leave", "i want leave", "apply for leave", "request leave", "take leave", "leave tomorrow",
+    "leave today", "substitute", "substitution", "on duty", "on-duty", "i need permission", "can i get permission",
+)
+
+
+def _hod_plan(message: str) -> HodQueryPlan:
+    q = message.lower()
+    section = re.search(r"\bsection\s*([a-z0-9]{1,3})\b", q)
+    year = re.search(r"\b([1-6])(?:st|nd|rd|th)\s+year\b", q)
+    if any(k in q for k in _MAKE_REQUEST_PHRASES):
+        intent = "make_request"
+    elif any(k in q for k in ("complaint", "sla", "grievance")):
+        intent = "complaints_breached"
+    elif "escalat" in q:
+        intent = "escalated_student_requests"
+    elif "request" in q:
+        intent = "pending_faculty_requests"
+    elif any(k in q for k in ("normally", "everything", "overview", "how is the department", "anything wrong")):
+        intent = "department_overview"
+    elif any(k in q for k in ("haven't started", "havent started", "not started", "didn't start", "did not start",
+                              "not start on time", "delayed", "late", "start on time")):
+        intent = "classes_not_started"
+    elif "lowest" in q:
+        intent = "lowest_course_attendance"
+    elif "below" in q or "%" in q or "threshold" in q or "shortage" in q:
+        intent = "below_threshold"
+    elif "present" in q:
+        intent = "section_present_today"
+    elif any(k in q for k in ("running", "right now", "in session", "happening now")):
+        intent = "classes_running"
+    elif "faculty" in q and ("teach" in q or "today" in q):
+        intent = "faculty_teaching_today"
+    elif "event" in q:
+        intent = "department_events"
+    elif "class" in q and ("today" in q or "how many" in q):
+        intent = "classes_today"
+    else:
+        intent = "unknown"
+    return HodQueryPlan(
+        intent=intent, section_reference=section.group(1).upper() if section else None,
+        year_reference=int(year.group(1)) if year else None,
+    )
+
+
 def _faculty_plan(message: str) -> FacultyQueryPlan:
     q = message.lower()
-    if "request" in q or "pending" in q or "permission" in q:
+    if any(k in q for k in _MAKE_REQUEST_PHRASES):
+        return FacultyQueryPlan(intent="make_request")
+    if "request" in q or "pending" in q or "permission" in q or "waiting for me" in q:
         intent = "pending_requests"
     elif "below" in q or "%" in q or "shortage" in q or "less than" in q:
         intent = "below_threshold"
@@ -600,6 +652,10 @@ class MockLLMProvider(LLMProvider):
     def plan_faculty_query(self, message: str) -> FacultyQueryPlan:
         """Deterministic keyword classification for the faculty agents."""
         return _faculty_plan(message)
+
+    def plan_hod_query(self, message: str) -> HodQueryPlan:
+        """Deterministic keyword classification for the HOD agents."""
+        return _hod_plan(message)
 
     def plan_mission(
         self, mission_id: str, goal: str, *, supported_agents: List[AgentName]

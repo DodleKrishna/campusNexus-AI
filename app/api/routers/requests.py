@@ -1,33 +1,31 @@
-"""/requests/* (Phase 16): student workflow requests (permission, leave, OD).
+"""/requests/* (Phase 16 students, Phase 17 faculty/HOD): permission, leave, OD and faculty requests.
 
-    student:  POST /requests/prepare  -> Permission Agent prepares a DRAFT (preview)
+    requester (student or faculty):
+              POST /requests/prepare  -> Permission Agent prepares a DRAFT (preview)
               POST /requests          -> Confirm & Send that exact draft (PENDING)
               POST /requests/{id}/cancel
-    faculty:  POST /requests/{id}/approve | /reject  (only the routed reviewer)
-    both:     GET /requests, GET /requests/{id}  (own requests / requests routed to me)
+    reviewer (faculty or HOD):
+              POST /requests/{id}/approve | /reject  (only the routed reviewer, never one's own)
+    GET /requests?box=inbox|mine    students always get their own; faculty/HOD choose
+    GET /requests/{id}
 
 Separate from ``/approvals`` (Action Agent tool-call approvals). Nothing here
-calls the Action Agent, the Tool Gateway or the Approval Gate.
+calls the Action Agent, the Tool Gateway or the Approval Gate. Identity,
+department and faculty profile come from the token's account only.
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import List
+from typing import List, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.agents.permission.agent import PermissionAgent
-from app.api.auth_deps import (
-    AuthenticatedUser,
-    FacultyCaller,
-    current_faculty_profile,
-    current_student_account,
-    require_authenticated_user,
-)
+from app.api.auth_deps import AuthenticatedUser, FacultyCaller, current_faculty_profile, require_authenticated_user
 from app.api.deps import get_knowledge_service, get_now, get_session
-from app.db.models.auth import AuthAccount
+from app.auth.accounts import get_account
 from app.llm.base import LLMProviderError, LLMTransientError
 from app.schemas.enums import UserRole
 from app.schemas.workflow import (
@@ -37,13 +35,14 @@ from app.schemas.workflow import (
     SubmitRequestBody,
     WorkflowRequestView,
 )
-from app.services import workflow_requests
+from app.services import department_ops, workflow_requests
 from app.services.faculty_ops import faculty_for_account
 from app.services.knowledge import KnowledgeService
-from app.services.workflow_requests import RequestError
+from app.services.workflow_requests import RequestError, Requester
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/requests", tags=["workflow requests"])
+_STAFF = (UserRole.FACULTY, UserRole.HOD)
 
 
 def _run(operation):
@@ -53,15 +52,41 @@ def _run(operation):
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
+def _requester(session: Session, user: AuthenticatedUser) -> Requester:
+    """Students and faculty/HOD may request; the requester is resolved from the account link only."""
+    account = get_account(session, user.account_id)
+    if account is None:
+        raise HTTPException(status_code=401, detail="Invalid session. Please sign in again.")
+    if user.role == UserRole.STUDENT and account.linked_student_id:
+        student = workflow_requests.student_record(session, account.linked_student_id)
+        if student is not None:
+            return Requester(account=account, student=student)
+    if user.role in _STAFF:
+        faculty = faculty_for_account(session, user.account_id)
+        if faculty is not None:
+            return Requester(account=account, faculty=faculty)
+    raise HTTPException(status_code=403, detail="Your account cannot make permission requests.")
+
+
 @router.get("", response_model=List[WorkflowRequestView])
-def list_requests(user: AuthenticatedUser = Depends(require_authenticated_user), session: Session = Depends(get_session)) -> List[WorkflowRequestView]:
+def list_requests(
+    box: Literal["inbox", "mine"] = Query(default="inbox"),
+    user: AuthenticatedUser = Depends(require_authenticated_user), session: Session = Depends(get_session),
+    now: datetime = Depends(get_now),
+) -> List[WorkflowRequestView]:
     if user.role == UserRole.STUDENT and user.student_id:
         rows = workflow_requests.list_for_student(session, user.student_id)
-    elif user.role in (UserRole.FACULTY, UserRole.HOD):
+    elif user.role in _STAFF:
         faculty = faculty_for_account(session, user.account_id)
         if faculty is None:
             raise HTTPException(status_code=403, detail="This account is not linked to a faculty profile.")
-        rows = workflow_requests.list_for_reviewer(session, faculty)
+        if box == "mine":
+            rows = workflow_requests.list_own_faculty(session, faculty)
+        else:
+            scope = department_ops.hod_scope(session, user.account_id)
+            if scope is not None:
+                department_ops.escalate_unassigned(session, scope, now)
+            rows = workflow_requests.list_for_reviewer(session, faculty)
     else:
         raise HTTPException(status_code=403, detail="Your role does not have access to this.")
     return [workflow_requests.view(session, r) for r in rows]
@@ -72,10 +97,10 @@ def get_request(
     request_id: str, user: AuthenticatedUser = Depends(require_authenticated_user), session: Session = Depends(get_session),
 ) -> WorkflowRequestView:
     request = workflow_requests.get_request(session, request_id)
-    allowed = False
-    if request is not None and user.role == UserRole.STUDENT:
-        allowed = request.student_id == user.student_id
-    elif request is not None and user.role in (UserRole.FACULTY, UserRole.HOD):
+    allowed = request is not None and request.requester_account_id == user.account_id and (
+        user.role != UserRole.STUDENT or request.submitted_at is not None
+    )
+    if request is not None and not allowed and user.role in _STAFF:
         faculty = faculty_for_account(session, user.account_id)
         allowed = faculty is not None and request.reviewer_faculty_id == faculty.id and request.submitted_at is not None
     if not allowed:
@@ -85,18 +110,16 @@ def get_request(
 
 @router.post("/prepare", response_model=PermissionPreview)
 def prepare(
-    body: PrepareRequestBody, request: Request, account: AuthAccount = Depends(current_student_account),
+    body: PrepareRequestBody, request: Request, user: AuthenticatedUser = Depends(require_authenticated_user),
     session: Session = Depends(get_session), knowledge: KnowledgeService = Depends(get_knowledge_service),
     now: datetime = Depends(get_now),
 ) -> PermissionPreview:
-    student = workflow_requests.student_record(session, account.linked_student_id)
-    if student is None:
-        raise HTTPException(status_code=404, detail="Your student record was not found.")
+    requester = _requester(session, user)
     agent = PermissionAgent(llm_provider=request.app.state.llm_provider)
     try:
         return agent.prepare(
-            session, account=account, student=student, message=body.message, now=now,
-            required_percentage=workflow_requests.threshold(knowledge, now),
+            session, requester=requester, message=body.message, now=now,
+            required_percentage=workflow_requests.threshold(knowledge, now) if requester.kind == "student" else None,
         )
     except LLMTransientError as exc:
         logger.warning("permission agent: provider unavailable (%s)", exc.details())
@@ -108,19 +131,21 @@ def prepare(
 
 @router.post("", response_model=WorkflowRequestView)
 def submit(
-    body: SubmitRequestBody, account: AuthAccount = Depends(current_student_account),
+    body: SubmitRequestBody, user: AuthenticatedUser = Depends(require_authenticated_user),
     session: Session = Depends(get_session), now: datetime = Depends(get_now),
 ) -> WorkflowRequestView:
-    request = _run(lambda: workflow_requests.submit(session, account, account.linked_student_id, body.request_id, body.reason, now))
+    requester = _requester(session, user)
+    request = _run(lambda: workflow_requests.submit(session, requester.account, body.request_id, body.reason, now))
     return workflow_requests.view(session, request)
 
 
 @router.post("/{request_id}/cancel", response_model=WorkflowRequestView)
 def cancel(
-    request_id: str, account: AuthAccount = Depends(current_student_account),
+    request_id: str, user: AuthenticatedUser = Depends(require_authenticated_user),
     session: Session = Depends(get_session), now: datetime = Depends(get_now),
 ) -> WorkflowRequestView:
-    request = _run(lambda: workflow_requests.cancel(session, account, account.linked_student_id, request_id, now))
+    requester = _requester(session, user)
+    request = _run(lambda: workflow_requests.cancel(session, requester.account, request_id, now))
     return workflow_requests.view(session, request)
 
 

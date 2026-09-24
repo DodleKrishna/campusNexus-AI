@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from sqlalchemy import func, select
 
 from app.db.models import Event, Student
-from app.db.session import create_db_engine, create_session_factory, get_database_url
+from app.db.session import open_database, create_session_factory, get_database_url
 from app.llm.base import LLMProviderError
 from app.llm.factory import get_llm_provider
 from app.rag.config import get_rag_config
@@ -48,7 +48,7 @@ def check_database() -> List[Result]:
     db_path = get_database_url().removeprefix("sqlite:///")
     if not Path(db_path).exists():
         return [("database", False, f"{db_path} does not exist. Run: python scripts/reset_demo_env.py")]
-    engine = create_db_engine()
+    engine = open_database()
     session_factory = create_session_factory(engine)
     try:
         with session_factory() as session:

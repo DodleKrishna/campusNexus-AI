@@ -11,7 +11,19 @@ import { FacultyAttendancePage } from "@/pages/faculty/FacultyAttendancePage";
 import { FacultyClassesPage } from "@/pages/faculty/FacultyClassesPage";
 import { FacultyClassPage } from "@/pages/faculty/FacultyClassPage";
 import { FacultyDashboardPage } from "@/pages/faculty/FacultyDashboardPage";
+import { FacultyMyRequestsPage, FacultyNewRequestPage } from "@/pages/faculty/FacultyMyRequestsPage";
 import { FacultyRequestsPage } from "@/pages/faculty/FacultyRequestsPage";
+import { HodDashboardPage } from "@/pages/hod/HodDashboardPage";
+import {
+  HodAgentPage,
+  HodAgentsPage,
+  HodAttendancePage,
+  HodComplaintsPage,
+  HodDepartmentPage,
+  HodFacultyPage,
+  HodRequestsPage,
+  HodStudentsPage,
+} from "@/pages/hod/HodPages";
 import { RoleWorkspacePage } from "@/pages/RoleWorkspacePage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { StudentAcademicsPage } from "@/pages/student/StudentAcademicsPage";
@@ -64,10 +76,25 @@ export function AppRoutes() {
         <Route path="agents" element={<FacultyAgentsPage />} />
         <Route path="agents/:agentKey" element={<FacultyAgentPage />} />
         <Route path="requests" element={<FacultyRequestsPage />} />
+        <Route path="my-requests" element={<FacultyMyRequestsPage />} />
+        <Route path="my-requests/new" element={<FacultyNewRequestPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
 
-      {(["hod", "admin"] as const).map((role) => (
+      <Route path="/hod" element={<StaffRoutes role="hod" />}>
+        <Route index element={<HodDashboardPage />} />
+        <Route path="department" element={<HodDepartmentPage />} />
+        <Route path="faculty" element={<HodFacultyPage />} />
+        <Route path="students" element={<HodStudentsPage />} />
+        <Route path="attendance" element={<HodAttendancePage />} />
+        <Route path="agents" element={<HodAgentsPage />} />
+        <Route path="agents/:agentKey" element={<HodAgentPage />} />
+        <Route path="requests" element={<HodRequestsPage />} />
+        <Route path="complaints" element={<HodComplaintsPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+      </Route>
+
+      {(["admin"] as const).map((role) => (
         <Route key={role} path={`/${role}`} element={<StaffRoutes role={role} />}>
           <Route index element={<RoleWorkspacePage />} />
           <Route path="settings" element={<SettingsPage />} />

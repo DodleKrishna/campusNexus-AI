@@ -23,7 +23,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from app.api.main import _build_registry  # noqa: E402
 from app.db.repositories.missions import get_latest_approval_for_step  # noqa: E402
-from app.db.session import create_db_engine, create_session_factory  # noqa: E402
+from app.db.session import open_database, create_session_factory  # noqa: E402
 from app.graph.orchestrator import MissionOrchestrator  # noqa: E402
 from app.llm.factory import get_llm_provider  # noqa: E402
 from app.rag.config import get_rag_config  # noqa: E402
@@ -40,7 +40,7 @@ GOAL = "Find a suitable event, check my schedule and prepare my registration."
 
 
 def _build():
-    session_factory = create_session_factory(create_db_engine())
+    session_factory = create_session_factory(open_database())
     config = get_rag_config()
     embedding = get_embedding_provider(config.embedding_provider, model_name=config.embedding_model)
     store = PolicyVectorStore(path=config.chroma_path, collection_name=config.collection_name, embedding_provider=embedding)

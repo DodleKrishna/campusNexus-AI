@@ -7,11 +7,23 @@ import { agentByKey } from "@/features/agents/catalog";
 import { EnquiryAnswer } from "@/features/enquiry/EnquiryAnswer";
 import { FacultyAnswer } from "@/features/faculty/FacultyAnswer";
 import { SpecialistFacts } from "@/features/SpecialistFacts";
+import type { ChatScope } from "@/api/endpoints";
 import type { AgentQueryResponse } from "@/types/api";
 
-export function ResponseRenderer({ response }: { response: AgentQueryResponse }) {
+function hintLink(response: AgentQueryResponse, scope: ChatScope): { to: string; label: string } | null {
   const hint = response.action_hint;
-  const hintAgent = hint ? agentByKey(hint.agent_key) : undefined;
+  if (!hint) return null;
+  if (scope === "faculty" && hint.agent_key === "permission") {
+    const q = typeof response.facts.request_message === "string" ? `?q=${encodeURIComponent(response.facts.request_message)}` : "";
+    return { to: `/faculty/my-requests/new${q}`, label: "Open Permission Agent" };
+  }
+  const agent = scope === "student" ? agentByKey(hint.agent_key) : undefined;
+  return agent?.available ? { to: `/student/agents/${agent.key}`, label: `Open ${agent.name}` } : null;
+}
+
+export function ResponseRenderer({ response, scope = "student" }: { response: AgentQueryResponse; scope?: ChatScope }) {
+  const hint = response.action_hint;
+  const link = hintLink(response, scope);
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -36,9 +48,9 @@ export function ResponseRenderer({ response }: { response: AgentQueryResponse })
             <Info className="mt-0.5 size-4 shrink-0 text-info" />
             <div>
               {hint.message}
-              {hintAgent?.available && (
-                <Link to={`/student/agents/${hintAgent.key}`} className="ml-1 inline-flex items-center gap-1 font-medium text-accent-hover">
-                  Open {hintAgent.name} <ArrowRight className="size-3.5" />
+              {link && (
+                <Link to={link.to} className="ml-1 inline-flex items-center gap-1 font-medium text-accent-hover">
+                  {link.label} <ArrowRight className="size-3.5" />
                 </Link>
               )}
             </div>

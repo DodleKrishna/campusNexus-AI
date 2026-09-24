@@ -108,6 +108,19 @@ def upgrade_schema(engine: Engine) -> list[str]:
     return added
 
 
+def open_database(db_path: str | Path | None = None, *, echo: bool = False) -> Engine:
+    """Engine for an executable entry point that expects the current schema (Phase 17).
+
+    Creates the engine and runs the idempotent, additive ``upgrade_schema`` once,
+    so a database created by an earlier phase gains the new tables and nullable
+    columns before any model touches them. Call it from ``main()``/runtime code,
+    never at module import time.
+    """
+    engine = create_db_engine(db_path, echo=echo)
+    upgrade_schema(engine)
+    return engine
+
+
 def drop_db(engine: Engine) -> None:
     """Drop all tables known to ``Base.metadata`` on ``engine`` (tests only)."""
     Base.metadata.drop_all(engine)

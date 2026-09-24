@@ -59,6 +59,8 @@ from app.llm.providers.anthropic_provider import (
     _SYSTEM_ENQUIRY_PROMPT,
     _ENQUIRY_TOOL_NAME,
     _FACULTY_QUERY_TOOL_NAME,
+    _HOD_QUERY_TOOL_NAME,
+    _SYSTEM_HOD_QUERY_PROMPT,
     _PERMISSION_TOOL_NAME,
     _SYSTEM_FACULTY_QUERY_PROMPT,
     _SYSTEM_PERMISSION_PROMPT,
@@ -75,6 +77,7 @@ from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
 from app.schemas.faculty import FacultyQueryPlan
+from app.schemas.department import HodQueryPlan
 from app.schemas.mission import MissionPlan
 from app.schemas.services import ServicesIntentResult, ServicesResponseContext
 from app.schemas.workflow import PermissionIntent
@@ -516,6 +519,12 @@ class GroqLLMProvider(LLMProvider):
         return self._structured(
             max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_FACULTY_QUERY_PROMPT, content=f"Faculty question: {message}",
             tool_name=_FACULTY_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=FacultyQueryPlan,
+        )
+
+    def plan_hod_query(self, message: str) -> HodQueryPlan:
+        return self._structured(
+            max_tokens=_CLASSIFY_MAX_TOKENS, system=_SYSTEM_HOD_QUERY_PROMPT, content=f"HOD question: {message}",
+            tool_name=_HOD_QUERY_TOOL_NAME, description="Record the classified question.", schema_cls=HodQueryPlan,
         )
 
     def plan_mission(

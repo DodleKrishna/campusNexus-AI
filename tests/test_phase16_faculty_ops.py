@@ -425,9 +425,11 @@ def test_attendance_permission_routes_to_the_affected_course_faculty_and_can_be_
 
 
 def test_unresolvable_routing_needs_review_and_nobody_can_decide(client, session_factory) -> None:
+    # Phase 17 escalates to the department HOD, so remove the mentor AND the head to leave nobody.
     with session_factory() as session:
         aditi = session.execute(select(Student).where(Student.student_code == "STU-DEMO-001")).scalar_one()
         aditi.mentor_faculty_id = None
+        aditi.department.hod_faculty_id = None
         session.commit()
     student = auth(client, STUDENT)
     draft = prepare(client, student, "I need permission to attend the coding contest.")["request"]
@@ -472,7 +474,8 @@ def test_students_only_see_and_submit_their_own_requests(client, session_factory
     rohan = auth(client, "rohan@campusnexus.local")
     assert client.post("/requests", json={"request_id": draft["request_id"]}, headers=rohan).status_code == 404
     assert client.get(f"/requests/{draft['request_id']}", headers=rohan).status_code == 404
-    assert client.post("/requests/prepare", json={"message": "leave"}, headers=auth(client, VERMA)).status_code == 403
+    # Phase 17: faculty may prepare their own requests; an account with no student/faculty link may not.
+    assert client.post("/requests/prepare", json={"message": "leave"}, headers=auth(client, "admin@campusnexus.local")).status_code == 403
 
 
 def test_state_persists_across_a_restart(client, knowledge_service, clock) -> None:

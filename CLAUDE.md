@@ -290,6 +290,31 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - Time comes from `app.state.clock` (`get_now`) so class-window rules are testable; never call
   `datetime.now()` inside those rules.
 
+## HOD Operations & Faculty → HOD Workflows (Phase 17)
+
+- HOD authority is `current_hod` → `department_ops.hod_scope`: role HOD **and** a linked faculty profile
+  **and** `departments.hod_faculty_id == that profile`. The role alone is never enough. Every `/hod/*`
+  query starts from `scope.department`; no endpoint accepts a department from the client.
+- Class state (`app/rules/class_session.class_state`): UPCOMING / DUE / DELAYED (past start + grace, not
+  started) / NOT_HELD (end passed, never started) / ACTIVE / COMPLETED / CANCELLED. The grace period is
+  `CAMPUSNEXUS_CLASS_START_GRACE_MINUTES` (default 10). Never let an LLM decide whether a class is late.
+- Faculty requests (FACULTY_LEAVE, CLASS_SUBSTITUTION, OD_REQUEST, DEPARTMENT_PERMISSION) reuse
+  `workflow_requests` (`requester_faculty_id`) and the Permission Agent. Affected classes are the faculty
+  member's own class meetings in the window. The substitute is always "Not assigned"; there is no automatic
+  substitution. The reviewer is the department head (`route_faculty_request`); a head's own request needs
+  review. Nobody may decide their own request.
+- A student request with no class faculty member and no mentor escalates to the student's department head
+  (`routing_basis = hod_escalation`). Older NEEDS_REVIEW rows are escalated (idempotent, audited) when the
+  HOD views their inbox or dashboard.
+- Staff notifications live in `staff_notifications` (`notifications` requires a student). A delayed-class
+  warning is de-duplicated per class meeting through `ref_key`.
+- HOD chat (`/hod/agents/{academic|enquiry|permission|complaints|events}/query`, `app/agents/enquiry/hod.py`)
+  is read-only and department-scoped. `HodQueryPlan` has no department field. Faculty chat routes "I need
+  leave…" to the Permission Agent (`make_request` → action hint) instead of answering it.
+- Every executable entry point that opens an existing database must call `open_database()` (or
+  `init_db`/`upgrade_schema`) from runtime code, never at import time. `tests/test_phase17_hod_ops.py`
+  enforces this for `eval/` and `scripts/`.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -442,6 +467,12 @@ cd frontend; npm run typecheck; npm run lint; npm test; npm run build
 # than an hour after the reset, schedule a fresh one (the API does not need a restart):
 python scripts/schedule_demo_class.py
 pytest tests/test_phase16_faculty_ops.py -v
+
+# Phase 17: HOD (hod@campusnexus.local = Dr. Kavita Iyer, head of CSE). reset_demo_env.py also records an
+# extra class tomorrow 14:00 so a faculty "leave tomorrow afternoon" request has an affected class; re-create
+# it later with --tomorrow-afternoon.
+python scripts/schedule_demo_class.py --tomorrow-afternoon
+pytest tests/test_phase17_hod_ops.py -v
 
 # Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
 # resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,

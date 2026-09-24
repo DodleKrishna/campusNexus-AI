@@ -916,6 +916,9 @@ FACULTY_SEED: list[tuple[str, str, str, str, str]] = [
 
 DEFAULT_SECTION = "1"
 
+# Phase 17: the faculty profile heading each department (departments.hod_faculty_id).
+DEPARTMENT_HEADS = {"CSE": "EMP-CSE-001", "ECE": "EMP-ECE-002", "MECH": "EMP-MECH-002", "CIVIL": "EMP-CIVIL-002"}
+
 # Mentor per (department, semester); CSE semester 5 section 1 (Aditi's
 # class) is mentored by Dr. Ashok Verma.
 MENTOR_PLAN: dict[tuple[str, int], str] = {
@@ -1001,6 +1004,10 @@ def seed_teaching(session: Session, courses: dict[str, Course], faculty: dict[st
                 "year": (semester + 1) // 2, "semester": semester,
             },
         )
+    for department in session.execute(select(Department)).scalars():
+        head = DEPARTMENT_HEADS.get(department.code)
+        if department.hod_faculty_id is None and head in faculty:
+            department.hod_faculty_id = faculty[head].id
     # Sections and mentors are only filled in where still empty (idempotent,
     # never overwriting a later change).
     for student in session.execute(select(Student)).scalars():

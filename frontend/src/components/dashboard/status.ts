@@ -53,3 +53,14 @@ export const WORKFLOW_STATUS: Record<string, { label: string; tone: BadgeTone }>
   rejected: { label: "Rejected", tone: "danger" },
   cancelled: { label: "Cancelled", tone: "neutral" },
 };
+
+// Phase 17: department class state (decided by the backend's class_state rule)
+export const CLASS_STATE: Record<string, { label: string; tone: BadgeTone }> = {
+  upcoming: { label: "Upcoming", tone: "info" },
+  due: { label: "Due now", tone: "info" },
+  delayed: { label: "Not started", tone: "danger" },
+  not_held: { label: "Not held", tone: "danger" },
+  active: { label: "Active", tone: "accent" },
+  completed: { label: "Completed", tone: "neutral" },
+  cancelled: { label: "Cancelled", tone: "neutral" },
+};

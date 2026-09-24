@@ -12,8 +12,13 @@ here.
 Run it against the demo database (``scripts/reset_demo_env.py`` already calls
 it once); re-run it if the demo happens more than an hour after the reset.
 
+Phase 17: ``--tomorrow-afternoon`` also records a real extra class tomorrow at
+14:00 for the same teaching assignment, so a faculty-leave request for
+"tomorrow afternoon" has an affected class to show the HOD.
+
 Usage:
     python scripts/schedule_demo_class.py                       # CS303 by Dr. Ashok Verma, now, 60 min
+    python scripts/schedule_demo_class.py --tomorrow-afternoon  # plus an extra class tomorrow 14:00-15:00
     python scripts/schedule_demo_class.py --course CS303 --minutes 90
     python scripts/schedule_demo_class.py --db data/demo/campusnexus_demo.db
 """
@@ -21,7 +26,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -32,7 +37,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models.academic import Course
 from app.db.models.faculty import AttendanceSession, AttendanceSessionStatus, TeachingAssignment
-from app.db.session import create_db_engine, create_session_factory, upgrade_schema
+from app.db.session import create_session_factory, open_database
 from app.services.class_schedule import local
 
 DEFAULT_DB = Path(__file__).resolve().parents[1] / "data" / "demo" / "campusnexus_demo.db"
@@ -40,7 +45,7 @@ DEFAULT_DB = Path(__file__).resolve().parents[1] / "data" / "demo" / "campusnexu
 
 def schedule_extra_class(
     session: Session, *, course_code: str = "CS303", section: str = "1", minutes: int = 60,
-    now: Optional[datetime] = None, room: Optional[str] = None,
+    now: Optional[datetime] = None, room: Optional[str] = None, start_at: Optional[datetime] = None,
 ) -> AttendanceSession:
     now = now or datetime.now(timezone.utc)
     assignment = session.execute(
@@ -49,8 +54,11 @@ def schedule_extra_class(
     ).scalar_one_or_none()
     if assignment is None:
         raise SystemExit(f"No teaching assignment for {course_code} section {section}. Seed the database first.")
-    start_local = local(now).replace(second=0, microsecond=0)
-    start_local -= timedelta(minutes=start_local.minute % 5)
+    if start_at is not None:
+        start_local = local(start_at)
+    else:
+        start_local = local(now).replace(second=0, microsecond=0)
+        start_local -= timedelta(minutes=start_local.minute % 5)
     start = start_local.astimezone(timezone.utc)
     existing = session.execute(
         select(AttendanceSession).where(
@@ -70,22 +78,33 @@ def schedule_extra_class(
     return row
 
 
+def schedule_tomorrow_afternoon(session: Session, *, course_code: str = "CS303", now: Optional[datetime] = None) -> AttendanceSession:
+    """An extra class tomorrow 14:00-15:00 campus time (Phase 17 faculty-leave demo)."""
+    now = now or datetime.now(timezone.utc)
+    tomorrow = local(now).date() + timedelta(days=1)
+    start = datetime.combine(tomorrow, time(14, 0), tzinfo=local(now).tzinfo)
+    return schedule_extra_class(session, course_code=course_code, minutes=60, now=now, start_at=start)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--db", default=str(DEFAULT_DB), help="SQLite database (default: the demo database).")
     parser.add_argument("--course", default="CS303")
     parser.add_argument("--section", default="1")
     parser.add_argument("--minutes", type=int, default=60)
+    parser.add_argument("--tomorrow-afternoon", action="store_true", help="Also schedule an extra class tomorrow 14:00-15:00.")
     args = parser.parse_args()
-    engine = create_db_engine(db_path=args.db)
-    upgrade_schema(engine)
+    engine = open_database(args.db)
     with create_session_factory(engine)() as session:
-        row = schedule_extra_class(session, course_code=args.course, section=args.section, minutes=args.minutes)
-        print(
-            f"Extra class scheduled: {row.course.title} (section {args.section}) by {row.faculty.full_name}, "
-            f"{local(row.scheduled_start):%a %d %b %H:%M}-{local(row.scheduled_end):%H:%M} IST, {row.room}. "
-            f"Status: {row.status.value}."
-        )
+        rows = [schedule_extra_class(session, course_code=args.course, section=args.section, minutes=args.minutes)]
+        if args.tomorrow_afternoon:
+            rows.append(schedule_tomorrow_afternoon(session, course_code=args.course))
+        for row in rows:
+            print(
+                f"Extra class scheduled: {row.course.title} (section {args.section}) by {row.faculty.full_name}, "
+                f"{local(row.scheduled_start):%a %d %b %H:%M}-{local(row.scheduled_end):%H:%M} IST, {row.room}. "
+                f"Status: {row.status.value}."
+            )
     engine.dispose()
 
 

@@ -136,3 +136,49 @@ def pick_current(
         if in_window(start, end, now):
             return i
     return None
+
+
+# ---------------------------------------------------------------------------
+# Phase 17: department monitoring -- is a class running, done, late or missed?
+# ---------------------------------------------------------------------------
+
+DEFAULT_START_GRACE_MINUTES = 10
+
+
+class ClassState(str, Enum):
+    UPCOMING = "upcoming"      # before its scheduled start
+    DUE = "due"                # started time has passed, still inside the grace period
+    DELAYED = "delayed"        # past start + grace, before its end, no session started
+    NOT_HELD = "not_held"      # its scheduled end has passed and it was never started
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+NOT_STARTED_STATES = frozenset({ClassState.DELAYED, ClassState.NOT_HELD})
+
+
+def class_state(status: str, scheduled_start: datetime, scheduled_end: datetime, now: datetime, grace_minutes: int) -> ClassState:
+    """Deterministic state of one class meeting at ``now``.
+
+    A scheduled class with no ACTIVE/CLOSED session is DELAYED once ``now`` is at
+    or past ``scheduled_start + grace_minutes`` (and before its end), and
+    NOT_HELD once its scheduled end has passed.
+    """
+    for value in (scheduled_start, scheduled_end, now):
+        _aware(value)
+    if grace_minutes < 0:
+        raise ValueError("grace_minutes must not be negative")
+    if status == SessionState.CANCELLED.value:
+        return ClassState.CANCELLED
+    if status == SessionState.ACTIVE.value:
+        return ClassState.ACTIVE
+    if status == SessionState.CLOSED.value:
+        return ClassState.COMPLETED
+    if now < scheduled_start:
+        return ClassState.UPCOMING
+    if now >= scheduled_end:
+        return ClassState.NOT_HELD
+    if now < scheduled_start + timedelta(minutes=grace_minutes):
+        return ClassState.DUE
+    return ClassState.DELAYED

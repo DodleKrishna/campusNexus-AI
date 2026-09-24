@@ -1,4 +1,4 @@
-import { Bot, Briefcase, CalendarDays, ClipboardCheck, ClipboardList, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, type LucideIcon } from "lucide-react";
+import { Bot, Building2, FileCheck2, Users, Briefcase, CalendarDays, ClipboardCheck, ClipboardList, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, type LucideIcon } from "lucide-react";
 import type { Role } from "@/types/api";
 
 export interface NavItem {
@@ -24,13 +24,25 @@ const FACULTY_NAV: NavItem[] = [
   { label: "Attendance", to: "/faculty/attendance", icon: ClipboardCheck },
   { label: "Agents", to: "/faculty/agents", icon: Bot },
   { label: "Student Requests", to: "/faculty/requests", icon: Inbox },
+  { label: "My Requests", to: "/faculty/my-requests", icon: FileCheck2 },
+];
+
+const HOD_NAV: NavItem[] = [
+  { label: "Overview", to: "/hod", icon: LayoutDashboard, end: true },
+  { label: "Department", to: "/hod/department", icon: Building2 },
+  { label: "Faculty", to: "/hod/faculty", icon: Users },
+  { label: "Students", to: "/hod/students", icon: GraduationCap },
+  { label: "Attendance", to: "/hod/attendance", icon: ClipboardCheck },
+  { label: "Agents", to: "/hod/agents", icon: Bot },
+  { label: "Requests", to: "/hod/requests", icon: Inbox },
+  { label: "Complaints", to: "/hod/complaints", icon: MessageSquareWarning },
 ];
 
 export function navigationFor(role: Role): NavItem[] {
   if (role === "student") return STUDENT_NAV;
   if (role === "faculty") return FACULTY_NAV;
-  const home = role === "hod" ? "/hod" : "/admin";
-  return [{ label: "Overview", to: home, icon: LayoutDashboard, end: true }];
+  if (role === "hod") return HOD_NAV;
+  return [{ label: "Overview", to: "/admin", icon: LayoutDashboard, end: true }];
 }
 
 export function settingsPathFor(role: Role): string {

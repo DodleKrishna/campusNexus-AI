@@ -20,6 +20,9 @@ class Department(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
+    # Phase 17 (nullable, additive): the faculty profile that heads this department.
+    # HOD authority is resolved from this record, never from the account role alone.
+    hod_faculty_id: Mapped[Optional[int]] = mapped_column(ForeignKey("faculty_profiles.id", use_alter=True), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
     students: Mapped[List["Student"]] = relationship(back_populates="department")

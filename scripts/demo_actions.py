@@ -30,7 +30,7 @@ from app.db.repositories.calendar import get_calendar_entry
 from app.db.repositories.cases import get_case
 from app.db.repositories.events import get_registration
 from app.db.repositories.missions import get_latest_approval_for_step
-from app.db.session import create_db_engine, create_session_factory
+from app.db.session import open_database, create_session_factory
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
 from app.llm.factory import get_llm_provider
@@ -91,7 +91,7 @@ def parse_args() -> argparse.Namespace:
 
 class Demo:
     def __init__(self, provider_name: Optional[str]) -> None:
-        engine = create_db_engine()
+        engine = open_database()
         self.session_factory = create_session_factory(engine)
 
         config = get_rag_config()

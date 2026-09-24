@@ -27,7 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from app.agents.action.agent import ActionAgent
 from app.agents.events.agent import EventsAgent
 from app.db.repositories.missions import get_latest_approval_for_step
-from app.db.session import create_db_engine, create_session_factory
+from app.db.session import open_database, create_session_factory
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
 from app.llm.factory import get_llm_provider
@@ -47,7 +47,7 @@ REGISTER_GOAL = (
 
 
 def _build_orchestrator() -> Tuple[MissionOrchestrator, object]:
-    engine = create_db_engine()
+    engine = open_database()
     session_factory = create_session_factory(engine)
 
     config = get_rag_config()
