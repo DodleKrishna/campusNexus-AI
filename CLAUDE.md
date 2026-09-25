@@ -380,6 +380,17 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - `tests/conftest.py` removes `CAMPUSNEXUS_DATABASE_URL`, so the normal suite stays SQLite/offline. PostgreSQL
   tests (`tests/test_phase21_postgres.py`) run only with `CAMPUSNEXUS_TEST_DATABASE_URL`, each in a throwaway
   schema. Auth (bcrypt + JWT) and RAG (Chroma) are unchanged: no Supabase Auth, no pgvector.
+- Test strategy (Phase 21C, permanent): full regression = the SQLite suite plus all of
+  `tests/test_phase21_postgres.py` on a local PostgreSQL. Against remote Supabase run only the focused subset
+  (`-m supabase_acceptance`, listed in `SUPABASE_ACCEPTANCE`) plus browser and persistence checks. Never run the
+  full suite remotely (each test builds and seeds its own schema over a high-latency link).
+- `tests/pg_support.py` isolates each test with `SET search_path` on every new connection (Supabase's session
+  pooler ignores the `options=-csearch_path` startup parameter), verifies `current_schema()` is the
+  `cn_test_<12 hex>` schema and never `public` before any write, and drops only names matching that format.
+  Never weaken these guards.
+- Known pre-existing issue: three Streamlit candidate-selection tests (`test_phase13_api_ui.py`,
+  `test_phase14_ux.py`) are time-of-day dependent and fail around midnight (also on the pre-Phase-21 commit).
+  They are not a Phase 21 regression.
 
 ## Idempotency Requirement
 
