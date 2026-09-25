@@ -32,7 +32,7 @@ class FacultyProfile(TenantMixin, Base):
     __table_args__ = (Index("ux_faculty_profiles_org_employee_code", "organization_id", "employee_code", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    employee_code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    employee_code: Mapped[str] = mapped_column(String(20), index=True)  # unique per organization (Phase 22B)
     user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), default=None)
     full_name: Mapped[str] = mapped_column(String(120))
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"))

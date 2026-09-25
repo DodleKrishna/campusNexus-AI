@@ -36,6 +36,7 @@ from app.schemas.workflow import (
     WorkflowRequestView,
 )
 from app.services import department_ops, workflow_requests
+from app.db.models.faculty import FacultyProfile
 from app.services.faculty_ops import faculty_for_account
 from app.services.knowledge import KnowledgeService
 from app.services.workflow_requests import RequestError, Requester
@@ -57,14 +58,15 @@ def _requester(session: Session, user: AuthenticatedUser) -> Requester:
     account = get_account(session, user.account_id)
     if account is None:
         raise HTTPException(status_code=401, detail="Invalid session. Please sign in again.")
-    if user.role == UserRole.STUDENT and account.linked_student_id:
-        student = workflow_requests.student_record(session, account.linked_student_id)
+    # Phase 22B: the student / faculty profile and the role come from the organization membership.
+    if user.role == UserRole.STUDENT and user.student_id:
+        student = workflow_requests.student_record(session, user.student_id)
         if student is not None:
-            return Requester(account=account, student=student)
-    if user.role in _STAFF:
-        faculty = faculty_for_account(session, user.account_id)
+            return Requester(account=account, student=student, role=user.role)
+    if user.role in _STAFF and user.faculty_profile_id:
+        faculty = session.get(FacultyProfile, user.faculty_profile_id)
         if faculty is not None:
-            return Requester(account=account, faculty=faculty)
+            return Requester(account=account, faculty=faculty, role=user.role)
     raise HTTPException(status_code=403, detail="Your account cannot make permission requests.")
 
 
@@ -83,7 +85,7 @@ def list_requests(
         if box == "mine":
             rows = workflow_requests.list_own_faculty(session, faculty)
         else:
-            scope = department_ops.hod_scope(session, user.account_id)
+            scope = department_ops.hod_scope(session, user.account_id, user.faculty_profile_id)
             if scope is not None:
                 department_ops.escalate_unassigned(session, scope, now)
             rows = workflow_requests.list_for_reviewer(session, faculty)

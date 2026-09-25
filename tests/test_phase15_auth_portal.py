@@ -17,8 +17,9 @@ from app.agents.action.agent import ActionAgent
 from app.agents.enquiry.agent import EnquiryAgent
 from app.api.main import create_app
 from app.auth.accounts import DEV_ACCOUNTS, resolve_seed_password, seed_dev_accounts
-from app.auth.tokens import issue_token
+from app.auth.tokens import decode_token, issue_token
 from app.db.models.auth import AuthAccount
+from app.db.tenancy import ensure_default_organization, sync_memberships
 from app.db.models.mission import ApprovalRecord, Mission, ToolCallRecord
 from app.llm.base import LLMRateLimitError
 from app.llm.providers.mock import MockLLMProvider
@@ -45,6 +46,8 @@ def accounts(seeded_session, session_factory):
             email="rohan@campusnexus.local", password_hash=hash_password(PASSWORD), role=UserRole.STUDENT,
             display_name="Rohan Mehta", linked_student_id="STU2023002",
         ))
+        session.flush()
+        sync_memberships(session, ensure_default_organization(session))  # Phase 22: the membership is authoritative
         session.commit()
 
 
@@ -77,6 +80,7 @@ def test_login_returns_a_token_and_the_role_home(client) -> None:
         "id": body["user"]["id"], "email": STUDENT_EMAIL, "role": "student", "display_name": "Aditi Rao",
         "student_id": "STU-DEMO-001", "department_code": "CSE", "department_name": body["user"]["department_name"],
         "home_route": "/student",
+        "organization": {"id": body["user"]["organization"]["id"], "slug": "campusnexus-demo", "name": "CampusNexus Demo Institution"},
     }
     assert "password" not in str(body).lower()
     for spec, home in zip(DEV_ACCOUNTS, ("/student", "/faculty", "/hod", "/admin")):
@@ -104,7 +108,8 @@ def test_me_requires_a_valid_unexpired_token(client) -> None:
     assert client.get("/auth/me").status_code == 401
     assert client.get("/auth/me", headers={"Authorization": "Bearer not-a-jwt"}).status_code == 401
     account_id = me["id"]
-    expired, _ = issue_token(account_id, "student", now=datetime.now(timezone.utc) - timedelta(hours=2), lifetime=timedelta(minutes=5))
+    claims = decode_token(headers["Authorization"].split()[1])
+    expired, _ = issue_token(account_id, "student", organization_id=claims.organization_id, membership_id=claims.membership_id, now=datetime.now(timezone.utc) - timedelta(hours=2), lifetime=timedelta(minutes=5))
     response = client.get("/auth/me", headers={"Authorization": f"Bearer {expired}"})
     assert response.status_code == 401 and response.json()["detail"] == "Your session expired. Please sign in again."
     assert client.post("/auth/logout", headers=headers).status_code == 204

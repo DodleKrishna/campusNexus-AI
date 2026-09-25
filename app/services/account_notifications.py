@@ -11,10 +11,9 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models.auth import AuthAccount
 from app.db.models.communication import AccountNotification, NotificationStatus
+from app.db.tenancy import admin_account_ids
 from app.schemas.department import StaffNotificationItem
-from app.schemas.enums import UserRole
 
 
 def notify(
@@ -30,9 +29,7 @@ def notify(
 
 
 def notify_admins(session: Session, title: str, body: str, category: str, *, now: datetime, ref_key: Optional[str] = None) -> int:
-    admins = session.execute(
-        select(AuthAccount.id).where(AuthAccount.role == UserRole.ADMIN, AuthAccount.is_active.is_(True))
-    ).scalars().all()
+    admins = admin_account_ids(session)  # Phase 22B: by membership role, organization-scoped
     return sum(1 for account_id in admins if notify(session, account_id, title, body, category, now=now, ref_key=ref_key))
 
 

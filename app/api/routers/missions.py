@@ -182,7 +182,8 @@ def create_mission(
             raise HTTPException(status_code=400, detail="student_id is required for a staff-initiated mission.")
 
     final_state = orchestrator.run_mission(
-        body.goal, user_id=effective_student_id, user_role=UserRole.STUDENT, student_id=effective_student_id
+        body.goal, user_id=effective_student_id, user_role=UserRole.STUDENT, student_id=effective_student_id,
+        organization_id=identity.organization_id,
     )
     mission = _load_mission_or_404(session, final_state["mission_id"])
     return _mission_response(session, mission)
@@ -225,7 +226,7 @@ def resume_mission(
 ) -> MissionResponse:
     mission = _load_mission_or_404(session, mission_id)
     _check_mission_ownership(identity, mission)
-    orchestrator.resume_mission(mission_id)
+    orchestrator.resume_mission(mission_id, organization_id=identity.organization_id)
     session.expire_all()
     mission = _load_mission_or_404(session, mission_id)
     return _mission_response(session, mission)
@@ -296,7 +297,7 @@ def select_candidate(
     try:
         outcome = orchestrator.select_target(
             mission_id, tool_name=body.action, resource_type=body.resource_type, resource_id=body.resource_id,
-            selected_by=identity.student_id or identity.key,
+            selected_by=identity.student_id or identity.key, organization_id=identity.organization_id,
         )
     except SelectionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

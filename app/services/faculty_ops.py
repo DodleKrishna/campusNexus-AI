@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Sequence
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.db.tenancy import active_membership
 from app.db.models.academic import AttendanceRecord, Enrollment, TimetableSlot
 from app.db.models.auth import AuthAccount
 from app.db.models.communication import Notification, NotificationStatus
@@ -67,10 +68,11 @@ class OperationRefused(Exception):
 
 
 def faculty_for_account(session: Session, account_id: int) -> Optional[FacultyProfile]:
-    account = session.get(AuthAccount, account_id)
-    if account is None or account.linked_faculty_id is None:
+    """Phase 22B: the faculty profile of the account's active organization membership (tenant-scoped)."""
+    membership = active_membership(session, account_id)
+    if membership is None or membership.faculty_profile_id is None:
         return None
-    return session.get(FacultyProfile, account.linked_faculty_id)
+    return session.get(FacultyProfile, membership.faculty_profile_id)
 
 
 def assignments_of(session: Session, faculty: FacultyProfile) -> List[TeachingAssignment]:

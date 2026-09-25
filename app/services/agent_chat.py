@@ -13,9 +13,11 @@ in as facts (read from ``app.services.academic``, deterministic DB reads), so
 from __future__ import annotations
 
 import uuid
-from typing import Dict
+from typing import Dict, Optional
 
 from sqlalchemy.orm import Session, sessionmaker
+
+from app.db.tenant_session import TenantIsolationError, TenantSessionFactory
 
 from app.graph.registry import AgentRegistry
 from app.schemas.agent import AgentMessage
@@ -34,11 +36,17 @@ class SpecialistGateway:
         self._registry = registry
         self._session_factory = session_factory
 
-    def consult(self, agent_key: str, objective: str, *, student_id: str) -> SpecialistAnswer:
+    def consult(self, agent_key: str, objective: str, *, student_id: str, organization_id: Optional[int] = None) -> SpecialistAnswer:
         agent_name = SPECIALIST_AGENTS.get(agent_key)
         if agent_name is None:
             raise ChatAgentError(f"{agent_key!r} is not a read-only specialist agent.")
-        session = self._session_factory()
+        # Phase 22B: in the API the session is bound to the caller's organization (from its identity).
+        if isinstance(self._session_factory, TenantSessionFactory):
+            if organization_id is None:
+                raise TenantIsolationError("a specialist consultation needs the caller's organization")
+            session = self._session_factory.open_tenant_session(organization_id)
+        else:
+            session = self._session_factory()
         try:
             facts: Dict[str, JsonValue] = {"student_id": student_id, "query": objective}
             if agent_name == AgentName.EVENTS_OPPORTUNITY_AGENT:

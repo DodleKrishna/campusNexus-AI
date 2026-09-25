@@ -92,8 +92,8 @@ def _add_exam_over_clean_event(session) -> None:
     enrollment = session.execute(select(Enrollment).where(Enrollment.student_id == student.id)).scalars().first()
     event = session.get(Event, CLEAN_EVENT_ID)
     session.add(
-        Exam(course_id=enrollment.course_id, exam_type="quiz", scheduled_start=event.start_at,
-             scheduled_end=event.end_at, location=RESCHEDULED_LOCATION)
+        Exam(organization_id=student.organization_id, course_id=enrollment.course_id, exam_type="quiz",
+             scheduled_start=event.start_at, scheduled_end=event.end_at, location=RESCHEDULED_LOCATION)
     )
     session.commit()
 

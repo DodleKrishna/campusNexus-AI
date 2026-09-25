@@ -16,6 +16,8 @@ from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.api.identities import DEMO_IDENTITIES
+from app.auth.identity import TenantContext, demo_organization
+from app.db.tenant_session import bind_organization
 from app.db.repositories.students import get_student_by_id
 from app.graph.orchestrator import MissionOrchestrator
 from app.schemas.enums import UserRole
@@ -31,6 +33,11 @@ class Identity:
     role: UserRole
     student_id: Optional[str]
     display_name: str
+    tenant: TenantContext
+
+    @property
+    def organization_id(self) -> int:
+        return self.tenant.organization_id
 
 
 def get_session(request: Request) -> Iterator[Session]:
@@ -79,6 +86,11 @@ def get_identity(
             ),
         )
     definition = DEMO_IDENTITIES[x_demo_identity]
+    # Phase 22B: the request's tenant session is bound to the identity's fixed organization before any lookup.
+    organization = demo_organization(session, definition.organization_slug)
+    if organization is None:
+        raise HTTPException(status_code=500, detail=f"Demo identity {definition.key!r} names an unknown organization.")
+    bind_organization(session, organization.id)
     if definition.student_id is not None:
         student = get_student_by_id(session, definition.student_id)
         if student is None:
@@ -89,7 +101,9 @@ def get_identity(
         display_name = f"{student.user.full_name} (Student)"
     else:
         display_name = definition.fallback_display_name
-    return Identity(key=definition.key, role=definition.role, student_id=definition.student_id, display_name=display_name)
+    tenant = TenantContext(organization_id=organization.id, membership_id=None, account_id=None, role=definition.role)
+    return Identity(key=definition.key, role=definition.role, student_id=definition.student_id, display_name=display_name,
+                    tenant=tenant)
 
 
 def require_role(*roles: UserRole):

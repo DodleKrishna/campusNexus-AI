@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.agents.enquiry.agent import EnquiryAgent
-from app.api.auth_deps import current_student
+from app.api.auth_deps import AuthenticatedUser, current_student, require_authenticated_user
 from app.api.deps import get_now
 from app.services.class_schedule import get_current_class
 from app.llm.base import LLMProviderError, LLMTransientError
@@ -59,9 +59,9 @@ def _gateway(request: Request) -> SpecialistGateway:
     return request.app.state.specialist_gateway
 
 
-def _live_class(request: Request, student_id: str, now: datetime):
-    """Deterministic live class status (read-only) for the Enquiry Agent."""
-    session = request.app.state.session_factory()
+def _live_class(request: Request, organization_id: int, student_id: str, now: datetime):
+    """Deterministic live class status (read-only) for the Enquiry Agent, in the caller's organization."""
+    session = request.app.state.session_factory.open_tenant_session(organization_id)
     try:
         return get_current_class(session, student_id, now)
     finally:
@@ -92,9 +92,11 @@ def query(
     body: AgentQueryRequest,
     request: Request,
     student_id: str = Depends(current_student),
+    user: AuthenticatedUser = Depends(require_authenticated_user),  # cached: the same resolved identity
     gateway: SpecialistGateway = Depends(_gateway),
     now: datetime = Depends(get_now),
 ) -> AgentQueryResponse:
+    organization_id = user.organization_id
     if agent_key not in CHAT_AGENT_KEYS:
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     provider = request.app.state.llm_provider
@@ -102,11 +104,12 @@ def query(
         if agent_key == "enquiry":
             agent = EnquiryAgent(
                 llm_provider=provider,
-                consult=lambda key, objective: gateway.consult(key, objective, student_id=student_id),
-                live_class=lambda at: _live_class(request, student_id, at),
+                consult=lambda key, objective: gateway.consult(key, objective, student_id=student_id,
+                                                               organization_id=organization_id),
+                live_class=lambda at: _live_class(request, organization_id, student_id, at),
             )
             return agent.handle(body.message, now=now)
-        answer = gateway.consult(agent_key, body.message, student_id=student_id)
+        answer = gateway.consult(agent_key, body.message, student_id=student_id, organization_id=organization_id)
     except LLMTransientError as exc:
         logger.warning("agent chat: provider unavailable (%s)", exc.details())
         raise HTTPException(status_code=503, detail="Live AI is temporarily unavailable. Please try again shortly.") from exc

@@ -30,7 +30,7 @@ class Club(TenantMixin, Base):
     __table_args__ = (Index("ux_clubs_org_name", "organization_id", "name", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(120), index=True)  # unique per organization (Phase 22B)
     description: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(60))
 

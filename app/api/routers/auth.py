@@ -1,4 +1,7 @@
-"""POST /auth/login, GET /auth/me, POST /auth/logout (Phase 15)."""
+"""POST /auth/login, GET /auth/me, POST /auth/logout (Phase 15).
+
+Phase 22B: sign-in resolves the account's single active organization membership; the token carries the
+membership role plus ``org``/``mid``, and both responses name the organization."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,12 +11,14 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.api.auth_deps import AuthenticatedUser, require_authenticated_user
+from app.api.auth_deps import AuthenticatedUser, authenticated_user, require_authenticated_user
 from app.api.deps import get_session
 from app.auth.accounts import authenticate
+from app.auth.identity import login_membership, resolve_identity
 from app.auth.tokens import issue_token
 from app.db.repositories import operations_audit
 from app.db.models.identity import Department
+from app.db.models.organization import Organization
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -28,6 +33,12 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class OrganizationView(BaseModel):
+    id: int
+    slug: str
+    name: str
+
+
 class AuthUserView(BaseModel):
     id: int
     email: str
@@ -37,6 +48,7 @@ class AuthUserView(BaseModel):
     department_code: Optional[str] = None
     department_name: Optional[str] = None
     home_route: str
+    organization: OrganizationView
 
 
 class LoginResponse(BaseModel):
@@ -48,10 +60,12 @@ class LoginResponse(BaseModel):
 
 def _user_view(session: Session, user: AuthenticatedUser) -> AuthUserView:
     department = session.get(Department, user.department_id) if user.department_id else None
+    organization = session.get(Organization, user.organization_id)  # already loaded by the identity lookup
     return AuthUserView(
         id=user.account_id, email=user.email, role=user.role.value, display_name=user.display_name,
         student_id=user.student_id, department_code=department.code if department else None,
         department_name=department.name if department else None, home_route=HOME_ROUTES.get(user.role.value, "/"),
+        organization=OrganizationView(id=organization.id, slug=organization.slug, name=organization.name),
     )
 
 
@@ -60,17 +74,20 @@ def login(body: LoginRequest, session: Session = Depends(get_session)) -> LoginR
     account = authenticate(session, body.email, body.password)
     if account is None:
         raise HTTPException(status_code=401, detail="Incorrect email or password.")
+    membership = login_membership(session, account)
+    identity = resolve_identity(session, account_id=account.id, organization_id=membership.organization_id,
+                                membership_id=membership.id) if membership is not None else None
+    if identity is None:
+        raise HTTPException(status_code=403, detail="This account has no active organization membership.")
+    user = authenticated_user(identity)
     # Phase 18: successful sign-ins are audited (never the password, never failed-attempt details).
     operations_audit.record(
-        session, event_type="login", actor_account_id=account.id, actor_role=account.role.value,
+        session, event_type="login", actor_account_id=account.id, actor_role=user.role.value,
         subject_type="auth_account", subject_id=str(account.id), message=f"{account.display_name} signed in.",
     )
     session.commit()
-    token, expires_at = issue_token(account.id, account.role.value)
-    user = AuthenticatedUser(
-        account_id=account.id, email=account.email, role=account.role, display_name=account.display_name,
-        student_id=account.linked_student_id, department_id=account.department_id,
-    )
+    token, expires_at = issue_token(account.id, user.role.value, organization_id=user.organization_id,
+                                    membership_id=identity.membership.id)
     return LoginResponse(access_token=token, expires_at=expires_at, user=_user_view(session, user))
 
 

@@ -29,6 +29,7 @@ from typing import Dict, List, Optional, Sequence, Union
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.db.tenancy import active_membership
 from app.db.models.academic import AttendanceRecord, Enrollment
 from app.db.models.auth import AuthAccount
 from app.db.models.faculty import AttendanceSession, AttendanceSessionStatus, FacultyProfile, SessionAttendanceMark, TeachingAssignment
@@ -100,12 +101,19 @@ class InstitutionScope:
 Area = Union[HodScope, InstitutionScope]
 
 
-def hod_scope(session: Session, account_id: int) -> Optional[HodScope]:
-    """current HOD -> faculty identity -> department, or None. Role alone is never enough."""
+def hod_scope(session: Session, account_id: int, faculty_profile_id: Optional[int] = None) -> Optional[HodScope]:
+    """current HOD -> faculty identity -> department, or None. Role alone is never enough.
+
+    Phase 22B: the role and the faculty profile come from the account's active organization membership
+    (tenant-scoped); ``faculty_profile_id``, when given, must be that membership's profile.
+    """
     account = session.get(AuthAccount, account_id)
-    if account is None or account.role != UserRole.HOD or account.linked_faculty_id is None:
+    membership = active_membership(session, account_id)
+    if account is None or membership is None or membership.role != UserRole.HOD or membership.faculty_profile_id is None:
         return None
-    faculty = session.get(FacultyProfile, account.linked_faculty_id)
+    if faculty_profile_id is not None and faculty_profile_id != membership.faculty_profile_id:
+        return None
+    faculty = session.get(FacultyProfile, membership.faculty_profile_id)
     if faculty is None:
         return None
     department = session.get(Department, faculty.department_id)

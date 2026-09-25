@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from app.db.tenancy import ensure_default_organization
 from app.api.main import create_app
 from app.auth.accounts import seed_dev_accounts
 from app.db.models.auth import AuthAccount
@@ -181,7 +182,7 @@ def test_escalation_chain_student_to_admin_and_legacy_rows(client, session_facto
         aditi.department.hod_faculty_id = None
         verma = session.execute(select(AuthAccount).where(AuthAccount.email == VERMA)).scalar_one()
         session.add(WorkflowRequest(
-            request_code="REQ-LEGACY02", request_type=WorkflowRequestType.FACULTY_LEAVE, status=WorkflowRequestStatus.NEEDS_REVIEW,
+            organization_id=aditi.organization_id, request_code="REQ-LEGACY02", request_type=WorkflowRequestType.FACULTY_LEAVE, status=WorkflowRequestStatus.NEEDS_REVIEW,
             requester_account_id=verma.id, requester_role="faculty", requester_faculty_id=verma.linked_faculty_id,
             department_id=aditi.department_id, title="Faculty Leave for Fri 02 Oct 2026", reason="Conference", context={},
             routing_basis="unresolved", routing_note="No reviewer.", created_at=clock.now, submitted_at=clock.now,
@@ -240,9 +241,10 @@ def test_audit_log_merges_mission_and_operations_sources_read_only(client, sessi
     client.post(f"/faculty/classes/{session_id}/start", headers=verma)
     with session_factory() as session:
         an_hour_ago = NOW - timedelta(hours=1)
-        session.add(Mission(mission_id="M-AUDIT-1", user_id="STU-DEMO-001", user_role=UserRole.STUDENT, original_goal="Register me",
+        organization_id = ensure_default_organization(session).id  # rows written outside the API name their organization
+        session.add(Mission(organization_id=organization_id, mission_id="M-AUDIT-1", user_id="STU-DEMO-001", user_role=UserRole.STUDENT, original_goal="Register me",
                             status=MissionStatus.FAILED, created_at=an_hour_ago, updated_at=an_hour_ago))
-        session.add(AuditLog(event_id="evt-1", mission_id="M-AUDIT-1", event_type="provider_unavailable", actor="mission_orchestrator",
+        session.add(AuditLog(organization_id=organization_id, event_id="evt-1", mission_id="M-AUDIT-1", event_type="provider_unavailable", actor="mission_orchestrator",
                              message="Groq rate limit", timestamp=an_hour_ago,
                              event_metadata={"kind": "rate_limit", "status_code": 429, "provider": "groq"}))
         session.commit()

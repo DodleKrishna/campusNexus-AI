@@ -15,11 +15,11 @@ from __future__ import annotations
 import os
 
 from fastapi import APIRouter, Depends, Request
-from sqlalchemy import func, select, text
+
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
-from app.db.models import Student
+from app.db.readiness import database_readiness
 from app.db.session import describe_database
 
 router = APIRouter(tags=["health"])
@@ -27,13 +27,12 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 def health(request: Request, session: Session = Depends(get_session)) -> dict:
-    backend = describe_database(session.get_bind())
+    engine = session.get_bind()
+    backend = describe_database(engine)
     try:
-        session.execute(text("SELECT 1"))
-        student_count = session.execute(select(func.count()).select_from(Student)).scalar_one()
-        database_ready = True
+        # Phase 22B: unauthenticated, so no organization: an engine-level aggregate, never tenant rows.
+        database_ready, student_count = database_readiness(engine)
     except Exception:  # noqa: BLE001 -- readiness probe; the error text may name the host, so it is not echoed
-        session.rollback()
         student_count, database_ready = 0, False
 
     try:

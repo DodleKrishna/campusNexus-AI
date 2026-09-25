@@ -18,7 +18,7 @@ class Department(TenantMixin, Base):
     __table_args__ = (Index("ux_departments_org_code", "organization_id", "code", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(20), index=True)  # unique per organization (Phase 22B)
     name: Mapped[str] = mapped_column(String(120))
     # Phase 17 (nullable, additive): the faculty profile that heads this department.
     # HOD authority is resolved from this record, never from the account role alone.
@@ -35,7 +35,7 @@ class User(TenantMixin, Base):
     __table_args__ = (Index("ux_users_org_email", "organization_id", "email", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    email: Mapped[str] = mapped_column(String(255), index=True)  # unique per organization (Phase 22B)
     full_name: Mapped[str] = mapped_column(String(120))
     role: Mapped[UserRole] = mapped_column(
         portable_enum(UserRole)

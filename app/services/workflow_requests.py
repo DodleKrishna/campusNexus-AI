@@ -37,6 +37,7 @@ from app.db.models.identity import Department, Student
 from app.db.models.workflow import WorkflowRequest, WorkflowRequestStatus, WorkflowRequestType
 from app.db.repositories import operations_audit
 from app.db.repositories.students import get_student_by_id
+from app.db.tenancy import admin_account_ids
 from app.rules.attendance import compute_attendance
 from app.rules.attendance_standing import attendance_standing
 from app.rules.class_session import overlaps
@@ -204,6 +205,7 @@ class Requester:
     account: AuthAccount
     student: Optional[Student] = None
     faculty: Optional[FacultyProfile] = None
+    role: Optional[UserRole] = None  # Phase 22B: the membership role (authoritative), set by the caller
 
     @property
     def kind(self) -> str:
@@ -213,7 +215,7 @@ class Requester:
     def is_department_head(self) -> bool:
         """Phase 18: an HOD account that heads its department asks the administration."""
         return (
-            self.faculty is not None and self.account is not None and self.account.role == UserRole.HOD
+            self.faculty is not None and self.account is not None and self.role == UserRole.HOD
             and self.faculty.department is not None and self.faculty.department.hod_faculty_id == self.faculty.id
         )
 
@@ -424,10 +426,7 @@ def route(session: Session, requester: Requester, collected: Collected) -> Routi
 
 def admin_reviewer(session: Session) -> Optional[Reviewer]:
     """The administration, if any active admin account exists to decide requests."""
-    exists = session.execute(
-        select(AuthAccount.id).where(AuthAccount.role == UserRole.ADMIN, AuthAccount.is_active.is_(True))
-    ).first()
-    return ADMINISTRATION if exists is not None else None
+    return ADMINISTRATION if admin_account_ids(session) else None
 
 
 def _history(request: WorkflowRequest, basis: str, reviewer: str, note: str, now: datetime) -> None:

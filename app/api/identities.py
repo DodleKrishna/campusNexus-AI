@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional
 
+from app.db.tenancy import DEFAULT_ORGANIZATION_SLUG
 from app.schemas.enums import UserRole
 
 
@@ -26,6 +27,8 @@ class DemoIdentityDefinition:
     role: UserRole
     student_id: Optional[str]  # None for non-student identities
     fallback_display_name: str  # used only when student_id is None (no DB row to resolve from)
+    # Phase 22B: the organization is fixed here, server-side; the client never names it.
+    organization_slug: str = DEFAULT_ORGANIZATION_SLUG
 
 
 DEMO_IDENTITIES: Dict[str, DemoIdentityDefinition] = {

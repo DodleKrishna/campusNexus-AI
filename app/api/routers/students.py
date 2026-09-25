@@ -3,13 +3,14 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.api.dashboard import build_dashboard
 from app.api.deps import Identity, get_identity, get_knowledge_service, get_session, require_student_ownership
 from app.api.identities import DEMO_IDENTITIES
 from app.api.schemas.common import DemoIdentityView
+from app.auth.identity import demo_organization
 from app.api.schemas.students import CalendarEntryView, DashboardResponse
 from app.db.repositories.calendar import get_student_calendar
 from app.db.repositories.students import get_student_by_id
@@ -20,15 +21,24 @@ router = APIRouter(tags=["students"])
 
 
 @router.get("/demo/students", response_model=List[DemoIdentityView])
-def list_demo_students(session: Session = Depends(get_session)) -> List[DemoIdentityView]:
+def list_demo_students(request: Request, session: Session = Depends(get_session)) -> List[DemoIdentityView]:
     """The available STUDENT demo identities -- a pre-auth discovery endpoint
-    (there is no identity yet to check at this point in the flow)."""
+    (there is no identity yet to check at this point in the flow).
+
+    Phase 22B: each name is read in a session bound to that identity's fixed, server-side organization.
+    """
+    factory = request.app.state.session_factory
     views: List[DemoIdentityView] = []
     for definition in DEMO_IDENTITIES.values():
         if definition.role != UserRole.STUDENT:
             continue
-        student = get_student_by_id(session, definition.student_id)
-        display_name = f"{student.user.full_name} (Student)" if student is not None else definition.fallback_display_name
+        display_name = definition.fallback_display_name
+        organization = demo_organization(session, definition.organization_slug)
+        if organization is not None:
+            with factory.open_tenant_session(organization.id) as scoped:
+                student = get_student_by_id(scoped, definition.student_id)
+                if student is not None:
+                    display_name = f"{student.user.full_name} (Student)"
         views.append(DemoIdentityView(key=definition.key, role=definition.role.value, display_name=display_name, student_id=definition.student_id))
     return views
 

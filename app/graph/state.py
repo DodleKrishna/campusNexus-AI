@@ -21,6 +21,9 @@ class OrchestratorState(TypedDict, total=False):
     """The full LangGraph state for one mission run."""
 
     mission_id: str
+    # Phase 22B: the mission's organization, from the caller's server-side identity (None only in the
+    # system mode used by scripts and unit tests). Every session of the mission is bound to it.
+    organization_id: Optional[int]
     user_id: str
     user_role: UserRole
     original_goal: str

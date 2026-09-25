@@ -41,7 +41,7 @@ class Company(TenantMixin, Base):
     __table_args__ = (Index("ux_companies_org_name", "organization_id", "name", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(150), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(150), index=True)  # unique per organization (Phase 22B)
     industry: Mapped[str] = mapped_column(String(100))
     website: Mapped[Optional[str]] = mapped_column(String(255), default=None)
 
@@ -51,7 +51,7 @@ class Skill(TenantMixin, Base):
     __table_args__ = (Index("ux_skills_org_name", "organization_id", "name", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(80), index=True)  # unique per organization (Phase 22B)
 
 
 class StudentSkill(TenantMixin, Base):

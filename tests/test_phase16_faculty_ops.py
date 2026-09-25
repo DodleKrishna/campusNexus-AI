@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
+from app.db.tenancy import ensure_default_organization, sync_memberships
 from app.api.main import create_app
 from app.auth.accounts import seed_dev_accounts
 from app.db.models.academic import AttendanceRecord, Enrollment
@@ -476,6 +477,8 @@ def test_students_only_see_and_submit_their_own_requests(client, session_factory
     with session_factory() as session:
         session.add(AuthAccount(email="rohan@campusnexus.local", password_hash=hash_password(PASSWORD), role=UserRole.STUDENT,
                                 display_name="Rohan Mehta", linked_student_id="STU2023002"))
+        session.flush()
+        sync_memberships(session, ensure_default_organization(session))  # Phase 22: authoritative membership
         session.commit()
     draft = prepare(client, auth(client, STUDENT), "I need leave tomorrow.")["request"]
     rohan = auth(client, "rohan@campusnexus.local")

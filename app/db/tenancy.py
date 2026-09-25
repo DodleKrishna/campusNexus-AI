@@ -196,3 +196,17 @@ def tenancy_report(session: Session) -> TenancyReport:
         if problem is None and (membership.student_id, membership.faculty_profile_id) != (student_id, faculty_profile_id):
             report.membership_drift.append(f"{account.email}: membership profile link differs from the account's")
     return report
+
+
+def admin_account_ids(session: Session) -> List[int]:
+    """Active accounts whose active membership is ADMIN (Phase 22B: the membership role is authoritative).
+
+    In a tenant session the membership is organization-scoped, so this is the admins of that organization only.
+    """
+    return list(session.execute(
+        select(AuthAccount.id)
+        .join(OrganizationMembership, OrganizationMembership.account_id == AuthAccount.id)
+        .where(OrganizationMembership.role == UserRole.ADMIN, OrganizationMembership.status == MembershipStatus.ACTIVE,
+               AuthAccount.is_active.is_(True))
+        .order_by(AuthAccount.id)
+    ).scalars())

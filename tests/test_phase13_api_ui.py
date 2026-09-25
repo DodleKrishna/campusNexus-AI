@@ -147,8 +147,8 @@ def test_stale_candidate_is_refused_and_its_status_updated(api_client, session_f
         student = session.execute(select(Student).where(Student.student_code == "STU-DEMO-001")).scalar_one()
         enrollment = session.execute(select(Enrollment).where(Enrollment.student_id == student.id)).scalars().first()
         event = session.get(Event, CODING)
-        session.add(Exam(course_id=enrollment.course_id, exam_type="quiz", scheduled_start=event.start_at,
-                         scheduled_end=event.end_at, location="Moved Exam"))
+        session.add(Exam(organization_id=student.organization_id, course_id=enrollment.course_id, exam_type="quiz",
+                         scheduled_start=event.start_at, scheduled_end=event.end_at, location="Moved Exam"))
         session.commit()
 
     response = _select(api_client, mission_id, CODING)

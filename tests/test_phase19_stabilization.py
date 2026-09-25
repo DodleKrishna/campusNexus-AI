@@ -4,6 +4,7 @@ Offline (mock LLM); reuses the Phase 18 app/client fixtures (time pinned).
 """
 from __future__ import annotations
 
+from app.db.tenancy import ensure_default_organization, sync_memberships
 from app.auth.passwords import hash_password
 from app.db.models.auth import AuthAccount
 from app.schemas.enums import UserRole
@@ -16,6 +17,8 @@ def test_staff_is_never_routed_to_or_admitted_into_the_admin_console(client, ses
     with session_factory() as session:
         session.add(AuthAccount(email=STAFF, password_hash=hash_password(PASSWORD), role=UserRole.STAFF,
                                 display_name="Front Office Staff"))
+        session.flush()
+        sync_memberships(session, ensure_default_organization(session))  # Phase 22: authoritative membership
         session.commit()
     login = client.post("/auth/login", json={"email": STAFF, "password": PASSWORD})
     assert login.status_code == 200, login.text

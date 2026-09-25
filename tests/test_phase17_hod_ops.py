@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import OperationalError
 
+from app.db.tenancy import ensure_default_organization, sync_memberships
 from app.api.main import create_app
 from app.auth.accounts import seed_dev_accounts
 from app.auth.passwords import hash_password
@@ -63,6 +64,8 @@ def app(seeded_session, session_factory, knowledge_service, clock):
         anjali = session.execute(select(FacultyProfile).where(FacultyProfile.employee_code == "EMP-ECE-002")).scalar_one()
         session.add(AuthAccount(email=ECE_HOD, password_hash=hash_password(PASSWORD), role=UserRole.HOD,
                                 display_name=anjali.full_name, linked_faculty_id=anjali.id, department_id=anjali.department_id))
+        session.flush()
+        sync_memberships(session, ensure_default_organization(session))  # Phase 22: authoritative membership
         session.commit()
     return create_app(
         session_factory=session_factory, knowledge_service=knowledge_service, llm_provider=MockLLMProvider(),
@@ -259,7 +262,7 @@ def test_existing_needs_review_requests_are_escalated_once(client, session_facto
         account = session.execute(select(AuthAccount).where(AuthAccount.email == STUDENT)).scalar_one()
         aditi = session.execute(select(Student).where(Student.student_code == "STU-DEMO-001")).scalar_one()
         session.add(WorkflowRequest(
-            request_code="REQ-LEGACY01", request_type=WorkflowRequestType.LEAVE_REQUEST, status=WorkflowRequestStatus.NEEDS_REVIEW,
+            organization_id=aditi.organization_id, request_code="REQ-LEGACY01", request_type=WorkflowRequestType.LEAVE_REQUEST, status=WorkflowRequestStatus.NEEDS_REVIEW,
             requester_account_id=account.id, requester_role="student", student_id="STU-DEMO-001", department_id=aditi.department_id,
             title="Leave Request for Fri 02 Oct 2026", reason="Family function", context={}, routing_basis="unresolved",
             routing_note="No reviewer could be determined.", created_at=clock.now, submitted_at=clock.now,

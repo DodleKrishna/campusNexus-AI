@@ -410,8 +410,30 @@ across a component boundary. Free text is allowed only in the final user-facing 
   foreign key and creates missing model indexes. `scripts/migrate_phase22_tenancy.py` (`--dry-run` first)
   creates the demo organization, assigns unowned rows, creates memberships and runs `tenancy_report` in one
   transaction; any problem rolls it back. `assign_unowned_rows` refuses when more than one organization exists.
-- 22A known gap: runtime writes do not set `organization_id` until the 22B tenant session. Do not add a generic
-  fallback that assigns an organization to unowned rows at runtime.
+- Do not add a generic fallback that assigns an organization to unowned rows at runtime.
+- 22B identity: JWTs carry `org` + `mid`; the role claim is the membership role. `app.auth.identity` is the only
+  place a `TenantContext` is built: `resolve_identity` binds the request session and verifies account,
+  membership, organization and the role's profile in ONE statement (any mismatch -> 401). Login resolves the
+  single active membership (`login_membership`, the only `IDENTITY_LOOKUP` statement). Student/faculty/HOD come
+  from the membership's profile link (`AuthenticatedUser.student_id` / `faculty_profile_id`), never from
+  `auth_accounts.linked_*` or `auth_accounts.role`. Demo identities (`X-Demo-Identity`) have a fixed
+  server-side `organization_slug` and bind the session the same way.
+- 22B sessions (`app/db/tenant_session.py`): every runtime session is a `TenantSession` from
+  `TenantSessionFactory` (`create_app` wraps whatever factory it gets). ORM reads/updates/deletes on tenant
+  models get `organization_id == bound org` automatically (joins, lazy/eager loads, `Session.get`); flush stamps
+  new rows and refuses foreign-organization rows, moves between organizations and references to loaded
+  foreign rows. An unbound session refuses tenant models. There is no switch that disables the filter.
+  `app/db/system_session.py` is for schema/migration/seed/maintenance scripts only.
+- Raw `text()`/Core `Table` SQL is NOT filtered: runtime packages may use only `text("SELECT 1")`, and
+  `tests/test_phase22b_tenant_isolation.py` fails on any other raw SQL, Core table access, plain
+  `sessionmaker`, system-session import or `IDENTITY_LOOKUP` use outside `app.auth.identity`.
+- The orchestrator and `SpecialistGateway` run in tenant mode inside the API: `run_mission`/`resume_mission`/
+  `select_target`/`consult` require the caller's `organization_id` (carried in `OrchestratorState`, handed to
+  dispatcher threads as a bound factory). Scripts, evals and direct unit tests may still pass a plain
+  sessionmaker (system mode, rows without an organization).
+- Institution-chosen codes (department/course/employee codes, club/company/skill names, profile emails) are
+  unique per organization in new databases; databases created before 22B keep their legacy global unique
+  indexes until the 22F migration drops them.
 
 ## Idempotency Requirement
 

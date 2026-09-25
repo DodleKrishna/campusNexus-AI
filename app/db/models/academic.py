@@ -29,7 +29,7 @@ class Course(TenantMixin, Base):
     __table_args__ = (Index("ux_courses_org_code", "organization_id", "code", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    code: Mapped[str] = mapped_column(String(20), index=True)  # unique per organization (Phase 22B)
     title: Mapped[str] = mapped_column(String(150))
     department_id: Mapped[int] = mapped_column(ForeignKey("departments.id"))
     credits: Mapped[int]

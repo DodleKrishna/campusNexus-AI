@@ -21,7 +21,8 @@ from app.agents.career.agent import CareerAgent
 from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
 from app.api.routers import admin, admin_console, agents, approvals, auth, faculty, health, hod, me, missions, requests, students
-from app.db.session import create_db_engine, create_session_factory, upgrade_schema
+from app.db.session import create_db_engine, upgrade_schema
+from app.db.tenant_session import TenantSessionFactory
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
 from app.llm.base import LLMProvider
@@ -49,7 +50,7 @@ def _build_registry(knowledge_service: KnowledgeService, llm_provider: LLMProvid
 
 def create_app(
     *,
-    session_factory: sessionmaker[Session],
+    session_factory: "sessionmaker[Session] | TenantSessionFactory",
     knowledge_service: KnowledgeService,
     llm_provider: LLMProvider,
     tool_gateway: ToolGateway | None = None,
@@ -62,7 +63,12 @@ def create_app(
     ``MockLLMProvider``; the module-level ``app`` below passes the real
     configured ones. This factory pattern is what lets tests exercise the
     real routers/dependencies against isolated state instead of the shared dev DB.
+
+    Phase 22B: whatever factory is passed, the application only ever uses tenant sessions
+    (``TenantSessionFactory``): request sessions are bound by the caller's identity, and the
+    orchestrator and specialist gateway open sessions bound to the mission's / caller's organization.
     """
+    session_factory = TenantSessionFactory.from_sessionmaker(session_factory)
     tool_gateway = tool_gateway or build_default_tool_registry()
     registry = _build_registry(knowledge_service, llm_provider, tool_gateway)
     orchestrator = MissionOrchestrator(session_factory=session_factory, registry=registry, llm_provider=llm_provider)
@@ -105,7 +111,7 @@ def create_app(
 
 def _build_default_app() -> FastAPI:
     engine = create_db_engine()
-    session_factory = create_session_factory(engine)
+    session_factory = TenantSessionFactory(engine)
 
     config = get_rag_config()
     embedding_provider = get_embedding_provider(config.embedding_provider, model_name=config.embedding_model)

@@ -32,6 +32,8 @@ from typing import Dict, List, Mapping, Optional, Tuple
 from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.db.tenant_session import TenantIsolationError, TenantSessionFactory
+
 from app.db.base import utc_now
 from app.db.repositories.missions import get_latest_approval_for_step, get_tool_call_by_id
 from app.db.session import upgrade_schema
@@ -271,6 +273,9 @@ class MissionOrchestrator:
         max_replans: int = DEFAULT_MAX_REPLANS,
     ) -> None:
         self._session_factory = session_factory
+        # Phase 22B: inside the API the factory is a TenantSessionFactory, and every session is bound to the
+        # mission's organization. Scripts and unit tests may still pass a plain (system) sessionmaker.
+        self._tenant_mode = isinstance(session_factory, TenantSessionFactory)
         self._registry = registry
         self._llm_provider = llm_provider
         self._max_replans = max_replans
@@ -292,6 +297,23 @@ class MissionOrchestrator:
             upgrade_schema(bind)
         self._schema_ready = True
 
+    def _require_organization(self, organization_id: Optional[int]) -> Optional[int]:
+        if self._tenant_mode and organization_id is None:
+            raise TenantIsolationError("a mission operation needs the caller's organization")
+        return organization_id
+
+    def _open_session(self, organization_id: Optional[int]) -> Session:
+        """A session for one mission step: bound to the mission's organization in tenant mode."""
+        if self._tenant_mode:
+            return self._session_factory.open_tenant_session(self._require_organization(organization_id))
+        return self._session_factory()
+
+    def _factory_for(self, organization_id: Optional[int]):
+        """The zero-argument session factory handed to the dispatcher's worker threads."""
+        if self._tenant_mode:
+            return self._session_factory.bound(self._require_organization(organization_id))
+        return self._session_factory
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -304,12 +326,15 @@ class MissionOrchestrator:
         user_role: UserRole,
         student_id: str | None = None,
         as_of: str | None = None,
+        organization_id: Optional[int] = None,
     ) -> OrchestratorState:
-        """Plan and execute a brand-new mission for ``goal``."""
+        """Plan and execute a brand-new mission for ``goal`` (in the caller's organization, from its identity)."""
         self._ensure_schema()
+        self._require_organization(organization_id)
         mission_id = f"mission-{uuid.uuid4().hex[:12]}"
         initial: OrchestratorState = {
             "mission_id": mission_id,
+            "organization_id": organization_id,
             "user_id": user_id,
             "user_role": user_role,
             "original_goal": goal,
@@ -335,7 +360,7 @@ class MissionOrchestrator:
         }
         return self._graph.invoke(initial, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
 
-    def resume_mission(self, mission_id: str) -> OrchestratorState:
+    def resume_mission(self, mission_id: str, *, organization_id: Optional[int] = None) -> OrchestratorState:
         """Resume a mission after an interrupted execution.
 
         Rebuilds state entirely from the Context Service (the durable
@@ -348,7 +373,7 @@ class MissionOrchestrator:
         AuditLog rows alone.
         """
         self._ensure_schema()
-        session = self._session_factory()
+        session = self._open_session(organization_id)  # another organization's mission is simply unknown
         try:
             context = ContextService(session)
             mission = context.get_mission(mission_id)
@@ -372,6 +397,7 @@ class MissionOrchestrator:
 
         state: OrchestratorState = {
             "mission_id": mission_id,
+            "organization_id": organization_id,
             "user_id": mission_user_id,
             "user_role": mission_user_role,
             "original_goal": mission_goal,
@@ -406,6 +432,7 @@ class MissionOrchestrator:
         resource_id: int,
         selected_by: str,
         as_of: Optional[str] = None,
+        organization_id: Optional[int] = None,
     ) -> SelectionOutcome:
         """Phase 13: the student picked one of the mission's candidates.
 
@@ -421,16 +448,17 @@ class MissionOrchestrator:
         with self._selection_lock:
             outcome, continue_run = self._apply_selection(
                 mission_id, tool_name=tool_name, resource_type=resource_type, resource_id=resource_id,
-                selected_by=selected_by, now=_now(as_of),
+                selected_by=selected_by, now=_now(as_of), organization_id=organization_id,
             )
             if continue_run:
-                self.resume_mission(mission_id)
+                self.resume_mission(mission_id, organization_id=organization_id)
         return outcome
 
     def _apply_selection(
-        self, mission_id: str, *, tool_name: str, resource_type: str, resource_id: int, selected_by: str, now: datetime
+        self, mission_id: str, *, tool_name: str, resource_type: str, resource_id: int, selected_by: str, now: datetime,
+        organization_id: Optional[int] = None,
     ) -> Tuple[SelectionOutcome, bool]:
-        session = self._session_factory()
+        session = self._open_session(organization_id)
         try:
             context = ContextService(session)
             mission = context.get_mission(mission_id)
@@ -660,7 +688,7 @@ class MissionOrchestrator:
     # ------------------------------------------------------------------
 
     def _load_context(self, state: OrchestratorState) -> dict:
-        session = self._session_factory()
+        session = self._open_session(state.get("organization_id"))
         try:
             context = ContextService(session)
             mission_id = state["mission_id"]
@@ -712,7 +740,7 @@ class MissionOrchestrator:
         ever substituted -- the mission simply fails, visibly.
         """
         message = f"{type(exc).__name__}: {exc}"
-        session = self._session_factory()
+        session = self._open_session(state.get("organization_id"))
         try:
             context = ContextService(session)
             context.append_audit_event(
@@ -737,7 +765,7 @@ class MissionOrchestrator:
         assert plan is not None
         result = validate_plan(plan, self._registry, expected_mission_id=state["mission_id"])
 
-        session = self._session_factory()
+        session = self._open_session(state.get("organization_id"))
         try:
             context = ContextService(session)
             if not result.is_valid:
@@ -844,7 +872,7 @@ class MissionOrchestrator:
             base_facts=base_facts,
             agent_results=state.get("agent_results", {}),
             registry=self._registry,
-            session_factory=self._session_factory,
+            session_factory=self._factory_for(state.get("organization_id")),
         )
 
         prior_agent_results = state.get("agent_results", {})
@@ -872,7 +900,7 @@ class MissionOrchestrator:
             round_failures[task_id] = {"fingerprint": fingerprint, "repeated": repeated}
             return {"failure_fingerprint": fingerprint, "repeat_of_earlier_failure": repeated}
 
-        session = self._session_factory()
+        session = self._open_session(state.get("organization_id"))
         try:
             context = ContextService(session)
             for task_id, dispatched in outcomes.items():
@@ -994,7 +1022,7 @@ class MissionOrchestrator:
             if status == TaskStatus.SKIPPED and state.get("task_status", {}).get(task_id) != TaskStatus.SKIPPED
         ]
         if newly_skipped:
-            self._persist_skipped_tasks(state["mission_id"], newly_skipped)
+            self._persist_skipped_tasks(state["mission_id"], newly_skipped, state.get("organization_id"))
         task_status = cascaded_status
 
         if state.get("provider_unavailable"):
@@ -1002,7 +1030,7 @@ class MissionOrchestrator:
             # never reaches the replan branch below and never spends the replan
             # budget. Stop with every result kept; a resume re-runs the
             # PENDING task(s) under the same plan.
-            self._persist_mission_status(state["mission_id"], MissionStatus.FAILED)
+            self._persist_mission_status(state["mission_id"], MissionStatus.FAILED, state.get("organization_id"))
             return {"mission_status": MissionStatus.FAILED, "task_status": task_status}
 
         if has_blocked_tasks(task_status):
@@ -1016,7 +1044,7 @@ class MissionOrchestrator:
                 # (same task, target, reasons and input facts) -- another
                 # replan cannot produce new information. Stop, visibly.
                 self._record_duplicate_failure(state, failed_ids, round_failures)
-                self._persist_mission_status(state["mission_id"], MissionStatus.FAILED)
+                self._persist_mission_status(state["mission_id"], MissionStatus.FAILED, state.get("organization_id"))
                 errors = list(state.get("errors", []))
                 errors.append(DUPLICATE_FAILURE_MESSAGE)
                 return {
@@ -1038,16 +1066,16 @@ class MissionOrchestrator:
             mission_status = MissionStatus.FAILED
             errors = list(state.get("errors", []))
             errors.append("Scheduling deadlock: no ready, blocked, or failed tasks, but the mission is incomplete.")
-            self._persist_mission_status(state["mission_id"], mission_status)
+            self._persist_mission_status(state["mission_id"], mission_status, state.get("organization_id"))
             return {"mission_status": mission_status, "task_status": task_status, "errors": errors}
         else:
             mission_status = MissionStatus.IN_PROGRESS
 
-        self._persist_mission_status(state["mission_id"], mission_status)
+        self._persist_mission_status(state["mission_id"], mission_status, state.get("organization_id"))
         return {"mission_status": mission_status, "task_status": task_status}
 
-    def _persist_skipped_tasks(self, mission_id: str, task_ids: List[str]) -> None:
-        session = self._session_factory()
+    def _persist_skipped_tasks(self, mission_id: str, task_ids: List[str], organization_id: Optional[int]) -> None:
+        session = self._open_session(organization_id)
         try:
             context = ContextService(session)
             for task_id in task_ids:
@@ -1066,7 +1094,7 @@ class MissionOrchestrator:
     def _record_duplicate_failure(
         self, state: OrchestratorState, failed_ids: List[str], round_failures: Dict[str, Dict[str, object]]
     ) -> None:
-        session = self._session_factory()
+        session = self._open_session(state.get("organization_id"))
         try:
             ContextService(session).append_audit_event(
                 event_id=_event_id(),
@@ -1087,8 +1115,8 @@ class MissionOrchestrator:
         finally:
             session.close()
 
-    def _persist_mission_status(self, mission_id: str, status: MissionStatus) -> None:
-        session = self._session_factory()
+    def _persist_mission_status(self, mission_id: str, status: MissionStatus, organization_id: Optional[int]) -> None:
+        session = self._open_session(organization_id)
         try:
             context = ContextService(session)
             context.update_mission_status(mission_id, status)
@@ -1096,7 +1124,7 @@ class MissionOrchestrator:
             session.close()
 
     def _replan(self, state: OrchestratorState) -> dict:
-        session = self._session_factory()
+        session = self._open_session(state.get("organization_id"))
         try:
             context = ContextService(session)
             context.append_audit_event(
@@ -1146,7 +1174,7 @@ class MissionOrchestrator:
                 results.pop(task_id, None)
         for task_id in superseded:
             task_status[task_id] = TaskStatus.SKIPPED
-        self._persist_replan_task_changes(state["mission_id"], new_plan, redefined, superseded)
+        self._persist_replan_task_changes(state["mission_id"], new_plan, redefined, superseded, state.get("organization_id"))
 
         return {
             "plan": new_plan,
@@ -1159,12 +1187,13 @@ class MissionOrchestrator:
         }
 
     def _persist_replan_task_changes(
-        self, mission_id: str, new_plan: MissionPlan, redefined: List[str], superseded: List[str]
+        self, mission_id: str, new_plan: MissionPlan, redefined: List[str], superseded: List[str],
+        organization_id: Optional[int],
     ) -> None:
         if not redefined and not superseded:
             return
         tasks_by_id = {task.task_id: task for task in new_plan.tasks}
-        session = self._session_factory()
+        session = self._open_session(organization_id)
         try:
             context = ContextService(session)
             existing = {step.step_id for step in context.get_mission(mission_id).steps}
@@ -1196,7 +1225,7 @@ class MissionOrchestrator:
             session.close()
 
     def _finalize(self, state: OrchestratorState) -> dict:
-        session = self._session_factory()
+        session = self._open_session(state.get("organization_id"))
         try:
             context = ContextService(session)
             selections = context.list_active_target_selections(state["mission_id"])

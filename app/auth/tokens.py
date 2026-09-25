@@ -4,6 +4,11 @@ The signing secret comes only from ``CAMPUSNEXUS_JWT_SECRET``. When it is not
 set (local development), a random secret is generated once per process: tokens
 then stop working when the API restarts, which is safe, never a fixed
 committed secret. ``CAMPUSNEXUS_JWT_TTL_MINUTES`` sets the lifetime (default 8 h).
+
+Phase 22B: every token also carries ``org`` (organization id) and ``mid``
+(membership id), and ``role`` is the membership role. A token without them is
+rejected. The claims are never trusted on their own: each request re-checks
+them against the database (``app.auth.identity``).
 """
 from __future__ import annotations
 
@@ -32,6 +37,8 @@ class TokenError(Exception):
 class TokenClaims:
     account_id: int
     role: str
+    organization_id: int
+    membership_id: int
     expires_at: datetime
 
 
@@ -52,17 +59,21 @@ def ttl() -> timedelta:
     return timedelta(minutes=minutes)
 
 
-def issue_token(account_id: int, role: str, *, now: Optional[datetime] = None, lifetime: Optional[timedelta] = None) -> tuple[str, datetime]:
+def issue_token(
+    account_id: int, role: str, *, organization_id: int, membership_id: int,
+    now: Optional[datetime] = None, lifetime: Optional[timedelta] = None,
+) -> tuple[str, datetime]:
     issued = now or datetime.now(timezone.utc)
     expires = issued + (lifetime if lifetime is not None else ttl())
-    payload = {"sub": str(account_id), "role": role, "iat": issued, "exp": expires, "iss": ISSUER}
+    payload = {"sub": str(account_id), "role": role, "org": organization_id, "mid": membership_id,
+               "iat": issued, "exp": expires, "iss": ISSUER}
     return jwt.encode(payload, _secret(), algorithm=ALGORITHM), expires
 
 
 def decode_token(token: str) -> TokenClaims:
     try:
         payload = jwt.decode(
-            token, _secret(), algorithms=[ALGORITHM], issuer=ISSUER, options={"require": ["sub", "exp", "iat", "iss"]}
+            token, _secret(), algorithms=[ALGORITHM], issuer=ISSUER, options={"require": ["sub", "exp", "iat", "iss", "org", "mid"]}
         )
     except jwt.ExpiredSignatureError as exc:
         raise TokenError("expired") from exc
@@ -70,9 +81,13 @@ def decode_token(token: str) -> TokenClaims:
         raise TokenError("invalid") from exc
     try:
         account_id = int(payload["sub"])
+        organization_id, membership_id = payload["org"], payload["mid"]
+        if not all(isinstance(v, int) and not isinstance(v, bool) for v in (organization_id, membership_id)):
+            raise TypeError("org/mid must be integers")
     except (TypeError, ValueError) as exc:
         raise TokenError("invalid") from exc
     return TokenClaims(
         account_id=account_id, role=str(payload.get("role", "")),
+        organization_id=organization_id, membership_id=membership_id,
         expires_at=datetime.fromtimestamp(payload["exp"], tz=timezone.utc),
     )
