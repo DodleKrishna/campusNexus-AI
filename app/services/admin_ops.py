@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.passwords import hash_password
 from app.db.models.auth import AuthAccount
+from app.db.models.organization import OrganizationMembership
 from app.db.session import describe_database
 from app.db.models.faculty import AttendanceSession, AttendanceSessionStatus, FacultyProfile, TeachingAssignment
 from app.db.models.identity import Department, Student
@@ -241,11 +242,17 @@ def user_view(session: Session, account: AuthAccount) -> UserView:
 
 
 def users(session: Session) -> List[UserView]:
-    return [user_view(session, a) for a in session.execute(select(AuthAccount).order_by(AuthAccount.role, AuthAccount.email)).scalars()]
+    # Phase 22C: accounts are global; only those with a membership in this (tenant-scoped) organization are listed.
+    members = select(AuthAccount).join(OrganizationMembership, OrganizationMembership.account_id == AuthAccount.id)
+    return [user_view(session, a) for a in session.execute(members.order_by(AuthAccount.role, AuthAccount.email)).scalars()]
 
 
 def _target(session: Session, actor: AuthAccount, account_id: int) -> AuthAccount:
-    account = session.get(AuthAccount, account_id)
+    # Phase 22C: an account of another organization is "not found" (its membership is filtered out).
+    account = session.execute(
+        select(AuthAccount).join(OrganizationMembership, OrganizationMembership.account_id == AuthAccount.id)
+        .where(AuthAccount.id == account_id)
+    ).scalar_one_or_none()
     if account is None:
         raise AdminError("That account was not found.", status_code=404)
     if account.id == actor.id:
