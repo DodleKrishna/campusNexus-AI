@@ -113,3 +113,11 @@ class MembershipStatus(str, Enum):
 
     ACTIVE = "active"
     INACTIVE = "inactive"
+
+
+class IntelligenceLevel(str, Enum):
+    """Phase 23 (fast-finish): how much AI an operation is routed to, decided before it runs."""
+
+    NO_AI = "no_ai"          # deterministic DB / rules / workflow logic
+    LIGHT = "light"          # cheap model: classification, extraction, simple responses
+    ADVANCED = "advanced"    # strong model: multi-agent planning and cross-domain synthesis

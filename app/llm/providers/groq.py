@@ -205,6 +205,7 @@ class GroqLLMProvider(LLMProvider):
         self._max_concurrency = max_concurrency if max_concurrency is not None else _max_concurrency_from_env()
         self._slots = threading.BoundedSemaphore(self._max_concurrency)
         self._state_lock = threading.Lock()
+        self._last_usage = threading.local()  # per-thread (input, output) tokens of the latest call
         # A 429 tells us when the token window reopens; no request (from any
         # thread) is sent before then.
         self._cooldown_until = 0.0
@@ -443,10 +444,18 @@ class GroqLLMProvider(LLMProvider):
         """Largest completion (reasoning + output) seen per operation, so the
         budgets above can be checked against real traffic."""
         tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+        prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+        self._last_usage.value = (prompt if isinstance(prompt, int) else None, tokens if isinstance(tokens, int) else None)
         if isinstance(tokens, int):
             with self._state_lock:
                 seen = self._stats["max_completion_tokens_used"]
                 seen[operation] = max(seen.get(operation, 0), tokens)
+
+    def take_last_usage(self):
+        """(input_tokens, output_tokens) reported for this thread's latest call, then cleared; None if unreported."""
+        value = getattr(self._last_usage, "value", None)
+        self._last_usage.value = None
+        return value
 
     def _structured(self, *, max_tokens: int, system: str, content: str, tool_name: str, description: str, schema_cls: type):
         message = self._create(

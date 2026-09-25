@@ -13,6 +13,8 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from app.api.ai import budget_exceeded, request_ai_context
+from app.llm.router import AIBudgetExceededError
 from app.agents.enquiry.agent import EnquiryAgent
 from app.api.auth_deps import AuthenticatedUser, current_student, require_authenticated_user
 from app.api.deps import get_now
@@ -101,15 +103,18 @@ def query(
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     provider = request.app.state.llm_provider
     try:
-        if agent_key == "enquiry":
-            agent = EnquiryAgent(
-                llm_provider=provider,
-                consult=lambda key, objective: gateway.consult(key, objective, student_id=student_id,
-                                                               organization_id=organization_id),
-                live_class=lambda at: _live_class(request, organization_id, student_id, at),
-            )
-            return agent.handle(body.message, now=now)
-        answer = gateway.consult(agent_key, body.message, student_id=student_id, organization_id=organization_id)
+        with request_ai_context(request, organization_id):
+            if agent_key == "enquiry":
+                agent = EnquiryAgent(
+                    llm_provider=provider,
+                    consult=lambda key, objective: gateway.consult(key, objective, student_id=student_id,
+                                                                   organization_id=organization_id),
+                    live_class=lambda at: _live_class(request, organization_id, student_id, at),
+                )
+                return agent.handle(body.message, now=now)
+            answer = gateway.consult(agent_key, body.message, student_id=student_id, organization_id=organization_id)
+    except AIBudgetExceededError as exc:
+        raise budget_exceeded(exc) from exc
     except LLMTransientError as exc:
         logger.warning("agent chat: provider unavailable (%s)", exc.details())
         raise HTTPException(status_code=503, detail="Live AI is temporarily unavailable. Please try again shortly.") from exc

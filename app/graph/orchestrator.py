@@ -33,6 +33,7 @@ from langgraph.graph import END, START, StateGraph
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.tenant_session import TenantIsolationError, TenantSessionFactory
+from app.llm.router import ai_context
 
 from app.db.base import utc_now
 from app.db.repositories.missions import get_latest_approval_for_step, get_tool_call_by_id
@@ -297,6 +298,10 @@ class MissionOrchestrator:
             upgrade_schema(bind)
         self._schema_ready = True
 
+    def _ai(self, organization_id: Optional[int], mission_id: str):
+        """Attribute the mission's routed AI calls (planner + agents) to its organization and mission."""
+        return ai_context(organization_id, mission_id, recorder=getattr(self._llm_provider, "recorder", None))
+
     def _require_organization(self, organization_id: Optional[int]) -> Optional[int]:
         if self._tenant_mode and organization_id is None:
             raise TenantIsolationError("a mission operation needs the caller's organization")
@@ -358,7 +363,8 @@ class MissionOrchestrator:
             "errors": [],
             "final_result": None,
         }
-        return self._graph.invoke(initial, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
+        with self._ai(organization_id, mission_id):
+            return self._graph.invoke(initial, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
 
     def resume_mission(self, mission_id: str, *, organization_id: Optional[int] = None) -> OrchestratorState:
         """Resume a mission after an interrupted execution.
@@ -421,7 +427,8 @@ class MissionOrchestrator:
             "errors": [],
             "final_result": prior_final_result,
         }
-        return self._graph.invoke(state, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
+        with self._ai(organization_id, mission_id):
+            return self._graph.invoke(state, config={"configurable": {"thread_id": mission_id}, "recursion_limit": GRAPH_RECURSION_LIMIT})
 
     def select_target(
         self,

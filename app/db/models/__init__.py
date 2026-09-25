@@ -24,6 +24,7 @@ from app.db.models.career import (
     Skill,
     StudentSkill,
 )
+from app.db.models.ai_usage import AIUsageEvent
 from app.db.models.auth import AuthAccount
 from app.db.models.communication import (
     AccountNotification,
@@ -63,6 +64,7 @@ from app.db.models.workflow import (
 )
 
 __all__ = [
+    "AIUsageEvent",
     "Organization",
     "OrganizationMembership",
     "AuthAccount",

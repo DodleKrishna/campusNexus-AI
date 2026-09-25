@@ -18,6 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.ai import budget_exceeded, request_ai_context
+from app.llm.router import AIBudgetExceededError
+from app.db.tenant_session import session_organization
 from app.agents.enquiry.hod import HOD_AGENT_KEYS, HOD_DISPLAY_NAMES, HodAgent
 from app.api.auth_deps import current_hod
 from app.api.deps import get_knowledge_service, get_now, get_session
@@ -130,7 +133,10 @@ def agent_query(
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     agent = HodAgent(llm_provider=request.app.state.llm_provider, knowledge=knowledge)
     try:
-        return agent.handle(session, scope, agent_key, body.message, now)
+        with request_ai_context(request, session_organization(session)):
+            return agent.handle(session, scope, agent_key, body.message, now)
+    except AIBudgetExceededError as exc:
+        raise budget_exceeded(exc) from exc
     except LLMTransientError as exc:
         logger.warning("hod chat: provider unavailable (%s)", exc.details())
         raise HTTPException(status_code=503, detail="Live AI is temporarily unavailable. Please try again shortly.") from exc

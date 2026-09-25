@@ -21,6 +21,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.services import agent_catalog as agent_catalog_service
+from app.api.ai import budget_exceeded, request_ai_context
+from app.llm.router import AIBudgetExceededError
+from app.db.tenant_session import session_organization
 from app.agents.enquiry.admin import ADMIN_AGENT_KEYS, ADMIN_DISPLAY_NAMES, AdminAgent
 from app.api.auth_deps import AuthenticatedUser, require_roles
 from app.api.deps import get_knowledge_service, get_now, get_session
@@ -28,6 +32,9 @@ from app.auth.accounts import get_account
 from app.db.models.auth import AuthAccount
 from app.llm.base import LLMProviderError, LLMTransientError
 from app.schemas.admin_console import (
+    AIBudgetBody,
+    AIUsageSummary,
+    AgentCatalogView,
     ActiveBody,
     AdminAttendance,
     AdminComplaint,
@@ -171,6 +178,20 @@ def ai_operations(
     return admin_ops.ai_operations(session, request.app.state.llm_provider, knowledge)
 
 
+@router.put("/ai-budget", response_model=AIUsageSummary)
+def set_ai_budget(
+    body: AIBudgetBody, admin: AuthAccount = Depends(current_admin), session: Session = Depends(get_session),
+    now: datetime = Depends(get_now),
+) -> AIUsageSummary:
+    """The admin's own organization's monthly AI budget (from the token's organization; null = no limit)."""
+    return admin_ops.set_ai_budget(session, admin, body.monthly_budget_usd, now)
+
+
+@router.get("/agent-catalog", response_model=AgentCatalogView)
+def agent_catalog(_: AuthAccount = Depends(current_admin)) -> AgentCatalogView:
+    return agent_catalog_service.catalog()
+
+
 @router.get("/audit", response_model=List[AuditEntry])
 def audit(
     source: Optional[Literal["mission", "operations"]] = None, action: Optional[str] = Query(default=None, max_length=60),
@@ -211,7 +232,10 @@ def agent_query(
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     agent = AdminAgent(llm_provider=request.app.state.llm_provider, knowledge=knowledge)
     try:
-        return agent.handle(session, admin, agent_key, body.message, now)
+        with request_ai_context(request, session_organization(session)):
+            return agent.handle(session, admin, agent_key, body.message, now)
+    except AIBudgetExceededError as exc:
+        raise budget_exceeded(exc) from exc
     except LLMTransientError as exc:
         logger.warning("admin chat: provider unavailable (%s)", exc.details())
         raise HTTPException(status_code=503, detail="Live AI is temporarily unavailable. Please try again shortly.") from exc

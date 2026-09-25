@@ -22,7 +22,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import CheckConstraint, Float, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, portable_enum, UTCDateTime, utc_now
@@ -45,6 +45,8 @@ class Organization(Base):
     name: Mapped[str] = mapped_column(String(200))
     status: Mapped[OrganizationStatus] = mapped_column(portable_enum(OrganizationStatus), default=OrganizationStatus.ACTIVE)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
+    # Monthly AI budget in (estimated) USD. NULL = no limit configured. Exhausted -> AI_BUDGET_EXCEEDED.
+    monthly_ai_budget_usd: Mapped[Optional[float]] = mapped_column(Float, default=None)
 
 
 class OrganizationMembership(Base):

@@ -22,6 +22,9 @@ from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.services.ai_usage import record_no_ai
+from app.api.ai import budget_exceeded, request_ai_context
+from app.llm.router import AIBudgetExceededError
 from app.agents.permission.agent import PermissionAgent
 from app.api.auth_deps import AuthenticatedUser, current_faculty_profile, require_authenticated_user
 from app.api.deps import get_knowledge_service, get_now, get_session
@@ -125,10 +128,13 @@ def prepare(
     requester = _requester(session, user)
     agent = PermissionAgent(llm_provider=request.app.state.llm_provider)
     try:
-        return agent.prepare(
-            session, requester=requester, message=body.message, now=now,
-            required_percentage=workflow_requests.threshold(knowledge, now) if requester.kind == "student" else None,
-        )
+        with request_ai_context(request, user.organization_id):
+            return agent.prepare(
+                session, requester=requester, message=body.message, now=now,
+                required_percentage=workflow_requests.threshold(knowledge, now) if requester.kind == "student" else None,
+            )
+    except AIBudgetExceededError as exc:
+        raise budget_exceeded(exc) from exc
     except LLMTransientError as exc:
         logger.warning("permission agent: provider unavailable (%s)", exc.details())
         raise HTTPException(status_code=503, detail="Live AI is temporarily unavailable. Please try again shortly.") from exc
@@ -143,6 +149,7 @@ def submit(
     session: Session = Depends(get_session), now: datetime = Depends(get_now),
 ) -> WorkflowRequestView:
     requester = _requester(session, user)
+    record_no_ai(session, "request_submit", "deterministic routing to the reviewer")
     request = _run(lambda: workflow_requests.submit(session, requester.account, body.request_id, body.reason, now))
     return workflow_requests.view(session, request)
 
@@ -161,11 +168,13 @@ def _decide(request_id: str, approve: bool, body: DecisionBody, user: Authentica
     """Faculty/HOD decide requests routed to them; administrators decide requests routed to the administration."""
     if user.role == UserRole.ADMIN:
         account = get_account(session, user.account_id)
+        record_no_ai(session, "request_decision", "human decision, deterministic workflow")
         request = _run(lambda: workflow_requests.decide_as_admin(session, account, request_id, approve, body.comment, now))
         return workflow_requests.view(session, request)
     if user.role not in _STAFF:
         raise HTTPException(status_code=403, detail="Your role does not have access to this.")
     caller = current_faculty_profile(user, session)
+    record_no_ai(session, "request_decision", "human decision, deterministic workflow")
     request = _run(lambda: workflow_requests.decide(session, caller.account, caller.faculty, request_id, approve, body.comment, now))
     return workflow_requests.view(session, request)
 

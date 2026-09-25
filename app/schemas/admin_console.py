@@ -128,6 +128,57 @@ class OpsEvent(BaseModel):
     details: Dict[str, Any] = Field(default_factory=dict)
 
 
+class AIUsageSummary(BaseModel):
+    """Hackathon AI telemetry for the caller's organization. None = unavailable (never invented)."""
+    total_requests: int = 0
+    no_ai_count: int = 0
+    no_ai_percent: Optional[float] = None
+    light_calls: int = 0
+    advanced_calls: int = 0
+    estimated_cost_usd: Optional[float] = None
+    cost_available_for: int = 0
+    average_latency_ms: Optional[int] = None
+    success_rate_percent: Optional[float] = None
+    month_spend_usd: float = 0.0
+    monthly_budget_usd: Optional[float] = None
+
+
+class ControlTowerMission(BaseModel):
+    mission_id: str
+    status: str
+    role: str
+    organization: Optional[str] = None
+    goal: str
+    created_at: datetime
+    intelligence: str
+    models: List[str]
+    ai_calls: int
+    estimated_cost_usd: Optional[float] = None
+    latency_ms: Optional[int] = None
+    approvals_required: int = 0
+
+
+class AIBudgetBody(BaseModel):
+    monthly_budget_usd: Optional[float] = Field(default=None, ge=0)
+
+
+class CatalogAgent(BaseModel):
+    key: str
+    name: str
+    purpose: str
+    status: str
+    intelligence_level: str
+    allowed_roles: List[str]
+    requires_approval: bool
+    deployable: bool = True
+
+
+class AgentCatalogView(BaseModel):
+    agents: List[CatalogAgent]
+    internal_components: List[CatalogAgent]
+    flow: List[str]
+
+
 class AIOperations(BaseModel):
     provider: str
     model: Optional[str] = None
@@ -145,6 +196,9 @@ class AIOperations(BaseModel):
     stale_approvals: int
     workflow_failures: int
     recent_workflow_failures: List[OpsEvent]
+    routing: Dict[str, str] = {}
+    usage: AIUsageSummary = AIUsageSummary()
+    control_tower: List[ControlTowerMission] = []
     requests_needing_review: int
     rag_chunks: int
     rag_ready: bool

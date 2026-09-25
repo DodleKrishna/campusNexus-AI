@@ -25,6 +25,7 @@ additive.
 from __future__ import annotations
 
 import uuid
+import contextvars
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Dict, List, Optional
@@ -152,6 +153,8 @@ def dispatch_ready_tasks(
     with ThreadPoolExecutor(max_workers=min(max_workers, len(ready_tasks))) as executor:
         futures = {
             executor.submit(
+                # each worker runs in a copy of this context, so AI calls stay attributed to the mission's organization
+                contextvars.copy_context().run,
                 _run_one, task, plan.mission_id, base_facts, agent_results, registry, session_factory
             ): task.task_id
             for task in ready_tasks

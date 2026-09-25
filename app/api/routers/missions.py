@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.services.ai_usage import record_no_ai
 from app.api.deps import Identity, get_identity, get_orchestrator, get_session, require_student_ownership
 from app.api.schemas.missions import (
     AgentRunView,
@@ -295,6 +296,8 @@ def select_candidate(
         raise HTTPException(status_code=403, detail="Only the mission's student may select an action target.")
     _check_mission_ownership(identity, mission)
     try:
+        record_no_ai(session, "target_selection", "deterministic candidate re-validation, no LLM call", mission_id=mission_id)
+        session.commit()
         outcome = orchestrator.select_target(
             mission_id, tool_name=body.action, resource_type=body.resource_type, resource_id=body.resource_id,
             selected_by=identity.student_id or identity.key, organization_id=identity.organization_id,

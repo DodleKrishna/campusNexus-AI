@@ -16,6 +16,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.services.ai_usage import record_no_ai
+from app.api.ai import budget_exceeded, request_ai_context
+from app.llm.router import AIBudgetExceededError
+from app.db.tenant_session import session_organization
 from app.agents.enquiry.faculty import FACULTY_AGENT_KEYS, FACULTY_DISPLAY_NAMES, FacultyAgent
 from app.api.auth_deps import FacultyCaller, current_faculty_profile
 from app.api.deps import get_knowledge_service, get_now, get_session
@@ -116,6 +120,7 @@ def start_class(
     session_id: int, caller: FacultyCaller = Depends(current_faculty_profile), session: Session = Depends(get_session),
     knowledge: KnowledgeService = Depends(get_knowledge_service), now: datetime = Depends(get_now),
 ) -> FacultyClassDetail:
+    record_no_ai(session, "class_start", "deterministic class-session rules")
     _run(lambda: faculty_ops.start_class(session, caller.faculty, caller.account, session_id, now))
     return _detail_after(session, knowledge, caller, session_id, now)
 
@@ -149,6 +154,7 @@ def close_class(
     session_id: int, caller: FacultyCaller = Depends(current_faculty_profile), session: Session = Depends(get_session),
     knowledge: KnowledgeService = Depends(get_knowledge_service), now: datetime = Depends(get_now),
 ) -> FacultyClassDetail:
+    record_no_ai(session, "class_close", "deterministic attendance folding")
     _run(lambda: faculty_ops.close_class(session, caller.faculty, caller.account, session_id, now))
     return _detail_after(session, knowledge, caller, session_id, now)
 
@@ -193,7 +199,10 @@ def agent_query(
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     agent = FacultyAgent(llm_provider=request.app.state.llm_provider, knowledge=knowledge)
     try:
-        return agent.handle(session, caller.faculty, agent_key, body.message, now)
+        with request_ai_context(request, session_organization(session)):
+            return agent.handle(session, caller.faculty, agent_key, body.message, now)
+    except AIBudgetExceededError as exc:
+        raise budget_exceeded(exc) from exc
     except LLMTransientError as exc:
         logger.warning("faculty chat: provider unavailable (%s)", exc.details())
         raise HTTPException(status_code=503, detail="Live AI is temporarily unavailable. Please try again shortly.") from exc

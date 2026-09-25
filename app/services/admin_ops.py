@@ -22,6 +22,10 @@ from typing import Dict, List, Optional
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
+from app.db.models.organization import Organization
+from app.db.tenant_session import session_organization
+from app.llm.router import ADVANCED_MODEL, LIGHT_MODEL
+from app.services import ai_usage
 from app.auth.passwords import hash_password
 from app.db.models.auth import AuthAccount
 from app.db.models.organization import OrganizationMembership
@@ -34,6 +38,8 @@ from app.db.repositories import operations_audit
 from app.db.tenancy import set_account_role
 from app.rules.class_session import ClassState
 from app.schemas.admin_console import (
+    AIUsageSummary,
+    ControlTowerMission,
     AdminAttendance,
     AdminComplaint,
     AdminDashboard,
@@ -342,6 +348,9 @@ def ai_operations(session: Session, provider, knowledge: KnowledgeService) -> AI
         recent_workflow_failures=[_ops_event(r) for r in failure_rows],
         requests_needing_review=_count(session, WorkflowRequest, WorkflowRequest.status == WorkflowRequestStatus.NEEDS_REVIEW),
         rag_chunks=chunks, rag_ready=chunks > 0, database_ready=database_ready,
+        routing={"no_ai": "deterministic rules / workflow", "light": LIGHT_MODEL, "advanced": ADVANCED_MODEL},
+        usage=AIUsageSummary(**ai_usage.usage_summary(session)),
+        control_tower=[ControlTowerMission(**row) for row in ai_usage.control_tower(session)],
     )
 
 
@@ -430,3 +439,18 @@ def pending_everywhere(session: Session, scope: ops.InstitutionScope) -> List[Wo
         WorkflowRequest.department_id.in_(scope.department_ids),
         WorkflowRequest.status.in_([WorkflowRequestStatus.PENDING, WorkflowRequestStatus.NEEDS_REVIEW]),
     ).order_by(WorkflowRequest.submitted_at)).scalars().all())
+
+
+def set_ai_budget(session: Session, actor: AuthAccount, monthly_budget_usd: Optional[float], now: datetime) -> AIUsageSummary:
+    """Set this organization's monthly AI budget (None = no limit). The organization is the session's, never the client's."""
+    organization = session.get(Organization, session_organization(session))
+    previous = organization.monthly_ai_budget_usd
+    organization.monthly_ai_budget_usd = monthly_budget_usd
+    operations_audit.record(
+        session, event_type="ai_budget_changed", actor_account_id=actor.id, actor_role="admin", subject_type="organization",
+        subject_id=str(organization.id), message=f"{actor.display_name} set the monthly AI budget to "
+        f"{'no limit' if monthly_budget_usd is None else f'${monthly_budget_usd:.2f}'}.",
+        metadata={"previous": previous, "budget": monthly_budget_usd}, at=now,
+    )
+    session.commit()
+    return AIUsageSummary(**ai_usage.usage_summary(session))

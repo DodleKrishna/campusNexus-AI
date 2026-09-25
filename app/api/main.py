@@ -23,10 +23,11 @@ from app.agents.services.agent import ServicesAgent
 from app.api.routers import admin, admin_console, agents, approvals, auth, faculty, health, hod, me, missions, requests, students
 from app.db.session import create_db_engine, upgrade_schema
 from app.db.tenant_session import TenantSessionFactory
+from app.llm.router import build_routed_provider, routed
+from app.services.ai_usage import AIUsageRecorder
 from app.graph.orchestrator import MissionOrchestrator
 from app.graph.registry import AgentRegistry
 from app.llm.base import LLMProvider
-from app.llm.factory import get_llm_provider
 from app.rag.config import get_rag_config
 from app.rag.embeddings import get_embedding_provider
 from app.rag.retriever import PolicyRetriever
@@ -69,6 +70,8 @@ def create_app(
     orchestrator and specialist gateway open sessions bound to the mission's / caller's organization.
     """
     session_factory = TenantSessionFactory.from_sessionmaker(session_factory)
+    # Every AI call is routed (NO-AI / 20B / 120B) and metered per organization, before it runs.
+    llm_provider = routed(llm_provider, recorder=AIUsageRecorder(session_factory))
     tool_gateway = tool_gateway or build_default_tool_registry()
     registry = _build_registry(knowledge_service, llm_provider, tool_gateway)
     orchestrator = MissionOrchestrator(session_factory=session_factory, registry=registry, llm_provider=llm_provider)
@@ -119,7 +122,7 @@ def _build_default_app() -> FastAPI:
     retriever = PolicyRetriever(vector_store=vector_store, embedding_provider=embedding_provider)
     knowledge_service = KnowledgeService(retriever=retriever)
 
-    llm_provider = get_llm_provider(None)  # CAMPUSNEXUS_LLM_PROVIDER env var, defaults to "mock"
+    llm_provider = build_routed_provider(None)  # CAMPUSNEXUS_LLM_PROVIDER, defaults to "mock"; Groq = 20B + 120B
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
