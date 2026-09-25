@@ -25,7 +25,8 @@ export function LevelBadge({ level }: { level: string }) {
   return <Badge tone={meta.tone}>{meta.label}</Badge>;
 }
 
-const money = (v: number | null | undefined) => (v === null || v === undefined ? "Unavailable" : `$${v.toFixed(v < 0.01 ? 5 : 2)}`);
+const money = (v: number | null | undefined) =>
+  v === null || v === undefined ? "Unavailable" : `$${v.toFixed(v > 0 && v < 0.01 ? 5 : 2)}`;
 const orDash = (v: number | null | undefined, suffix = "") => (v === null || v === undefined ? "—" : `${v}${suffix}`);
 
 function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {

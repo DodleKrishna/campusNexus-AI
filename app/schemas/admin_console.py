@@ -203,7 +203,7 @@ class AIOperations(BaseModel):
     rag_chunks: int
     rag_ready: bool
     database_ready: bool
-    token_usage: str = "Not recorded by CampusNexus."
+    token_usage: str = "Recorded per AI call when the provider reports it (Groq does); otherwise shown as unavailable, never estimated."
 
 
 class AuditEntry(BaseModel):

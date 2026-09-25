@@ -435,6 +435,39 @@ across a component boundary. Free text is allowed only in the final user-facing 
   unique per organization in new databases; databases created before 22B keep their legacy global unique
   indexes until the 22F migration drops them.
 
+## Adaptive Intelligence Router, AI Telemetry & Budget (fast-finish of Phases 23-25)
+
+- `app/llm/router.py`: every `LLMProvider` operation is routed before it runs -- `plan_mission` is ADVANCED
+  (`openai/gpt-oss-120b`), classification/extraction/responses are LIGHT (`openai/gpt-oss-20b`); deterministic
+  workflow steps are recorded as NO_AI (`app.services.ai_usage.record_no_ai`). `create_app` wraps any provider
+  with `routed(...)`; for Groq `build_routed_provider` builds two real models. A failed call is never retried on
+  another model and never replaced with mock output.
+- Usage (`ai_usage_events`, tenant-owned) is buffered per `ai_context(organization_id, mission_id)` and written
+  when the context ends; dispatcher threads inherit it via `contextvars.copy_context()`. Tokens/cost stay NULL
+  ("unavailable") unless the provider reports tokens (`take_last_usage`); costs are estimates, not billing.
+- `organizations.monthly_ai_budget_usd` (NULL = no limit). When spend >= budget, AI calls raise
+  `AIBudgetExceededError` (`AI_BUDGET_EXCEEDED`, HTTP 402 from the chat/permission endpoints; a mission fails
+  visibly). Deterministic features keep working.
+- `/admin/agent-catalog` (`app/services/agent_catalog.py`) is a static AgentOS catalog. The Action Agent,
+  Verifier and Approval Gate are listed only as internal, non-deployable components -- never expose them.
+
+## Hackathon Demo Freeze
+
+The demo runs on local SQLite with the mock provider (`start_campusnexus.ps1 -Reset -Provider mock`, with
+`CAMPUSNEXUS_DATABASE_URL` removed from the shell). These production tasks remain and are NOT required for
+the current demo:
+
+- complete the Phase 22 tenant refactor of low-priority paths (RAG corpus per organization, legacy
+  `auth_accounts.linked_*` reads, scripts/evals still in system mode)
+- the complete cross-tenant attack suite
+- the Supabase Phase 22 migration (and dropping legacy global unique indexes)
+- production PostgreSQL RLS with the `campusnexus_app` role
+- Mumbai-region deployment
+- production AI budgets and billing (real token pricing, alerts)
+- the advanced Agent Catalog (per-organization deployment, configuration)
+- a connector framework
+- a comprehensive regression run (the full suite was last run to 74% on 22B)
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
