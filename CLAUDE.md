@@ -340,6 +340,21 @@ across a component boundary. Free text is allowed only in the final user-facing 
   Mock mode is reported as "degraded", never as live.
 - Demo-only extra classes (`scripts/schedule_demo_class.demo_window`) never cross midnight.
 
+## Hackathon Stabilization (Phase 19)
+
+- No new features. `scripts/start_campusnexus.ps1` is the single React-demo launcher (checks, preflight,
+  FastAPI + Vite on 127.0.0.1, Ctrl+C stops both). A live provider without its key fails the launch; it
+  never falls back to mock. `scripts/start_demo.ps1` remains the Streamlit debug-console launcher.
+- STAFF has no workspace: its home route is `/unsupported-role` (backend `HOME_ROUTES` and
+  `frontend/src/auth/roles.ts`). Never route STAFF, or any role, into another role's workspace to hide a 403.
+- Frontend workspaces are lazy route chunks (`AppRoutes.tsx` `lazyPage`, per-workspace barrel modules).
+  Add a page to its workspace barrel, not as an eager import.
+- `resolve_seed_password` always rewrites the credentials file with the password actually seeded.
+- `docs/DEMO_GUIDE.md` is the React demo sequence. The old Streamlit runbook is
+  `docs/STREAMLIT_CONSOLE_GUIDE.md`.
+- Tests that depend on the seeded dates (seed is relative to "now") must derive expectations from the seed
+  (e.g. `TIMETABLE_SEED`), never hard-code the weekday they were written on.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -445,7 +460,7 @@ uvicorn app.api.main:app --reload --port 8000
 # backend over HTTP at http://127.0.0.1:8000 by default -- start the API first).
 streamlit run streamlit_app/app.py
 
-# Phase 9 demo tooling (see docs/DEMO_GUIDE.md for the full runbook).
+# Phase 9 demo tooling (see docs/STREAMLIT_CONSOLE_GUIDE.md for the Streamlit runbook).
 # Rebuild the isolated demo DB + policy store under data/demo/ (never touches
 # data/campusnexus.db); then point the API at it via CAMPUSNEXUS_DB_PATH /
 # CAMPUSNEXUS_VECTOR_STORE_PATH as the script prints.
@@ -498,6 +513,11 @@ pytest tests/test_phase16_faculty_ops.py -v
 # it later with --tomorrow-afternoon.
 python scripts/schedule_demo_class.py --tomorrow-afternoon
 pytest tests/test_phase17_hod_ops.py -v
+
+# Phase 19: one launcher for the React demo (see docs/DEMO_GUIDE.md). -Reset rebuilds data/demo/ first;
+# -Provider groq needs $env:GROQ_API_KEY (fails clearly without it); -NoBrowser, -LiveCheck, -Embedding.
+powershell -ExecutionPolicy Bypass -File scripts/start_campusnexus.ps1 -Reset
+powershell -ExecutionPolicy Bypass -File scripts/start_campusnexus.ps1
 
 # Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
 # resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,

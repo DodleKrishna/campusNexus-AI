@@ -1,3 +1,4 @@
+import { lazy, type ComponentType } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "@/auth/RequireAuth";
 import { homeRouteFor } from "@/auth/roles";
@@ -6,44 +7,56 @@ import { AppShell } from "@/components/layout/AppShell";
 import { FullPageLoader } from "@/components/ui/full-page-loader";
 import { LoginPage } from "@/pages/LoginPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
-import { FacultyAgentPage, FacultyAgentsPage } from "@/pages/faculty/FacultyAgentsPage";
-import { FacultyAttendancePage } from "@/pages/faculty/FacultyAttendancePage";
-import { FacultyClassesPage } from "@/pages/faculty/FacultyClassesPage";
-import { FacultyClassPage } from "@/pages/faculty/FacultyClassPage";
-import { FacultyDashboardPage } from "@/pages/faculty/FacultyDashboardPage";
-import { FacultyMyRequestsPage, FacultyNewRequestPage } from "@/pages/faculty/FacultyMyRequestsPage";
-import { FacultyRequestsPage } from "@/pages/faculty/FacultyRequestsPage";
-import { HodDashboardPage } from "@/pages/hod/HodDashboardPage";
-import {
-  HodAgentPage,
-  HodAgentsPage,
-  HodAttendancePage,
-  HodComplaintsPage,
-  HodDepartmentPage,
-  HodFacultyPage,
-  HodRequestsPage,
-  HodStudentsPage,
-} from "@/pages/hod/HodPages";
-import {
-  AdminAgentPage,
-  AdminAgentsPage,
-  AdminAIOperationsPage,
-  AdminAttendancePage,
-  AdminAuditPage,
-  AdminComplaintsPage,
-  AdminDashboardPage,
-  AdminDepartmentPage,
-  AdminDepartmentsPage,
-  AdminRequestsPage,
-  AdminSettingsPage,
-  AdminUsersPage,
-} from "@/pages/admin/AdminPages";
 import { SettingsPage } from "@/pages/SettingsPage";
-import { StudentAcademicsPage } from "@/pages/student/StudentAcademicsPage";
-import { StudentAgentPage } from "@/pages/student/StudentAgentPage";
-import { StudentAgentsPage } from "@/pages/student/StudentAgentsPage";
-import { StudentDashboardPage } from "@/pages/student/StudentDashboardPage";
-import { StudentRequestsPage } from "@/pages/student/StudentRequestsPage";
+import { UnsupportedRolePage } from "@/pages/UnsupportedRolePage";
+
+/** Route-level code splitting: each workspace's pages load only when first visited. */
+function lazyPage<M extends Record<string, unknown>>(loader: () => Promise<M>, name: keyof M & string) {
+  return lazy(() => loader().then((module) => ({ default: module[name] as ComponentType })));
+}
+
+const student = () => import("@/pages/student/StudentPages");
+const StudentDashboardPage = lazyPage(student, "StudentDashboardPage");
+const StudentAcademicsPage = lazyPage(student, "StudentAcademicsPage");
+const StudentAgentsPage = lazyPage(student, "StudentAgentsPage");
+const StudentAgentPage = lazyPage(student, "StudentAgentPage");
+const StudentRequestsPage = lazyPage(student, "StudentRequestsPage");
+
+const faculty = () => import("@/pages/faculty/FacultyPages");
+const FacultyDashboardPage = lazyPage(faculty, "FacultyDashboardPage");
+const FacultyClassesPage = lazyPage(faculty, "FacultyClassesPage");
+const FacultyClassPage = lazyPage(faculty, "FacultyClassPage");
+const FacultyAttendancePage = lazyPage(faculty, "FacultyAttendancePage");
+const FacultyAgentsPage = lazyPage(faculty, "FacultyAgentsPage");
+const FacultyAgentPage = lazyPage(faculty, "FacultyAgentPage");
+const FacultyRequestsPage = lazyPage(faculty, "FacultyRequestsPage");
+const FacultyMyRequestsPage = lazyPage(faculty, "FacultyMyRequestsPage");
+const FacultyNewRequestPage = lazyPage(faculty, "FacultyNewRequestPage");
+
+const hod = () => import("@/pages/hod/HodWorkspace");
+const HodDashboardPage = lazyPage(hod, "HodDashboardPage");
+const HodDepartmentPage = lazyPage(hod, "HodDepartmentPage");
+const HodFacultyPage = lazyPage(hod, "HodFacultyPage");
+const HodStudentsPage = lazyPage(hod, "HodStudentsPage");
+const HodAttendancePage = lazyPage(hod, "HodAttendancePage");
+const HodAgentsPage = lazyPage(hod, "HodAgentsPage");
+const HodAgentPage = lazyPage(hod, "HodAgentPage");
+const HodRequestsPage = lazyPage(hod, "HodRequestsPage");
+const HodComplaintsPage = lazyPage(hod, "HodComplaintsPage");
+
+const admin = () => import("@/pages/admin/AdminPages");
+const AdminDashboardPage = lazyPage(admin, "AdminDashboardPage");
+const AdminDepartmentsPage = lazyPage(admin, "AdminDepartmentsPage");
+const AdminDepartmentPage = lazyPage(admin, "AdminDepartmentPage");
+const AdminUsersPage = lazyPage(admin, "AdminUsersPage");
+const AdminAttendancePage = lazyPage(admin, "AdminAttendancePage");
+const AdminRequestsPage = lazyPage(admin, "AdminRequestsPage");
+const AdminComplaintsPage = lazyPage(admin, "AdminComplaintsPage");
+const AdminAIOperationsPage = lazyPage(admin, "AdminAIOperationsPage");
+const AdminAuditPage = lazyPage(admin, "AdminAuditPage");
+const AdminAgentsPage = lazyPage(admin, "AdminAgentsPage");
+const AdminAgentPage = lazyPage(admin, "AdminAgentPage");
+const AdminSettingsPage = lazyPage(admin, "AdminSettingsPage");
 
 function RootRedirect() {
   const { status, user } = useAuth();
@@ -53,7 +66,7 @@ function RootRedirect() {
 
 function StaffRoutes({ role }: { role: "faculty" | "hod" | "admin" }) {
   return (
-    <RequireAuth roles={role === "admin" ? ["admin", "staff"] : [role]}>
+    <RequireAuth roles={[role]}>
       <AppShell />
     </RequireAuth>
   );
@@ -64,6 +77,14 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<RootRedirect />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route
+        path="/unsupported-role"
+        element={
+          <RequireAuth roles={["staff"]}>
+            <UnsupportedRolePage />
+          </RequireAuth>
+        }
+      />
 
       <Route
         path="/student"

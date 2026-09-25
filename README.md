@@ -74,15 +74,17 @@ pip install -e ".[dev,app]"        # add ,llm for live mode
 ## Run the demo
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File scripts\start_demo.ps1 -Reset
+powershell -ExecutionPolicy Bypass -File scripts\start_campusnexus.ps1 -Reset
 ```
 
 This rebuilds the isolated demo database (`data/demo/`, never the dev DB), runs the preflight, starts
-the API (http://127.0.0.1:8000) and the UI (http://127.0.0.1:8501), both on localhost only, and opens
-the browser. Close the two windows it opens to stop.
+the API (http://127.0.0.1:8000) and the React app (http://127.0.0.1:5173), both on localhost only,
+prints the LLM mode and opens the browser. Ctrl+C stops both. Sign in as `student@`, `faculty@`, `hod@`
+or `admin@campusnexus.local`; the password is in `data/demo/dev_credentials.txt`.
 
-The full presenter runbook, with the four scenarios, expected results, approval steps and failure
-recovery, is in [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md).
+The hackathon demo sequence is in [docs/DEMO_GUIDE.md](docs/DEMO_GUIDE.md). The Streamlit debug console
+(`scripts\start_demo.ps1`) and its mission/approval runbook are in
+[docs/STREAMLIT_CONSOLE_GUIDE.md](docs/STREAMLIT_CONSOLE_GUIDE.md).
 
 Live mode: set `$env:CAMPUSNEXUS_LLM_PROVIDER = "anthropic"` and `$env:ANTHROPIC_API_KEY` first. Validate
 the key and the model's structured outputs, with no code changes, using:

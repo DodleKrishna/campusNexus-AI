@@ -28,6 +28,7 @@ from app.schemas.agent_chat import SpecialistAnswer
 from app.schemas.enums import UserRole
 from app.services import student_portal
 from app.tools.build import build_default_tool_registry
+from scripts.seed_data import SEED_NOW, TIMETABLE_SEED
 
 PASSWORD = "test-only-Passw0rd"
 STUDENT_EMAIL = "student@campusnexus.local"
@@ -256,7 +257,13 @@ def test_events_chat_checks_clashes_against_the_students_schedule(client) -> Non
         "/agents/events/query", json={"message": "Will the cloud workshop clash with my schedule?"}, headers=_auth(client)
     ).json()
     cloud = next(a for a in answer["facts"]["assessments"] if "Cloud" in a["event"]["title"])
-    assert cloud["conflict_check_performed"] and [c["course_code"] for c in cloud["timetable_conflicts"]] == ["CS302"]
+    # Phase 19: the talk is seeded 12 days after "now" (09:00-11:00 IST), so its weekday -- and the class it
+    # clashes with -- depends on the day the suite runs. Derive the expectation from the seeded timetable
+    # (Aditi's semester-5 classes) instead of hard-coding the Thursday-run answer.
+    talk_day = (SEED_NOW.date() + timedelta(days=12)).weekday()
+    expected = [code for code, weekday, start, _end, _room in TIMETABLE_SEED
+                if code in ("CS301", "CS302", "CS303", "CS304") and weekday == talk_day and start < time(11, 0)]
+    assert cloud["conflict_check_performed"] and [c["course_code"] for c in cloud["timetable_conflicts"]] == expected
 
 
 def test_unknown_or_unavailable_agents_are_refused(client) -> None:

@@ -55,9 +55,11 @@ export function navigationFor(role: Role): NavItem[] {
   if (role === "student") return STUDENT_NAV;
   if (role === "faculty") return FACULTY_NAV;
   if (role === "hod") return HOD_NAV;
-  return ADMIN_NAV;
+  if (role === "admin") return ADMIN_NAV;
+  return [];
 }
 
 export function settingsPathFor(role: Role): string {
-  return role === "student" ? "/student/settings" : `${navigationFor(role)[0].to}/settings`;
+  const home = navigationFor(role)[0];
+  return home ? `${home.to}/settings` : "/";
 }

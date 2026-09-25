@@ -613,7 +613,7 @@ export function AdminAuditPage() {
                       <Badge tone={e.source === "mission" ? "info" : "primary"}>{e.action.replace(/_/g, " ")}</Badge>
                     </td>
                     <td className={`${cell} text-xs`}>{e.target.replace(/_/g, " ")}</td>
-                    <td className={`${cell} text-xs`}>{e.reference}</td>
+                    <td className={`${cell} whitespace-nowrap text-xs`}>{e.reference}</td>
                     <td className={`${cell} text-xs text-muted`}>{e.outcome}</td>
                   </tr>
                 ))}

@@ -57,7 +57,7 @@ if ($Reset -or -not (Test-Path "data/demo/campusnexus_demo.db")) {
 Write-Host "Running preflight..." -ForegroundColor Cyan
 if ($LiveCheck) { & $Python scripts/demo_preflight.py --live-call } else { & $Python scripts/demo_preflight.py }
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "Preflight failed; not starting the demo. See docs/DEMO_GUIDE.md section 8." -ForegroundColor Red
+    Write-Host "Preflight failed; not starting the demo. See docs/STREAMLIT_CONSOLE_GUIDE.md section 8." -ForegroundColor Red
     exit 1
 }
 

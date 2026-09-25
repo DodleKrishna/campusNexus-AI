@@ -6,7 +6,8 @@ export const HOME_ROUTES: Record<Role, string> = {
   faculty: "/faculty",
   hod: "/hod",
   admin: "/admin",
-  staff: "/admin",
+  // STAFF has no workspace yet; it must never be treated as an administrator.
+  staff: "/unsupported-role",
 };
 
 export const ROLE_LABELS: Record<Role, string> = {

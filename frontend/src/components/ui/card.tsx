@@ -27,7 +27,7 @@ export function CardHeader({
           {description && <p className="mt-0.5 text-xs text-muted">{description}</p>}
         </div>
       </div>
-      {action}
+      {action && <div className="shrink-0 whitespace-nowrap">{action}</div>}
     </div>
   );
 }

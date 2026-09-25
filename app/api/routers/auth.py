@@ -18,7 +18,9 @@ from app.db.models.identity import Department
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 # Where each role lands after signing in (the React router mirrors this).
-HOME_ROUTES = {"student": "/student", "faculty": "/faculty", "hod": "/hod", "admin": "/admin", "staff": "/admin"}
+HOME_ROUTES = {"student": "/student", "faculty": "/faculty", "hod": "/hod", "admin": "/admin",
+               # STAFF has no workspace; it is never routed into the admin console.
+               "staff": "/unsupported-role"}
 
 
 class LoginRequest(BaseModel):

@@ -17,7 +17,7 @@ export function HodStat({ label, value, detail, icon, to, danger }: { label: str
         <span className="text-subtle [&_svg]:size-4">{icon}</span>
       </div>
       <div className={danger ? "mt-2 text-2xl font-semibold tracking-tight text-danger-strong" : "mt-2 text-2xl font-semibold tracking-tight"}>{value}</div>
-      <div className="mt-1 truncate text-xs text-muted">{detail}</div>
+      <div className="mt-1 line-clamp-2 text-xs text-muted">{detail}</div>
     </Card>
   );
   return to ? <Link to={to}>{body}</Link> : body;

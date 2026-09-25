@@ -86,20 +86,32 @@ def resolve_seed_password(credentials_file: Path) -> Tuple[str, str]:
     ``CAMPUSNEXUS_DEMO_PASSWORD`` wins. Otherwise a password saved earlier in
     ``credentials_file`` (git-ignored, local only) is reused, so a reset keeps
     the same sign-in. Otherwise a random one is generated and saved there.
+    Phase 19: the file is always rewritten with the password actually seeded,
+    so it can never show a stale password after an env-var reset.
     """
     configured = os.environ.get(DEMO_PASSWORD_ENV)
     if configured:
+        _write_credentials(credentials_file, configured, source=f"${DEMO_PASSWORD_ENV}")
         return configured, f"${DEMO_PASSWORD_ENV}"
     if credentials_file.exists():
         for line in credentials_file.read_text(encoding="utf-8").splitlines():
             if line.startswith("password:"):
-                return line.split(":", 1)[1].strip(), str(credentials_file)
+                password = line.split(":", 1)[1].strip()
+                _write_credentials(credentials_file, password)
+                return password, str(credentials_file)
     password = secrets.token_urlsafe(12)
+    _write_credentials(credentials_file, password)
+    return password, str(credentials_file)
+
+
+def _write_credentials(credentials_file: Path, password: str, source: Optional[str] = None) -> None:
     credentials_file.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["# CampusNexus local development accounts (never commit this file)", f"password: {password}"]
+    lines = ["# CampusNexus local development accounts (never commit this file)"]
+    if source:
+        lines.append(f"# password set by {source} at the last reset")
+    lines.append(f"password: {password}")
     lines += [f"account: {spec.email} ({spec.role.value})" for spec in DEV_ACCOUNTS]
     credentials_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return password, str(credentials_file)
 
 
 def _faculty_id(session: Session, employee_code: Optional[str]) -> Optional[int]:

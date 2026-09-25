@@ -25,5 +25,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
     css: false,
+    // Lazy workspace chunks + findBy waits (5 s) need headroom on a loaded machine.
+    testTimeout: 20_000,
   },
 });

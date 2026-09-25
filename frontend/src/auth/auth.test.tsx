@@ -74,6 +74,16 @@ describe("authentication and routing", () => {
     expect(screen.queryByRole("link", { name: "My Academics" })).not.toBeInTheDocument();
   });
 
+  it("never treats a staff account as an administrator", async () => {
+    // Phase 19: STAFF used to land on /admin and hit 403s; it now gets an explicit unsupported-role page.
+    const staff = { ...FACULTY, id: 9, email: "staff@campusnexus.local", role: "staff" as const, display_name: "Front Office", home_route: "/unsupported-role" };
+    signIn(staff);
+    mockApi((url) => (url.endsWith("/auth/me") ? { body: staff } : undefined));
+    renderApp("/admin");
+    expect(await screen.findByRole("heading", { name: "No workspace for the Staff role" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Audit Log" })).not.toBeInTheDocument();
+  });
+
   it("signs out with a clear message when the session expires", async () => {
     signIn();
     mockApi((url) => (url.endsWith("/auth/me") ? { status: 401, body: { detail: "Your session expired. Please sign in again." } } : undefined));

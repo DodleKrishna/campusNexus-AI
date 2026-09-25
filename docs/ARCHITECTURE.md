@@ -692,7 +692,7 @@ resumption never double-registers.
 ## Live-LLM Validation & Demo Readiness (Phase 9)
 
 No architecture change. No new agents, components, enum values or endpoints; the changes harden
-existing paths. The presenter runbook is `docs/DEMO_GUIDE.md`.
+existing paths. The presenter runbook for this console is `docs/STREAMLIT_CONSOLE_GUIDE.md` (Phase 19 moved it; `docs/DEMO_GUIDE.md` is now the React demo sequence).
 
 ### Real LLM provider (`app/llm/providers/anthropic_provider.py`)
 

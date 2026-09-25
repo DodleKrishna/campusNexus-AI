@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
+import { FullPageLoader } from "@/components/ui/full-page-loader";
 
 const COLLAPSE_KEY = "campusnexus.sidebar.collapsed";
 
@@ -31,7 +32,9 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar />
         <main className="mx-auto w-full max-w-[1320px] flex-1 px-6 py-6">
-          <Outlet />
+          <Suspense fallback={<FullPageLoader label="Loading workspace…" />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>
