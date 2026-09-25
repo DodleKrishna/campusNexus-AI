@@ -66,3 +66,6 @@ packages = ["app"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "supabase_acceptance: the focused real-Supabase acceptance subset of tests/test_phase21_postgres.py (SUPABASE_ACCEPTANCE)",
+]

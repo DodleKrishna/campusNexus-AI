@@ -28,6 +28,18 @@ from scripts.seed_data import run_seed  # noqa: E402
 from tests.pg_support import all_on_postgres, postgres_schema_engine  # noqa: E402
 
 
+def pytest_collection_modifyitems(config, items):
+    """Mark the focused real-Supabase subset (tests/test_phase21_postgres.py SUPABASE_ACCEPTANCE).
+
+    Marked per collected item, not on the function: several of those tests are imported from other
+    modules, and their original SQLite runs must stay unmarked.
+    """
+    for item in items:
+        module = getattr(item, "module", None)
+        if module is not None and item.originalname in getattr(module, "SUPABASE_ACCEPTANCE", ()):
+            item.add_marker(pytest.mark.supabase_acceptance)
+
+
 @pytest.fixture()
 def engine(tmp_path, monkeypatch):
     db_file = tmp_path / "test_campusnexus.db"

@@ -9,6 +9,12 @@ Besides the PostgreSQL-specific checks below, this module re-runs real
 end-to-end flows from earlier phases (profile, attendance, workflow requests,
 approvals, missions, audit, candidate selection) on PostgreSQL: the imported
 tests pick up this module's ``engine`` fixture, which overrides the SQLite one.
+
+Test strategy: the whole module is the regression suite for a local
+PostgreSQL. Against remote Supabase, where every test builds and seeds its
+own schema over a high-latency link, only the representative subset in
+``SUPABASE_ACCEPTANCE`` runs (``-m supabase_acceptance``; the marker is added by
+tests/conftest.py), each test still in its own throwaway schema.
 """
 from __future__ import annotations
 
@@ -25,6 +31,18 @@ from scripts.seed_data import build_summary, run_seed
 from tests.pg_support import postgres_schema_engine, postgres_test_url, requires_postgres
 
 pytestmark = requires_postgres
+
+# One representative test per cloud-relevant area (run with -m supabase_acceptance).
+SUPABASE_ACCEPTANCE = (
+    "test_dashboard_uses_real_records_and_deterministic_rules",              # auth + profile/dashboard persistence
+    "test_session_lifecycle_start_mark_close_updates_counters_once",         # attendance read/write
+    "test_event_permission_preview_confirm_approve_and_notify",              # workflow request + notification
+    "test_full_approve_and_resume_persists_real_row",                        # approval persistence
+    "test_full_run_persists_mission_step_agent_run_and_audit_trail",         # mission/agent-run persistence
+    "test_audit_log_merges_mission_and_operations_sources_read_only",        # audit persistence
+    "test_selecting_a_safe_event_continues_the_same_mission_to_one_approval",  # candidate selection
+    "test_every_connection_stays_in_its_throwaway_schema",                   # schema isolation on the pooler
+)
 
 
 @pytest.fixture()
@@ -164,6 +182,20 @@ def test_mission_rows_are_written_to_postgres(api_client, session_factory) -> No
     with session_factory() as session:
         assert session.get_bind().dialect.name == "postgresql"
         assert session.execute(select(func.count()).select_from(Mission)).scalar_one() >= 1
+
+
+def test_every_connection_stays_in_its_throwaway_schema(engine) -> None:
+    # SET search_path, not a startup option (Supabase's session pooler ignores those), and it survives
+    # a rollback and a fresh pool.
+    with engine.connect() as connection:
+        schema = connection.execute(text("SELECT current_schema()")).scalar()
+        assert schema.startswith("cn_test_") and schema != "public"
+        connection.rollback()
+        assert connection.execute(text("SELECT current_schema()")).scalar() == schema
+    engine.dispose()
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT current_schema()")).scalar() == schema
+        assert "public" not in connection.execute(text("SHOW search_path")).scalar()
 
 
 def test_data_api_roles_cannot_read_application_tables(engine) -> None:
