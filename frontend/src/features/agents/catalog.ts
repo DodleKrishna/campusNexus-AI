@@ -8,7 +8,12 @@ import type { AgentKey } from "@/types/api";
  */
 export interface AgentDefinition {
   key: AgentKey;
+  /** The name used in labels ("Message Academic Agent"). */
   name: string;
+  /** Optional display title for the workspace header (defaults to ``name``). */
+  title?: string;
+  /** One short line for headers and tiles. */
+  tagline: string;
   backendAgent: string | null;
   responsibility: string;
   icon: LucideIcon;
@@ -19,6 +24,7 @@ export interface AgentDefinition {
 export const AGENTS: AgentDefinition[] = [
   {
     key: "academic",
+    tagline: "Attendance · Exams · Timetable · Policies",
     name: "Academic Agent",
     backendAgent: "academic_agent",
     responsibility: "Attendance, exam eligibility, timetable and exams, grounded in academic policy.",
@@ -34,6 +40,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     key: "events",
+    tagline: "Events · Workshops · Schedule conflicts",
     name: "Events Agent",
     backendAgent: "events_opportunity_agent",
     responsibility: "Campus events and workshops, checked against your classes and exams.",
@@ -48,6 +55,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     key: "placements",
+    tagline: "Internships · Eligibility · Skill gaps",
     name: "Placement Agent",
     backendAgent: "career_agent",
     responsibility: "Internship eligibility, skill gaps and application status.",
@@ -62,6 +70,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     key: "complaints",
+    tagline: "Cases · SLA status · Escalation",
     name: "Complaints Agent",
     backendAgent: "campus_services_agent",
     responsibility: "Your grievance cases, SLA status and escalation procedure.",
@@ -71,6 +80,8 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     key: "enquiry",
+    title: "CampusNexus Assistant",
+    tagline: "Ask across your campus",
     name: "Enquiry Agent",
     backendAgent: null,
     responsibility: "General campus questions, answered by consulting the other agents. Read-only.",
@@ -80,6 +91,7 @@ export const AGENTS: AgentDefinition[] = [
   },
   {
     key: "permission",
+    tagline: "Leave · OD · Event permission",
     name: "Permission Agent",
     backendAgent: null,
     responsibility: "Prepares event permission, attendance permission, leave and OD requests and routes them to the right faculty.",

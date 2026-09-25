@@ -1,108 +1,104 @@
-import { CalendarClock, ClipboardCheck, Eye, Loader2, Play, Square } from "lucide-react";
+import { CalendarDays, ClipboardCheck, Eye, Loader2, Play } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { ApiError } from "@/api/client";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonVariants } from "@/components/ui/button-variants";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Card, CardHeader } from "@/components/ui/card";
+import { ScheduleTimeline } from "@/components/ui/schedule-timeline";
 import { SkeletonRows } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState } from "@/components/ui/states";
-import { SESSION } from "@/components/dashboard/status";
+import { SESSION, statusOf } from "@/components/dashboard/status";
 import { classPath } from "@/components/faculty/paths";
 import { useClassAction } from "@/hooks/useFacultyData";
 import type { FacultyClass } from "@/types/api";
-import { cn } from "@/utils/cn";
 import { formatTime } from "@/utils/format";
 
-function ClassActions({ item }: { item: FacultyClass }) {
+function ClassAction({ item }: { item: FacultyClass }) {
   const navigate = useNavigate();
   const action = useClassAction(item.session_id);
   const busy = action.isPending;
   const error = action.error instanceof ApiError ? action.error.message : action.error ? "That didn't work. Please try again." : null;
-
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex flex-wrap justify-end gap-2">
-        {item.status === "scheduled" && (
-          <Button
-            variant="accent"
-            size="sm"
-            disabled={!item.can_start || busy}
-            title={item.start_blocked_reason ?? undefined}
-            onClick={() => action.mutate({ kind: "start" }, { onSuccess: () => navigate(classPath(item)) })}
-          >
-            {busy ? <Loader2 className="animate-spin" /> : <Play />} Start Class
-          </Button>
-        )}
-        {item.status === "active" && (
-          <>
-            <Link to={classPath(item)} className={buttonVariants({ variant: "accent", size: "sm" })}>
-              <ClipboardCheck /> Open Attendance
-            </Link>
-            <Link to={classPath(item)} className={buttonVariants({ variant: "outline", size: "sm" })}>
-              <Square /> Close Class
-            </Link>
-          </>
-        )}
-        {item.status === "closed" && (
-          <Link to={classPath(item)} className={buttonVariants({ variant: "outline", size: "sm" })}>
-            <Eye /> View Attendance
-          </Link>
-        )}
-      </div>
-      {item.status === "scheduled" && !item.can_start && item.start_blocked_reason && <p className="max-w-xs text-right text-[11px] text-muted">{item.start_blocked_reason}</p>}
-      {error && <p className="max-w-xs text-right text-xs text-danger-strong">{error}</p>}
-    </div>
+    <>
+      {item.status === "scheduled" && (
+        <Button
+          size="sm"
+          disabled={!item.can_start || busy}
+          title={item.start_blocked_reason ?? undefined}
+          onClick={() => action.mutate({ kind: "start" }, { onSuccess: () => navigate(classPath(item)) })}
+        >
+          {busy ? <Loader2 className="animate-spin" /> : <Play />} Start Class
+        </Button>
+      )}
+      {item.status === "active" && (
+        <Link to={classPath(item)} className={buttonVariants({ size: "sm" })}>
+          <ClipboardCheck /> Take attendance
+        </Link>
+      )}
+      {item.status === "closed" && (
+        <Link to={classPath(item)} className={buttonVariants({ variant: "ghost", size: "sm" })}>
+          <Eye /> View
+        </Link>
+      )}
+      {error && <span className="basis-full text-xs text-danger-strong">{error}</span>}
+    </>
   );
 }
 
-export function ClassRow({ item }: { item: FacultyClass }) {
-  const status = SESSION[item.status];
+function subtitle(item: FacultyClass): string {
   const { tally } = item;
-  return (
-    <li className={cn("flex flex-wrap items-center gap-4 rounded-lg border px-4 py-3", item.status === "active" ? "border-accent/40 bg-accent-soft" : "border-border")}>
-      <div className="w-28 shrink-0 text-sm font-semibold tabular-nums">
-        {item.start_local}–{item.end_local}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <Link to={classPath(item)} className="truncate text-sm font-medium hover:underline">
-            {item.course_title}
-          </Link>
-          <Badge tone={status.tone}>{status.label}</Badge>
-          {item.is_extra_class && <Badge tone="neutral">Extra class</Badge>}
-        </div>
-        <div className="truncate text-xs text-muted">
-          {item.course_code} · {item.department_code} Year {item.year}, Section {item.section} · {item.room} · {tally.roster} students
-        </div>
-        {(item.status === "active" || item.status === "closed") && (
-          <div className="mt-0.5 text-xs text-muted">
-            {item.actual_started_at && <>Started {formatTime(item.actual_started_at)} · </>}
-            {tally.present + tally.late} present, {tally.absent} absent{tally.unmarked ? `, ${tally.unmarked} not marked` : ""}
-          </div>
-        )}
-      </div>
-      <ClassActions item={item} />
-    </li>
-  );
+  const base = `${item.department_code} ${item.year}-${item.section} · ${item.room}`;
+  if (item.status === "active" || item.status === "closed") {
+    return `${base} · ${item.actual_started_at ? `started ${formatTime(item.actual_started_at)} · ` : ""}${tally.roster - tally.unmarked}/${tally.roster} marked`;
+  }
+  if (item.status === "scheduled" && !item.can_start && item.start_blocked_reason) return `${base} · ${item.start_blocked_reason}`;
+  return `${base} · ${tally.roster} students`;
 }
 
-export function TodayClassesCard({ classes, isLoading, error, onRetry }: { classes?: FacultyClass[]; isLoading?: boolean; error?: Error | null; onRetry?: () => void }) {
+export function TodayClassesCard({
+  classes,
+  isLoading,
+  error,
+  onRetry,
+  title = "Today's teaching schedule",
+}: {
+  classes?: FacultyClass[];
+  isLoading?: boolean;
+  error?: Error | null;
+  onRetry?: () => void;
+  title?: string;
+}) {
   return (
     <Card>
-      <CardHeader icon={<CalendarClock />} title="Today's classes" description="Times in IST · a class can be started up to 15 minutes early" />
-      <CardBody>
-        {isLoading && <SkeletonRows rows={2} />}
-        {error && <ErrorState message={`CampusNexus couldn't load your classes. ${error.message}`} onRetry={onRetry} />}
-        {classes && classes.length === 0 && <EmptyState title="No classes today" description="None of your teaching assignments meets today." />}
-        {classes && classes.length > 0 && (
-          <ol className="space-y-2">
-            {classes.map((item) => (
-              <ClassRow key={item.session_id} item={item} />
-            ))}
-          </ol>
-        )}
-      </CardBody>
+      <CardHeader title={title} description="Times in IST · a class can be started up to 15 minutes early" />
+      {isLoading && !classes && <SkeletonRows rows={3} className="px-5 pb-5" />}
+      {error && (
+        <div className="px-5 pb-5">
+          <ErrorState message={`CampusNexus couldn't load your classes. ${error.message}`} onRetry={onRetry} />
+        </div>
+      )}
+      {classes && classes.length === 0 && <EmptyState compact icon={<CalendarDays />} title="No classes today" description="None of your teaching assignments meets today." />}
+      {classes && classes.length > 0 && (
+        <div className="border-t border-border py-1">
+          <ScheduleTimeline
+            items={classes.map((item) => ({
+              key: String(item.session_id),
+              start: item.start_local,
+              end: item.end_local,
+              title: (
+                <Link to={classPath(item)} className="hover:underline">
+                  {item.course_title}
+                </Link>
+              ),
+              subtitle: subtitle(item),
+              status: statusOf(SESSION, item.status),
+              current: item.status === "active",
+              muted: item.status === "closed" || item.status === "cancelled",
+              action: <ClassAction item={item} />,
+            }))}
+          />
+        </div>
+      )}
     </Card>
   );
 }

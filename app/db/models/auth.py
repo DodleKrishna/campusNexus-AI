@@ -12,11 +12,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 from app.schemas.enums import UserRole
 
 
@@ -26,7 +25,7 @@ class AuthAccount(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[UserRole] = mapped_column(SAEnum(UserRole, values_callable=lambda e: [m.value for m in e]))
+    role: Mapped[UserRole] = mapped_column(portable_enum(UserRole))
     display_name: Mapped[str] = mapped_column(String(120))
     linked_student_id: Mapped[Optional[str]] = mapped_column(ForeignKey("students.student_code"), default=None)
     # Phase 16: faculty_profiles.id for a FACULTY/HOD account. Faculty-scoped

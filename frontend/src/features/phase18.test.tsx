@@ -58,8 +58,8 @@ describe("Admin console", () => {
   it("shows institution metrics from the API", async () => {
     adminApi((url) => (url.includes("/admin/dashboard") ? { body: DASHBOARD } : undefined));
     renderApp("/admin");
-    expect(await screen.findByText("Campus operations")).toBeInTheDocument();
-    expect((await screen.findByText("Total students")).parentElement?.textContent).toContain("28");
+    expect(await screen.findByText("Campus overview")).toBeInTheDocument();
+    expect((await screen.findByText("Students")).parentElement?.textContent).toContain("28");
     expect(screen.getByText("SLA breaches").parentElement?.textContent).toContain("3");
     for (const label of ["Departments", "Users", "Attendance", "Requests", "Complaints", "AI Operations", "Audit Log", "Agents"]) {
       expect(screen.getByRole("link", { name: label })).toBeInTheDocument();
@@ -82,6 +82,8 @@ describe("Admin console", () => {
       return undefined;
     });
     renderApp("/admin/requests");
+    // Phase 20: the inbox is a table; a request opens in a drawer with the decision at its foot.
+    await userEvent.click(await screen.findByRole("button", { name: "Review Dr. Kavita Iyer — HOD Leave for Thu 01 Oct 2026" }));
     expect(await screen.findByText("Dr. Kavita Iyer — HOD Leave for Thu 01 Oct 2026")).toBeInTheDocument();
     expect(screen.getByText(/Routing history \(1\)/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));

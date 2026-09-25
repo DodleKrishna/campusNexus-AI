@@ -5,6 +5,8 @@ import type { AgentDefinition } from "@/features/agents/catalog";
 export const HOD_AGENTS: AgentDefinition[] = [
   {
     key: "enquiry",
+    title: "CampusNexus Assistant",
+    tagline: "Ask across your department",
     name: "Enquiry Agent",
     backendAgent: null,
     responsibility: "Broad department questions, answered by checking operations, attendance, requests and complaints. Read-only.",
@@ -14,6 +16,7 @@ export const HOD_AGENTS: AgentDefinition[] = [
   },
   {
     key: "academic",
+    tagline: "Classes, delays and attendance by section",
     name: "Academic Agent",
     backendAgent: "academic_agent",
     responsibility: "Classes running, delayed or not held, and attendance by section and course.",
@@ -29,6 +32,7 @@ export const HOD_AGENTS: AgentDefinition[] = [
   },
   {
     key: "permission",
+    tagline: "Faculty and escalated requests",
     name: "Permission Agent",
     backendAgent: null,
     responsibility: "Faculty requests and escalated student requests waiting for your decision.",
@@ -38,6 +42,7 @@ export const HOD_AGENTS: AgentDefinition[] = [
   },
   {
     key: "complaints",
+    tagline: "Department complaints and SLA state",
     name: "Complaints Agent",
     backendAgent: "campus_services_agent",
     responsibility: "Complaints from your department's students and their SLA state.",
@@ -47,6 +52,7 @@ export const HOD_AGENTS: AgentDefinition[] = [
   },
   {
     key: "events",
+    tagline: "Upcoming events and registrations",
     name: "Events Agent",
     backendAgent: "events_opportunity_agent",
     responsibility: "Upcoming campus events and how many of your students registered.",

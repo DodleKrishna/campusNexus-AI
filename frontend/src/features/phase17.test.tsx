@@ -62,8 +62,8 @@ describe("HOD dashboard", () => {
       return undefined;
     });
     renderApp("/hod");
-    expect(await screen.findByRole("heading", { name: "Dr. Kavita Iyer" })).toBeInTheDocument();
-    expect(screen.getByText("Pending faculty requests").parentElement?.textContent).toContain("1");
+    expect(await screen.findByRole("heading", { name: /, Dr. Kavita Iyer$/ })).toBeInTheDocument();
+    expect(screen.getByText("Pending requests").parentElement?.textContent).toContain("1");
     expect(screen.getByText("Not started")).toBeInTheDocument();
     expect(await screen.findByText("Dr. Ashok Verma — Faculty Leave")).toBeInTheDocument();
     for (const label of ["Department", "Faculty", "Students", "Attendance", "Agents", "Requests", "Complaints"]) {

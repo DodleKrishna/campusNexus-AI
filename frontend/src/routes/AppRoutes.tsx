@@ -4,7 +4,7 @@ import { RequireAuth } from "@/auth/RequireAuth";
 import { homeRouteFor } from "@/auth/roles";
 import { useAuth } from "@/auth/useAuth";
 import { AppShell } from "@/components/layout/AppShell";
-import { FullPageLoader } from "@/components/ui/full-page-loader";
+import { AppLoader } from "@/components/ui/full-page-loader";
 import { LoginPage } from "@/pages/LoginPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
 import { SettingsPage } from "@/pages/SettingsPage";
@@ -60,7 +60,7 @@ const AdminSettingsPage = lazyPage(admin, "AdminSettingsPage");
 
 function RootRedirect() {
   const { status, user } = useAuth();
-  if (status === "loading") return <FullPageLoader label="Restoring your session…" />;
+  if (status === "loading") return <AppLoader />;
   return <Navigate to={user ? homeRouteFor(user.role) : "/login"} replace />;
 }
 

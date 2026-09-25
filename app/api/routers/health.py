@@ -5,6 +5,10 @@ whether it is live or the offline mock), whether the database has been
 seeded, and whether the policy store has any ingested chunks -- so the UI
 and ``scripts/demo_preflight.py`` can show the true runtime mode instead
 of letting mock output pass as live AI output.
+
+Phase 21: ``database`` also reports ``ready`` and the ``dialect``
+(``sqlite``/``postgresql``) -- never the host, user, password or URL. A
+database that cannot be reached answers ``ready: false`` instead of a 500.
 """
 from __future__ import annotations
 
@@ -16,14 +20,21 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_session
 from app.db.models import Student
+from app.db.session import describe_database
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
 def health(request: Request, session: Session = Depends(get_session)) -> dict:
-    session.execute(text("SELECT 1"))
-    student_count = session.execute(select(func.count()).select_from(Student)).scalar_one()
+    backend = describe_database(session.get_bind())
+    try:
+        session.execute(text("SELECT 1"))
+        student_count = session.execute(select(func.count()).select_from(Student)).scalar_one()
+        database_ready = True
+    except Exception:  # noqa: BLE001 -- readiness probe; the error text may name the host, so it is not echoed
+        session.rollback()
+        student_count, database_ready = 0, False
 
     try:
         chunks = request.app.state.knowledge_service.indexed_chunk_count()
@@ -35,8 +46,11 @@ def health(request: Request, session: Session = Depends(get_session)) -> dict:
     return {
         "status": "ok",
         "service": "campusnexus-api",
-        "ready": student_count > 0 and policy_store["available"],
-        "database": {"seeded": student_count > 0, "students": student_count},
+        "ready": database_ready and student_count > 0 and policy_store["available"],
+        "database": {
+            "ready": database_ready, "dialect": backend["dialect"], "label": backend["label"],
+            "seeded": student_count > 0, "students": student_count,
+        },
         "policy_store": policy_store,
         "llm": {"provider": provider.name, "live": provider.is_live, "model": provider.model_name},
         # Phase 14: whether a live provider *could* be used (a key is present in

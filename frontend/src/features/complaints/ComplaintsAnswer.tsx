@@ -1,4 +1,4 @@
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/badge";
 import { asArray } from "@/features/facts";
 import { AnswerText, FactCard } from "@/features/shared";
 import type { Facts } from "@/types/api";
@@ -17,7 +17,7 @@ export function ComplaintsAnswer({ facts, answer }: { facts: Facts; answer: stri
   return (
     <div className="space-y-3">
       {cases.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {cases.map((c) => {
             const breached = c.response_breached || c.resolution_breached;
             return (
@@ -31,11 +31,10 @@ export function ComplaintsAnswer({ facts, answer }: { facts: Facts; answer: stri
                     </span>
                   </span>
                 }
-                aside={<Badge tone={breached ? "danger" : "success"}>{breached ? "Past SLA" : "Within SLA"}</Badge>}
+                aside={<StatusBadge label={breached ? "SLA breached" : "Within SLA"} tone={breached ? "danger" : "success"} />}
               >
-                <div className="flex flex-wrap gap-1.5 pt-0.5">
-                  <Badge tone="neutral">{titleCase(c.case.status)}</Badge>
-                  <Badge tone={c.case.priority === "urgent" || c.case.priority === "high" ? "warning" : "neutral"}>{c.case.priority} priority</Badge>
+                <div className="text-ink">
+                  {titleCase(c.case.status)} · {titleCase(c.case.priority)} priority
                 </div>
                 <div className={c.response_breached ? "text-danger-strong" : undefined}>Response due {formatDateTime(c.response_due_at)}</div>
                 <div className={c.resolution_breached ? "text-danger-strong" : undefined}>Resolution due {formatDateTime(c.resolution_due_at)}</div>

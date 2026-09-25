@@ -14,11 +14,11 @@ import enum
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import JSON, Enum as SAEnum
+from sqlalchemy import JSON
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 
 
 class WorkflowRequestType(str, enum.Enum):
@@ -53,10 +53,10 @@ class WorkflowRequest(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     request_code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     request_type: Mapped[WorkflowRequestType] = mapped_column(
-        SAEnum(WorkflowRequestType, values_callable=lambda e: [m.value for m in e])
+        portable_enum(WorkflowRequestType)
     )
     status: Mapped[WorkflowRequestStatus] = mapped_column(
-        SAEnum(WorkflowRequestStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(WorkflowRequestStatus),
         default=WorkflowRequestStatus.DRAFT,
     )
     requester_account_id: Mapped[int] = mapped_column(ForeignKey("auth_accounts.id"))

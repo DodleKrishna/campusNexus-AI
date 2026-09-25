@@ -1,3 +1,4 @@
+import { DataTable } from "@/components/ui/data-table";
 import type { AgentQueryResponse } from "@/types/api";
 
 interface FactTable {
@@ -12,46 +13,35 @@ function asTable(value: unknown): FactTable | null {
   return table;
 }
 
-/** A faculty agent's answer: the sentences computed server-side, plus the rows they were counted from. */
+/** A staff agent's answer: the sentences computed server-side, plus the rows they were counted from. */
 export function FacultyAnswer({ response }: { response: AgentQueryResponse }) {
   const table = asTable(response.facts.table);
   return (
     <div className="space-y-3">
-      <div className="space-y-1.5">
+      <div className="space-y-1.5 rounded-card border border-border bg-surface px-4 py-3">
         {response.answer
           .split("\n")
           .filter(Boolean)
           .map((line) => (
-            <p key={line} className="text-sm leading-relaxed">
+            <p key={line} className="text-sm leading-relaxed text-ink">
               {line}
             </p>
           ))}
       </div>
       {table && table.rows.length > 0 && (
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-left text-sm">
-            <caption className="border-b border-border bg-surface-muted px-3 py-2 text-left text-xs font-semibold text-muted">{table.title}</caption>
-            <thead>
-              <tr className="border-b border-border text-xs text-muted">
-                {table.columns.map((column) => (
-                  <th key={column} scope="col" className="px-3 py-2 font-medium">
-                    {column}
-                  </th>
+        <div className="overflow-hidden rounded-card border border-border bg-surface">
+          <p className="border-b border-border px-4 py-2.5 text-xs font-medium text-muted">{table.title}</p>
+          <DataTable columns={table.columns} caption={table.title}>
+            {table.rows.map((row, i) => (
+              <tr key={i}>
+                {row.map((cell, j) => (
+                  <td key={j} className="tabular-nums">
+                    {cell}
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {table.rows.map((row, i) => (
-                <tr key={i} className="border-b border-border last:border-0">
-                  {row.map((cell, j) => (
-                    <td key={j} className="px-3 py-2 tabular-nums">
-                      {cell}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </DataTable>
         </div>
       )}
     </div>

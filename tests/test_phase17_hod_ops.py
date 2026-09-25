@@ -430,5 +430,5 @@ def test_every_entry_point_upgrades_before_use(path: Path) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     calls = {node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
              for node in ast.walk(tree) if isinstance(node, ast.Call)}
-    if "create_db_engine" in calls:
+    if calls & {"create_db_engine", "create_database_engine"}:
         assert calls & {"init_db", "upgrade_schema", "open_database"}, f"{path.name} opens a database without upgrading it"

@@ -5,6 +5,7 @@ import type { AgentDefinition } from "@/features/agents/catalog";
 export const FACULTY_AGENTS: AgentDefinition[] = [
   {
     key: "academic",
+    tagline: "Your classes, presence and attendance risk",
     name: "Academic Agent",
     backendAgent: "academic_agent",
     responsibility: "Your classes today, who is present or absent, and who is below the attendance requirement.",
@@ -19,6 +20,8 @@ export const FACULTY_AGENTS: AgentDefinition[] = [
   },
   {
     key: "enquiry",
+    title: "CampusNexus Assistant",
+    tagline: "Ask about your classes and requests",
     name: "Enquiry Agent",
     backendAgent: null,
     responsibility: "Any question about your own classes and student requests, answered from live records. Read-only.",
@@ -28,6 +31,7 @@ export const FACULTY_AGENTS: AgentDefinition[] = [
   },
   {
     key: "permission",
+    tagline: "Student requests waiting for you",
     name: "Permission Agent",
     backendAgent: null,
     responsibility: "Student permission, leave and OD requests waiting for your decision.",

@@ -20,10 +20,18 @@
     $env:ANTHROPIC_API_KEY). Without it the launcher stops with an error; it never falls back to mock.
     No key, secret or password is ever printed.
 
+    Database (Phase 21): if $env:CAMPUSNEXUS_DATABASE_URL is set (PostgreSQL / Supabase), the API uses it;
+    otherwise the local SQLite demo database (data/demo/campusnexus_demo.db). The launcher prints only
+    "Database: PostgreSQL" or "Database: SQLite", never the URL. With PostgreSQL, -Reset rebuilds only the
+    local policy store and then creates missing tables and seeds idempotently (scripts/init_postgres_db.py,
+    scripts/seed_database.py --demo-classes); it never deletes anything in PostgreSQL.
+
     Logs: data/demo/logs/api*.log and data/demo/logs/web*.log.
 
 .PARAMETER Reset
     Rebuild the demo database, policy store and dev sign-in accounts first (scripts/reset_demo_env.py).
+    With CAMPUSNEXUS_DATABASE_URL set: rebuild the policy store, then initialize and seed PostgreSQL
+    idempotently (no PostgreSQL data is deleted).
 
 .PARAMETER Provider
     mock | groq | anthropic. Default: $env:CAMPUSNEXUS_LLM_PROVIDER, else mock.
@@ -84,6 +92,10 @@ if ($Model) { $env:CAMPUSNEXUS_LLM_MODEL = $Model }
 
 if (-not $Embedding) { $Embedding = if ($env:CAMPUSNEXUS_EMBEDDING_PROVIDER) { $env:CAMPUSNEXUS_EMBEDDING_PROVIDER } else { "onnx_minilm" } }
 $env:CAMPUSNEXUS_DB_PATH = $DemoDb
+# Phase 21: CAMPUSNEXUS_DATABASE_URL (PostgreSQL / Supabase) outranks CAMPUSNEXUS_DB_PATH in the API.
+$UsePostgres = [bool]("$env:CAMPUSNEXUS_DATABASE_URL".Trim())
+if ($UsePostgres) { $DatabaseLabel = "PostgreSQL" } else { $DatabaseLabel = "SQLite" }
+Write-Host "Database: $DatabaseLabel"
 $env:CAMPUSNEXUS_VECTOR_STORE_PATH = $DemoChroma
 $env:CAMPUSNEXUS_EMBEDDING_PROVIDER = $Embedding
 $env:CAMPUSNEXUS_API_URL = "http://127.0.0.1:$ApiPort"
@@ -96,6 +108,10 @@ if (-not (Test-Path $Python)) {
 }
 & $Python -c "import fastapi, uvicorn, sqlalchemy, chromadb, bcrypt, jwt" 2>$null
 if ($LASTEXITCODE -ne 0) { Fail "The .venv is missing app dependencies. Run: .\.venv\Scripts\pip install -e "".[dev,app]""" }
+if ($UsePostgres) {
+    & $Python -c "import psycopg" 2>$null
+    if ($LASTEXITCODE -ne 0) { Fail "CAMPUSNEXUS_DATABASE_URL is set but the PostgreSQL driver is missing. Run: .\.venv\Scripts\pip install -e "".[dev,app,postgres]""" }
+}
 
 foreach ($port in @($ApiPort, $WebPort)) {
     if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
@@ -107,6 +123,13 @@ if ($Reset) {
     Step "Rebuilding the demo environment (data/demo/)"
     & $Python scripts/reset_demo_env.py --embedding $Embedding
     if ($LASTEXITCODE -ne 0) { Fail "reset_demo_env.py failed." }
+    if ($UsePostgres) {
+        Step "Initializing and seeding PostgreSQL (idempotent; nothing is deleted)"
+        & $Python scripts/init_postgres_db.py
+        if ($LASTEXITCODE -ne 0) { Fail "init_postgres_db.py failed." }
+        & $Python scripts/seed_database.py --demo-classes
+        if ($LASTEXITCODE -ne 0) { Fail "seed_database.py failed." }
+    }
 }
 
 # --- 3. Frontend dependencies ------------------------------------------------------------------------
@@ -120,7 +143,7 @@ if (-not (Test-Path "frontend\node_modules\.bin\vite.cmd")) {
 
 # --- 4. Demo data --------------------------------------------------------------------------------------
 Step "Checking demo data"
-if (-not (Test-Path $DemoDb)) { Fail "$DemoDb does not exist. Re-run with -Reset." }
+if (-not $UsePostgres -and -not (Test-Path $DemoDb)) { Fail "$DemoDb does not exist. Re-run with -Reset." }
 if (-not (Test-Path $DemoChroma)) { Fail "$DemoChroma does not exist. Re-run with -Reset." }
 if (-not (Get-ChildItem "data/policies" -File -ErrorAction SilentlyContinue)) { Fail "data/policies is empty; the policy corpus is missing." }
 if (-not (Test-Path "data/demo/dev_credentials.txt") -and -not $env:CAMPUSNEXUS_DEMO_PASSWORD) {
@@ -178,6 +201,7 @@ try {
     Write-Host "  App:       http://127.0.0.1:$WebPort"
     Write-Host "  API docs:  http://127.0.0.1:$ApiPort/docs"
     Write-Host "  LLM mode:  $mode"
+    Write-Host "  Database:  $DatabaseLabel"
     Write-Host "  Sign in:   student@ / faculty@ / hod@ / admin@campusnexus.local"
     Write-Host "             password: data/demo/dev_credentials.txt (or `$env:CAMPUSNEXUS_DEMO_PASSWORD set before -Reset)"
     Write-Host "  Logs:      data/demo/logs/"

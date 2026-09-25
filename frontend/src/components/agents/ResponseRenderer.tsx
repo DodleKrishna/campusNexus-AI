@@ -1,7 +1,6 @@
-import { ArrowRight, Info } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { EvidencePanel } from "@/components/agents/EvidencePanel";
-import { VerificationBadge } from "@/components/agents/VerificationBadge";
 import { Notice } from "@/components/ui/states";
 import { agentByKey } from "@/features/agents/catalog";
 import { EnquiryAnswer } from "@/features/enquiry/EnquiryAnswer";
@@ -21,15 +20,12 @@ function hintLink(response: AgentQueryResponse, scope: ChatScope): { to: string;
   return agent?.available ? { to: `/student/agents/${agent.key}`, label: `Open ${agent.name}` } : null;
 }
 
+/** An agent reply: structured cards first, then notices and next steps, evidence last (collapsed). */
 export function ResponseRenderer({ response, scope = "student" }: { response: AgentQueryResponse; scope?: ChatScope }) {
   const hint = response.action_hint;
   const link = hintLink(response, scope);
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <span className="text-xs font-semibold text-muted">{response.display_name}</span>
-        <VerificationBadge status={response.verification_status} />
-      </div>
       {response.facts.scope === "faculty" ? (
         <FacultyAnswer response={response} />
       ) : response.agent_key === "enquiry" || response.agent_key === "permission" ? (
@@ -44,20 +40,19 @@ export function ResponseRenderer({ response, scope = "student" }: { response: Ag
       ))}
       {hint && (
         <Notice tone="info">
-          <div className="flex items-start gap-2">
-            <Info className="mt-0.5 size-4 shrink-0 text-info" />
-            <div>
-              {hint.message}
-              {link && (
-                <Link to={link.to} className="ml-1 inline-flex items-center gap-1 font-medium text-accent-hover">
-                  {link.label} <ArrowRight className="size-3.5" />
-                </Link>
-              )}
-            </div>
-          </div>
+          {hint.message}
+          {link && (
+            <Link to={link.to} className="ml-1 inline-flex items-center gap-1 font-medium text-accent-hover hover:underline">
+              {link.label} <ArrowRight className="size-3.5" />
+            </Link>
+          )}
         </Notice>
       )}
-      <EvidencePanel status={response.verification_status} evidence={response.evidence} issues={response.issues} />
+      <EvidencePanel
+        status={response.verification_status}
+        evidence={response.evidence}
+        issues={response.issues}
+      />
     </div>
   );
 }

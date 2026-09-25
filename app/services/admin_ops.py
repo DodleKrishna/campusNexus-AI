@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.passwords import hash_password
 from app.db.models.auth import AuthAccount
+from app.db.session import describe_database
 from app.db.models.faculty import AttendanceSession, AttendanceSessionStatus, FacultyProfile, TeachingAssignment
 from app.db.models.identity import Department, Student
 from app.db.models.mission import AgentRun, ApprovalRecord, AuditLog, Mission
@@ -345,7 +346,7 @@ def audit_log(
     if source in (None, "mission"):
         query = select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(limit)
         if action:
-            query = query.where(AuditLog.event_type.contains(action))
+            query = query.where(AuditLog.event_type.icontains(action, autoescape=True))
         for row in session.execute(query).scalars():
             entries.append(AuditEntry(
                 timestamp=row.timestamp, source="mission", actor=row.actor, role="agent" if row.actor.endswith("agent") or row.actor.startswith("mission") else "user",
@@ -355,7 +356,7 @@ def audit_log(
     if source in (None, "operations"):
         query = select(OperationAuditEvent).order_by(OperationAuditEvent.timestamp.desc()).limit(limit)
         if action:
-            query = query.where(OperationAuditEvent.event_type.contains(action))
+            query = query.where(OperationAuditEvent.event_type.icontains(action, autoescape=True))
         for row in session.execute(query).scalars():
             actor = accounts.get(row.actor_account_id) if row.actor_account_id else None
             entries.append(AuditEntry(
@@ -366,12 +367,15 @@ def audit_log(
     return entries[:limit]
 
 
-def _db_mode() -> str:
+def _db_mode(session: Optional[Session] = None) -> str:
+    """Which database the API runs on, never its URL, host or credentials (Phase 21)."""
+    if session is not None and session.get_bind().dialect.name == "postgresql":
+        return describe_database(session.get_bind())["label"]
     raw = os.environ.get("CAMPUSNEXUS_DB_PATH", "")
     if not raw:
-        return "development (data/campusnexus.db)"
+        return "SQLite -- development (data/campusnexus.db)"
     name = Path(raw).name
-    return f"demo ({name})" if "demo" in raw.replace("\\", "/") else f"custom ({name})"
+    return f"SQLite -- demo ({name})" if "demo" in raw.replace("\\", "/") else f"SQLite -- custom ({name})"
 
 
 def system_status(session: Session, provider, knowledge: KnowledgeService) -> SystemStatus:
@@ -380,7 +384,7 @@ def system_status(session: Session, provider, knowledge: KnowledgeService) -> Sy
     try:
         students = _count(session, Student)
         components.append(SystemComponent(name="Database", status="ready" if students else "degraded",
-                                          detail=f"{students} students; mode {_db_mode()}" if students else "Connected but not seeded"))
+                                          detail=f"{students} students; {_db_mode(session)}" if students else "Connected but not seeded"))
     except Exception as exc:  # noqa: BLE001
         components.append(SystemComponent(name="Database", status="unavailable", detail=type(exc).__name__))
     try:
@@ -405,7 +409,7 @@ def system_status(session: Session, provider, knowledge: KnowledgeService) -> Sy
             "llm_provider": provider.name, "llm_model": provider.model_name, "llm_live": live,
             "live_ai_key_configured": configured, "class_start_grace_minutes": ops.start_grace_minutes(),
             "embedding_provider": os.environ.get("CAMPUSNEXUS_EMBEDDING_PROVIDER") or "onnx_minilm (default)",
-            "database_mode": _db_mode(),
+            "database_mode": _db_mode(session),
             "vector_store_path": os.environ.get("CAMPUSNEXUS_VECTOR_STORE_PATH") or "data/chroma (default)",
             "jwt_secret_configured": bool(os.environ.get("CAMPUSNEXUS_JWT_SECRET")),
             "jwt_ttl_minutes": os.environ.get("CAMPUSNEXUS_JWT_TTL_MINUTES") or "default",

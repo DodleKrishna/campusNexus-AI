@@ -7,20 +7,36 @@ the test suite. The RAG fixtures below are equally isolated: they build a
 throwaway Chroma collection under pytest's session tmp dir using the
 dependency-free DeterministicHashEmbedding, so the test suite never touches
 the dev vector store at data/chroma and never hits the network.
+
+Phase 21: ``CAMPUSNEXUS_DATABASE_URL`` is removed from the environment before
+any test runs (it would otherwise outrank ``CAMPUSNEXUS_DB_PATH`` and send
+code paths -- and subprocesses -- to a real, possibly remote, database).
+PostgreSQL is used only through ``CAMPUSNEXUS_TEST_DATABASE_URL`` (see
+tests/pg_support.py).
 """
 from __future__ import annotations
 
-import pytest
-from sqlalchemy.orm import Session, sessionmaker
+import os
 
-from app.db.session import create_db_engine, create_session_factory, init_db
-from scripts.seed_data import run_seed
+os.environ.pop("CAMPUSNEXUS_DATABASE_URL", None)
+
+import pytest  # noqa: E402
+from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
+
+from app.db.session import create_db_engine, create_session_factory, init_db  # noqa: E402
+from scripts.seed_data import run_seed  # noqa: E402
+from tests.pg_support import all_on_postgres, postgres_schema_engine  # noqa: E402
 
 
 @pytest.fixture()
 def engine(tmp_path, monkeypatch):
     db_file = tmp_path / "test_campusnexus.db"
     monkeypatch.setenv("CAMPUSNEXUS_DB_PATH", str(db_file))
+    if all_on_postgres():
+        with postgres_schema_engine() as eng:
+            init_db(eng)
+            yield eng
+        return
     eng = create_db_engine(db_path=str(db_file))
     init_db(eng)
     yield eng

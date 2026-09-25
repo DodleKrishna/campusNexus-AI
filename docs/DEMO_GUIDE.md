@@ -49,6 +49,7 @@ The launcher sets the first three itself. Never commit real values.
 | Variable | Purpose | Demo value |
 |---|---|---|
 | `CAMPUSNEXUS_DB_PATH` | SQLite database | `data/demo/campusnexus_demo.db` |
+| `CAMPUSNEXUS_DATABASE_URL` | Optional PostgreSQL / Supabase database; wins over `CAMPUSNEXUS_DB_PATH` when set | Unset for the local demo. Set it in the shell only. See docs/ARCHITECTURE.md (Phase 21) |
 | `CAMPUSNEXUS_VECTOR_STORE_PATH` | Chroma policy store | `data/demo/chroma` |
 | `CAMPUSNEXUS_EMBEDDING_PROVIDER` | Must match the store's build | `onnx_minilm` (or `deterministic` offline) |
 | `CAMPUSNEXUS_JWT_SECRET` | Token signing secret | Optional. Unset means a random secret per API process, so a restart signs everyone out. |

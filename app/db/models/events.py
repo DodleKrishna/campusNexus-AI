@@ -5,10 +5,10 @@ import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 
 
 class EventStatus(str, enum.Enum):
@@ -49,7 +49,7 @@ class Event(Base):
     registration_deadline: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
     capacity: Mapped[Optional[int]] = mapped_column(default=None)
     status: Mapped[EventStatus] = mapped_column(
-        SAEnum(EventStatus, values_callable=lambda e: [m.value for m in e])
+        portable_enum(EventStatus)
     )
 
     club = relationship("Club")
@@ -69,7 +69,7 @@ class EventRegistration(Base):
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id"))
     student_id: Mapped[int] = mapped_column(ForeignKey("students.id"))
     status: Mapped[RegistrationStatus] = mapped_column(
-        SAEnum(RegistrationStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(RegistrationStatus),
         default=RegistrationStatus.CONFIRMED,
     )
     registered_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)

@@ -9,10 +9,10 @@ import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 
 
 class NotificationStatus(str, enum.Enum):
@@ -30,7 +30,7 @@ class Notification(Base):
     body: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(60))
     status: Mapped[NotificationStatus] = mapped_column(
-        SAEnum(NotificationStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(NotificationStatus),
         default=NotificationStatus.PENDING,
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
@@ -56,7 +56,7 @@ class StaffNotification(Base):
     body: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(60))
     status: Mapped[NotificationStatus] = mapped_column(
-        SAEnum(NotificationStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(NotificationStatus),
         default=NotificationStatus.SENT,
     )
     ref_key: Mapped[Optional[str]] = mapped_column(String(120), default=None)
@@ -75,7 +75,7 @@ class AccountNotification(Base):
     body: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(60))
     status: Mapped[NotificationStatus] = mapped_column(
-        SAEnum(NotificationStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(NotificationStatus),
         default=NotificationStatus.SENT,
     )
     ref_key: Mapped[Optional[str]] = mapped_column(String(120), default=None)

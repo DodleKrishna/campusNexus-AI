@@ -1,102 +1,160 @@
-import { CalendarDays, ClipboardList, Radio, Users } from "lucide-react";
-import type { ReactNode } from "react";
+import { CalendarDays, ClipboardList, Clock, Inbox, MapPin, Radio, School, Users } from "lucide-react";
 import { Link } from "react-router-dom";
+import { AgentTiles } from "@/components/agents/AgentCards";
 import { classPath } from "@/components/faculty/paths";
 import { TodayClassesCard } from "@/components/faculty/TodayClassesCard";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
+import { StatusBadge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button-variants";
+import { Card, CardHeader } from "@/components/ui/card";
+import { MetricCard, MetricGrid, MetricSkeletons } from "@/components/ui/metric-card";
+import { ProgressBar } from "@/components/ui/progress";
+import { SkeletonRows } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState } from "@/components/ui/states";
+import { WORKFLOW_STATUS, statusOf } from "@/components/dashboard/status";
+import { FACULTY_AGENTS } from "@/features/agents/facultyCatalog";
 import { useFacultyDashboard } from "@/hooks/useFacultyData";
 import { useWorkflowRequests } from "@/hooks/useStudentData";
-import { formatLongDate, greeting } from "@/utils/format";
+import { DashboardHeader } from "@/pages/PageTitle";
+import type { FacultyClass } from "@/types/api";
+import { formatLongDate, formatTime, greeting, relativeTime } from "@/utils/format";
 
-function Stat({ label, value, detail, icon, to }: { label: string; value: ReactNode; detail: ReactNode; icon: ReactNode; to?: string }) {
-  const body = (
-    <Card className="h-full px-5 py-4 transition-colors hover:border-accent/40">
-      <div className="flex items-center justify-between text-xs font-medium text-muted">
-        {label}
-        <span className="text-subtle [&_svg]:size-4">{icon}</span>
+/** The class in session right now; otherwise when the next one starts. */
+function ActiveClassPanel({ active, today }: { active: FacultyClass | null; today: FacultyClass[] }) {
+  if (!active) {
+    const next = today.find((c) => c.status === "scheduled");
+    return (
+      <Card className="h-full">
+        <CardHeader title="Current class" />
+        <EmptyState compact icon={<Radio />} title="No class in session" description={next ? `Your next class begins at ${next.start_local}.` : "You have no more classes to start today."} />
+      </Card>
+    );
+  }
+  const { tally } = active;
+  const marked = tally.roster - tally.unmarked;
+  return (
+    <Card className="h-full border-primary/40">
+      <CardHeader title="Current class" action={<StatusBadge label="Live" tone="live" pulse />} />
+      <div className="px-5 pb-5">
+        <p className="text-base font-semibold text-ink">{active.course_title}</p>
+        <ul className="mt-2 space-y-1 text-[13px] text-muted [&_svg]:size-3.5 [&_svg]:text-subtle">
+          <li className="flex items-center gap-2">
+            <Users /> {active.department_code} {active.year}-{active.section}
+          </li>
+          <li className="flex items-center gap-2">
+            <Clock /> {active.start_local}–{active.end_local}
+            {active.actual_started_at && ` · started ${formatTime(active.actual_started_at)}`}
+          </li>
+          <li className="flex items-center gap-2">
+            <MapPin /> {active.room}
+          </li>
+        </ul>
+        <div className="mt-4">
+          <div className="mb-1.5 flex items-baseline justify-between text-[13px]">
+            <span className="text-muted">Attendance</span>
+            <span className="font-semibold tabular-nums text-ink">
+              {marked} / {tally.roster} marked
+            </span>
+          </div>
+          <ProgressBar value={marked} max={tally.roster || 1} tone="accent" label="Students marked" />
+        </div>
+        <Link to={classPath(active)} className={buttonVariants({ className: "mt-4 w-full" })}>
+          <School /> Open Class
+        </Link>
       </div>
-      <div className="mt-2 truncate text-2xl font-semibold tracking-tight">{value}</div>
-      <div className="mt-1 truncate text-xs text-muted">{detail}</div>
     </Card>
   );
-  return to ? <Link to={to}>{body}</Link> : body;
 }
 
-function PendingRequests() {
-  const { data, isLoading, isError, error, refetch } = useWorkflowRequests();
-  const pending = data?.filter((r) => r.status === "pending") ?? [];
+function RecentRequests() {
+  const { data, isLoading } = useWorkflowRequests();
+  const pending = data?.filter((r) => r.status === "pending").slice(0, 4) ?? [];
   return (
     <Card>
       <CardHeader
-        icon={<ClipboardList />}
-        title="Student requests"
-        description="Waiting for your decision"
-        action={<Link to="/faculty/requests" className="text-xs font-medium text-accent-hover">Open inbox</Link>}
-      />
-      <CardBody className="space-y-3">
-        {isLoading && <Skeleton className="h-20 w-full" />}
-        {isError && <ErrorState message={`CampusNexus couldn't load requests. ${(error as Error).message}`} onRetry={() => void refetch()} />}
-        {data && pending.length === 0 && <EmptyState title="No pending requests" description="Requests routed to you appear here." />}
-        {pending.slice(0, 2).map((request) => (
-          <Link key={request.request_id} to="/faculty/requests" className="block">
-            <div className="rounded-lg border border-border px-4 py-3 hover:border-accent/40">
-              <p className="text-sm font-medium">{request.student_name} — {request.title}</p>
-              <p className="mt-0.5 line-clamp-1 text-xs text-muted">{request.reason}</p>
-            </div>
+        title="Requests requiring attention"
+        action={
+          <Link to="/faculty/requests" className="text-[13px] font-medium text-primary hover:underline">
+            Open inbox
           </Link>
-        ))}
-      </CardBody>
+        }
+      />
+      {isLoading && <SkeletonRows rows={2} className="px-5 pb-5" />}
+      {data && pending.length === 0 && <EmptyState compact icon={<Inbox />} title="No pending requests" description="You're all caught up." />}
+      {pending.length > 0 && (
+        <ul className="divide-y divide-border border-t border-border">
+          {pending.map((r) => (
+            <li key={r.request_id}>
+              <Link to="/faculty/requests" className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-surface-muted/60">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink">
+                    {r.student_name ?? r.requester_name} — {r.title}
+                  </p>
+                  <p className="text-xs text-muted">{relativeTime(r.submitted_at ?? r.created_at)}</p>
+                </div>
+                <StatusBadge {...statusOf(WORKFLOW_STATUS, r.status)} />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </Card>
   );
 }
 
 export function FacultyDashboardPage() {
   const { data, isLoading, isError, error, refetch } = useFacultyDashboard();
-  const active = data?.active_class;
+  const active = data?.active_class ?? null;
   return (
     <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        {data ? (
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">
-              {greeting()}, {data.profile.full_name}
-            </h1>
-            <p className="mt-1 text-sm text-muted">
-              {data.profile.designation} · {data.profile.department_name} · {data.profile.employee_code}
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            <Skeleton className="h-7 w-64" />
-            <Skeleton className="h-4 w-80" />
-          </div>
-        )}
-        <p className="text-sm text-muted">{formatLongDate()}</p>
-      </header>
+      <DashboardHeader
+        title={data ? `${greeting()}, ${data.profile.full_name}` : undefined}
+        context={data ? data.profile.department_name : undefined}
+        date={formatLongDate()}
+      />
 
       {isError && <ErrorState message={`CampusNexus couldn't load your dashboard. ${(error as Error).message}`} onRetry={() => void refetch()} />}
+      {isLoading && <MetricSkeletons />}
       {data && (
-        <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-          <Stat label="Classes today" icon={<CalendarDays />} value={data.classes_today} detail={data.classes_today ? `${data.today.filter((c) => c.status === "closed").length} completed` : "Nothing scheduled"} to="/faculty/classes" />
-          <Stat
-            label="Active class"
+        <MetricGrid>
+          <MetricCard
+            label="Classes today"
+            icon={<CalendarDays />}
+            value={data.classes_today}
+            context={data.classes_today ? `${data.today.filter((c) => c.status === "closed").length} completed` : "Nothing scheduled"}
+            to="/faculty/classes"
+          />
+          <MetricCard
+            label="Current class"
             icon={<Radio />}
             value={active ? active.course_code : "None"}
-            detail={active ? `${active.course_title} · ${active.tally.present + active.tally.late}/${active.tally.roster} present` : "No class in session"}
+            context={active ? active.course_title : "No class in session"}
             to={active ? classPath(active) : undefined}
           />
-          <Stat label="Students across today's classes" icon={<Users />} value={data.students_across_today} detail="Distinct students on today's rosters" />
-          <Stat label="Pending student requests" icon={<ClipboardList />} value={data.pending_requests} detail={data.pending_requests ? "Awaiting your decision" : "Inbox clear"} to="/faculty/requests" />
-        </div>
+          <MetricCard label="Students today" icon={<Users />} value={data.students_across_today} context="Across today's rosters" />
+          <MetricCard
+            label="Pending requests"
+            icon={<ClipboardList />}
+            value={data.pending_requests}
+            context={data.pending_requests ? "Awaiting your decision" : "Inbox clear"}
+            tone={data.pending_requests ? "warning" : "default"}
+            to="/faculty/requests"
+          />
+        </MetricGrid>
       )}
 
-      <div className="grid gap-6 xl:grid-cols-3">
-        <div className="xl:col-span-2">
-          <TodayClassesCard classes={data?.today} isLoading={isLoading} />
-        </div>
-        <PendingRequests />
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,65fr)_minmax(0,35fr)]">
+        <TodayClassesCard classes={data?.today} isLoading={isLoading} />
+        {data && <ActiveClassPanel active={active} today={data.today} />}
+      </div>
+
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,65fr)_minmax(0,35fr)]">
+        <RecentRequests />
+        <Card>
+          <CardHeader title="Quick access" />
+          <div className="px-5 pb-5">
+            <AgentTiles agents={FACULTY_AGENTS} basePath="/faculty/agents" className="sm:grid-cols-2" />
+          </div>
+        </Card>
       </div>
     </div>
   );

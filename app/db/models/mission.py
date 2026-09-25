@@ -16,10 +16,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Enum as SAEnum
+from sqlalchemy import ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 from app.schemas.enums import (
     AgentName,
     AgentResultStatus,
@@ -33,7 +34,7 @@ from app.schemas.enums import (
 
 
 def _enum_column(enum_cls: type) -> SAEnum:
-    return SAEnum(enum_cls, values_callable=lambda e: [m.value for m in e])
+    return portable_enum(enum_cls)
 
 
 class Mission(Base):

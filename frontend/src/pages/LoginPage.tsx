@@ -1,20 +1,16 @@
-import { Loader2 } from "lucide-react";
+import { Loader2, LockKeyhole } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { homeRouteFor } from "@/auth/roles";
 import { useAuth } from "@/auth/useAuth";
+import { BrandMark } from "@/components/ui/brand";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Input, Label } from "@/components/ui/input";
 import { ErrorState, Notice } from "@/components/ui/states";
 
-const HIGHLIGHTS = [
-  ["Academics", "Attendance, eligibility and exams, computed from your records."],
-  ["Opportunities", "Events and internships matched to your schedule and skills."],
-  ["Campus services", "Complaints tracked against their service deadlines."],
-  ["Approvals", "Agents prepare actions; people with authority approve them."],
-];
+/** Optional institution name, configured per deployment (never hard-coded). */
+const INSTITUTION = (import.meta.env.VITE_INSTITUTION_NAME as string | undefined)?.trim();
 
 export function LoginPage() {
   const { status, user, login, notice } = useAuth();
@@ -24,6 +20,7 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   if (status === "authenticated" && user) return <Navigate to={homeRouteFor(user.role)} replace />;
 
@@ -44,54 +41,64 @@ export function LoginPage() {
   };
 
   return (
-    <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
-      <section className="hidden flex-col justify-between bg-primary px-14 py-12 text-white lg:flex">
-        <div className="flex items-center gap-3">
-          <img src="/favicon.svg" alt="" className="size-9 rounded-lg" />
-          <div>
-            <div className="font-semibold">CampusNexus AI</div>
-            <div className="text-xs text-white/60">College Operating System</div>
+    <div className="flex min-h-dvh flex-col bg-background px-4 py-8 sm:py-12">
+      <main className="flex flex-1 items-center justify-center">
+        <div className="w-full max-w-[400px]">
+          <div className="flex flex-col items-center text-center">
+            <BrandMark className="size-11" />
+            <p className="mt-3 text-base font-semibold tracking-tight text-ink">
+              CampusNexus <span className="text-primary">AI</span>
+            </p>
+            {INSTITUTION && <p className="mt-0.5 text-sm text-muted">{INSTITUTION}</p>}
           </div>
-        </div>
-        <div className="max-w-lg">
-          <h1 className="text-4xl font-semibold leading-tight tracking-tight">Your intelligent campus workspace</h1>
-          <p className="mt-4 text-base leading-relaxed text-white/75">
-            Academics, opportunities, campus services and approvals — coordinated by specialized AI agents.
-          </p>
-          <dl className="mt-10 grid grid-cols-2 gap-x-8 gap-y-6">
-            {HIGHLIGHTS.map(([title, text]) => (
-              <div key={title}>
-                <dt className="text-sm font-semibold text-accent-soft">{title}</dt>
-                <dd className="mt-1 text-sm leading-relaxed text-white/65">{text}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-        <p className="text-xs text-white/45">Meridian University · local development environment</p>
-      </section>
 
-      <section className="flex items-center justify-center px-6 py-12">
-        <Card className="w-full max-w-sm px-7 py-8">
-          <h2 className="text-xl font-semibold">Sign in</h2>
-          <p className="mt-1 text-sm text-muted">Use your CampusNexus account.</p>
-          {notice && <Notice tone="warning" className="mt-5">{notice}</Notice>}
-          <form className="mt-6 space-y-4" onSubmit={submit} noValidate>
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@campusnexus.local" />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
-            </div>
-            {error && <ErrorState message={error} />}
-            <Button type="submit" className="w-full" size="lg" disabled={submitting || !email || !password}>
-              {submitting && <Loader2 className="animate-spin" />}
-              Sign in
-            </Button>
-          </form>
-        </Card>
-      </section>
+          <div className="mt-8 rounded-card border border-border bg-surface p-6 shadow-[var(--shadow-raised)] sm:p-8">
+            <h1 className="text-xl font-semibold tracking-tight text-ink">Welcome back</h1>
+            <p className="mt-1 text-sm text-muted">Sign in to continue to CampusNexus</p>
+            {notice && (
+              <Notice tone="warning" className="mt-5">
+                {notice}
+              </Notice>
+            )}
+            <form className="mt-6 space-y-4" onSubmit={submit} noValidate>
+              <div className="space-y-1.5">
+                <Label htmlFor="email">Email</Label>
+                <Input id="email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@campusnexus.local" />
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="password">Password</Label>
+                  <button
+                    type="button"
+                    onClick={() => setShowHelp((v) => !v)}
+                    aria-expanded={showHelp}
+                    aria-controls="password-help"
+                    className="text-sm font-medium text-primary hover:underline"
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+                <Input id="password" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} />
+                {showHelp && (
+                  <p id="password-help" className="pt-1 text-sm text-muted">
+                    Passwords are reset by your campus administrator. Ask them for a one-time password, then sign in with it.
+                  </p>
+                )}
+              </div>
+              {error && <ErrorState message={error} />}
+              <Button type="submit" className="w-full" size="lg" disabled={submitting || !email || !password}>
+                {submitting && <Loader2 className="animate-spin" />}
+                Sign in
+              </Button>
+            </form>
+          </div>
+
+          <p className="mt-6 flex items-center justify-center gap-1.5 text-xs text-muted">
+            <LockKeyhole className="size-3.5" /> Secure role-based campus access
+          </p>
+        </div>
+      </main>
+      <p className="mt-8 text-center text-xs text-subtle">CampusNexus AI · Campus Intelligence Platform</p>
     </div>
   );
 }

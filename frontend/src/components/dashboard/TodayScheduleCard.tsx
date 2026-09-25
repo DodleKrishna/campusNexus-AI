@@ -1,52 +1,39 @@
-import { Clock } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { CalendarDays } from "lucide-react";
+import { Card, CardHeader } from "@/components/ui/card";
+import { ScheduleTimeline } from "@/components/ui/schedule-timeline";
 import { SkeletonRows } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState } from "@/components/ui/states";
 import { SLOT } from "@/components/dashboard/status";
 import { useTodaySchedule } from "@/hooks/useStudentData";
-import { cn } from "@/utils/cn";
 
 export function TodayScheduleCard() {
   const { data, isLoading, isError, error, refetch } = useTodaySchedule();
   return (
     <Card>
-      <CardHeader
-        icon={<Clock />}
-        title="Today's schedule"
-        description={data ? `${data.weekday} · times in IST` : "From your timetable"}
-      />
-      <CardBody>
-        {isLoading && <SkeletonRows rows={2} />}
-        {isError && <ErrorState message={`CampusNexus couldn't load your timetable. ${(error as Error).message}`} onRetry={() => void refetch()} />}
-        {data && data.slots.length === 0 && <EmptyState title="No classes today" description={`Nothing on your timetable for ${data.weekday}.`} />}
-        {data && data.slots.length > 0 && (
-          <ol className="space-y-2">
-            {data.slots.map((slot) => (
-              <li
-                key={`${slot.course_code}-${slot.start_time}`}
-                className={cn(
-                  "flex items-center gap-4 rounded-lg border px-4 py-3",
-                  slot.status === "now" ? "border-accent/40 bg-accent-soft" : "border-border",
-                  slot.status === "completed" && "opacity-70",
-                )}
-              >
-                <div className="w-24 shrink-0 text-sm font-semibold tabular-nums">
-                  {slot.start_time}–{slot.end_time}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-medium">{slot.course_title}</div>
-                  <div className="truncate text-xs text-muted">
-                    {slot.course_code} · {slot.location}
-                    {slot.instructor ? ` · ${slot.instructor}` : ""}
-                  </div>
-                </div>
-                <Badge tone={SLOT[slot.status].tone}>{SLOT[slot.status].label}</Badge>
-              </li>
-            ))}
-          </ol>
-        )}
-      </CardBody>
+      <CardHeader title="Today's schedule" description={data ? `${data.weekday} · times in IST` : "From your timetable"} />
+      {isLoading && <SkeletonRows rows={3} className="px-5 pb-5" />}
+      {isError && (
+        <div className="px-5 pb-5">
+          <ErrorState message={`CampusNexus couldn't load your timetable. ${(error as Error).message}`} onRetry={() => void refetch()} />
+        </div>
+      )}
+      {data && data.slots.length === 0 && <EmptyState compact icon={<CalendarDays />} title="No classes today" description={`Nothing on your timetable for ${data.weekday}.`} />}
+      {data && data.slots.length > 0 && (
+        <div className="border-t border-border py-1">
+          <ScheduleTimeline
+            items={data.slots.map((slot) => ({
+              key: `${slot.course_code}-${slot.start_time}`,
+              start: slot.start_time,
+              end: slot.end_time,
+              title: slot.course_title,
+              subtitle: `${slot.location}${slot.instructor ? ` · ${slot.instructor}` : ""}`,
+              status: SLOT[slot.status],
+              current: slot.status === "now",
+              muted: slot.status === "completed",
+            }))}
+          />
+        </div>
+      )}
     </Card>
   );
 }

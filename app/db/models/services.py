@@ -5,10 +5,10 @@ import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, String, Text
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 
 
 class CaseStatus(str, enum.Enum):
@@ -34,11 +34,11 @@ class CampusCase(Base):
     category: Mapped[str] = mapped_column(String(60))  # hostel | fees | facilities | it_helpdesk | administrative
     description: Mapped[str] = mapped_column(Text)
     priority: Mapped[CasePriority] = mapped_column(
-        SAEnum(CasePriority, values_callable=lambda e: [m.value for m in e])
+        portable_enum(CasePriority)
     )
     department: Mapped[str] = mapped_column(String(80))
     status: Mapped[CaseStatus] = mapped_column(
-        SAEnum(CaseStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(CaseStatus),
         default=CaseStatus.OPEN,
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)

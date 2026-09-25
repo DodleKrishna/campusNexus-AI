@@ -4,11 +4,10 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 from app.schemas.enums import UserRole
 
 
@@ -37,7 +36,7 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     full_name: Mapped[str] = mapped_column(String(120))
     role: Mapped[UserRole] = mapped_column(
-        SAEnum(UserRole, values_callable=lambda enum_cls: [e.value for e in enum_cls])
+        portable_enum(UserRole)
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 

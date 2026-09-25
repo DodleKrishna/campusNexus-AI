@@ -11,10 +11,10 @@ import enum
 from datetime import datetime, time
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, Enum as SAEnum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 
 
 class CourseStatus(str, enum.Enum):
@@ -35,7 +35,7 @@ class Course(Base):
     semester: Mapped[int]
     instructor: Mapped[str] = mapped_column(String(120))
     status: Mapped[CourseStatus] = mapped_column(
-        SAEnum(CourseStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(CourseStatus),
         default=CourseStatus.ACTIVE,
     )
 

@@ -1,13 +1,15 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowUp, CheckCircle2, FileCheck2, Loader2, Send, X } from "lucide-react";
+import { ArrowUp, FileCheck2, Loader2, Send, X } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ApiError } from "@/api/client";
 import { api, queryKeys } from "@/api/endpoints";
-import { ModeBadge } from "@/components/layout/ModeBadge";
+import { AgentHeader, ThinkingIndicator } from "@/components/agents/AgentHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { DetailList, DetailRow } from "@/components/ui/detail-list";
 import { Label, Textarea } from "@/components/ui/input";
+import { Stepper } from "@/components/ui/stepper";
 import { ErrorState, Notice } from "@/components/ui/states";
 import { RequestContextView } from "@/features/requests/WorkflowRequestCard";
 import type { PermissionPreview, WorkflowRequest } from "@/types/api";
@@ -31,7 +33,7 @@ const errorText = (error: unknown) => (error instanceof ApiError ? error.message
 
 /**
  * Ask the Permission Agent -> structured preview -> Confirm & Send.
- * The agent only prepares a draft; nothing is sent until the student confirms it.
+ * The agent only prepares a draft; nothing is sent until the requester confirms it.
  */
 export function PermissionAgentPanel({
   onSent,
@@ -96,36 +98,25 @@ export function PermissionAgentPanel({
   }, [initialMessage, prepare]);
 
   return (
-    <div className="space-y-4">
-      <Card className="flex items-start gap-4 px-5 py-4">
-        <div className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent-hover">
-          <FileCheck2 className="size-5" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-lg font-semibold">Permission Agent</h1>
-            <Badge tone="success">Available</Badge>
-          </div>
-          <p className="mt-0.5 text-sm text-muted">{INTRO[role]}</p>
-        </div>
-        <ModeBadge />
-      </Card>
+    <div className="mx-auto w-full max-w-[800px] space-y-6">
+      <AgentHeader icon={FileCheck2} title="Permission Agent" tagline="Prepares your request. Nothing is sent until you confirm it." capability="Prepares requests" />
 
-      <Card className="px-5 py-4">
-        <div className="mb-3 flex flex-wrap gap-2">
+      <Card className="p-4 sm:p-5">
+        <p className="text-sm text-muted">{INTRO[role]}</p>
+        <div className="mt-3 flex flex-wrap gap-1.5">
           {SUGGESTIONS[role].map((suggestion) => (
             <button
               key={suggestion}
               type="button"
               disabled={prepare.isPending}
               onClick={() => ask(suggestion)}
-              className="rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted transition-colors hover:border-accent/40 hover:text-ink disabled:opacity-50"
+              className="rounded-md border border-border bg-surface px-2.5 py-1 text-left text-[13px] text-ink transition-colors hover:border-primary/40 hover:bg-primary-soft/50 disabled:opacity-50"
             >
               {suggestion}
             </button>
           ))}
         </div>
-        <div className="flex items-end gap-2">
+        <div className="mt-4 flex items-end gap-2 rounded-card border border-border bg-surface p-2 transition-colors focus-within:border-primary focus-within:ring-3 focus-within:ring-primary/15">
           <Textarea
             rows={2}
             value={message}
@@ -134,25 +125,24 @@ export function PermissionAgentPanel({
             onKeyDown={onKeyDown}
             placeholder="e.g. I need permission to attend the coding contest."
             aria-label="Message Permission Agent"
-            className="resize-none"
+            className="field-sizing-content max-h-40 min-h-9 resize-none border-0 bg-transparent py-2 shadow-none hover:border-0 focus:ring-0"
           />
           <Button variant="accent" size="icon" aria-label="Prepare request" onClick={() => ask(message)} disabled={message.trim().length < 3 || prepare.isPending}>
             {prepare.isPending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
           </Button>
         </div>
-        {prepare.isPending && <p className="mt-2 text-sm text-muted" role="status">Collecting your classes, attendance and the right reviewer…</p>}
+        {prepare.isPending && (
+          <div className="mt-3">
+            <ThinkingIndicator label="Collecting your classes, attendance and the right reviewer…" />
+          </div>
+        )}
         {prepare.isError && <ErrorState className="mt-3" message={errorText(prepare.error)} />}
       </Card>
 
       {sent && (
         <Notice tone="success">
-          <div className="flex items-start gap-2">
-            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
-            <span>
-              Sent. {sent.title} is <strong>{sent.status === "pending" ? "pending" : "waiting for review"}</strong>
-              {sent.reviewer_name ? ` with ${sent.reviewer_name}` : ""}.
-            </span>
-          </div>
+          Sent. {sent.title} is <strong>{sent.status === "pending" ? "pending" : "waiting for review"}</strong>
+          {sent.reviewer_name ? ` with ${sent.reviewer_name}` : ""}.
         </Notice>
       )}
 
@@ -160,7 +150,7 @@ export function PermissionAgentPanel({
         <Notice tone="warning">
           <p>{preview.message}</p>
           {preview.options.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
+            <div className="mt-3 flex flex-wrap gap-2">
               {preview.options.map((option) => (
                 <Button key={option} variant="outline" size="sm" onClick={() => ask(`${message} (${option})`.replace(/\s+/g, " "))}>
                   {option}
@@ -172,27 +162,43 @@ export function PermissionAgentPanel({
       )}
 
       {draft && (
-        <Card className="space-y-4 px-5 py-4" aria-label="Request preview">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-subtle">Request preview · not sent yet</p>
-              <h2 className="mt-1 text-base font-semibold">{draft.title}</h2>
+        <Card className="overflow-hidden" aria-label="Request preview">
+          <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-4 pb-4">
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-warning">Preview · not sent yet</p>
+              <h2 className="mt-1 text-base font-semibold text-ink">{draft.title}</h2>
               <p className="mt-1 text-sm text-muted">{preview?.message}</p>
             </div>
             <Badge tone="primary">{draft.type_label}</Badge>
           </div>
-          <div className="rounded-lg border border-border bg-surface-muted px-4 py-3 text-sm">
-            <span className="text-muted">Will be sent to: </span>
-            <span className="font-medium">{draft.reviewer_name ?? "No reviewer found (it will wait for review)"}</span>
-            <p className="mt-0.5 text-xs text-muted">{draft.routing_note}</p>
+          <div className="grid grid-cols-1 gap-6 border-t border-border px-5 py-4 md:grid-cols-[minmax(0,1fr)_15rem]">
+            <div className="min-w-0 space-y-5">
+              <DetailList>
+                <DetailRow label="Will be sent to">
+                  {draft.reviewer_name ?? "No reviewer found (it will wait for review)"}
+                  <p className="text-xs font-normal text-muted">{draft.routing_note}</p>
+                </DetailRow>
+              </DetailList>
+              <RequestContextView request={draft} />
+              <div className="space-y-1.5">
+                <Label htmlFor="permission-reason">Reason</Label>
+                <Textarea id="permission-reason" rows={2} value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
+              </div>
+            </div>
+            <div className="md:border-l md:border-border md:pl-6">
+              <p className="mb-3 text-xs text-muted">What happens next</p>
+              <Stepper
+                steps={[
+                  { label: "Request prepared", state: "done" },
+                  { label: "You confirm and send", state: "current" },
+                  { label: draft.reviewer_name ? `Sent to ${draft.reviewer_name}` : "Waits for a reviewer", state: "upcoming" },
+                  { label: "Approved or rejected", state: "upcoming" },
+                ]}
+              />
+            </div>
           </div>
-          <RequestContextView request={draft} />
-          <div className="space-y-1.5">
-            <Label htmlFor="permission-reason">Reason</Label>
-            <Textarea id="permission-reason" rows={2} value={reason} maxLength={1000} onChange={(event) => setReason(event.target.value)} />
-          </div>
-          {submit.isError && <ErrorState message={errorText(submit.error)} />}
-          <div className="flex flex-wrap justify-end gap-2">
+          {submit.isError && <ErrorState className="mx-5 mb-4" message={errorText(submit.error)} />}
+          <div className="flex flex-col-reverse gap-2 border-t border-border px-5 py-4 sm:flex-row sm:justify-end">
             <Button variant="ghost" onClick={() => discard.mutate(draft)} disabled={submit.isPending || discard.isPending}>
               <X /> Discard
             </Button>

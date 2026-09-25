@@ -28,7 +28,7 @@ describe("authentication and routing", () => {
   it("sends anonymous visitors to the login page", async () => {
     mockApi(() => undefined);
     renderApp("/student");
-    expect(await screen.findByRole("heading", { name: "Sign in" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
   });
 
   it("signs a student in and lands on the student dashboard", async () => {

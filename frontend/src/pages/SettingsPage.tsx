@@ -1,45 +1,55 @@
 import { ROLE_LABELS } from "@/auth/roles";
 import { useAuth } from "@/auth/useAuth";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { WORKSPACE_LABELS } from "@/components/layout/navigation";
+import { ModeBadge } from "@/components/layout/ModeBadge";
+import { Button } from "@/components/ui/button";
+import { DetailList, DetailRow } from "@/components/ui/detail-list";
+import { FormSection } from "@/components/ui/form-section";
 import { useHealth } from "@/hooks/useStudentData";
 import { PageTitle } from "@/pages/PageTitle";
 
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex justify-between border-b border-dashed border-border py-2.5 text-sm last:border-0">
-      <span className="text-muted">{label}</span>
-      <span className="font-medium">{value}</span>
-    </div>
-  );
-}
-
 export function SettingsPage() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { data: health } = useHealth();
   if (!user) return null;
   return (
-    <div className="max-w-2xl space-y-6">
+    <div className="max-w-4xl space-y-6">
       <PageTitle title="Settings" description="Your account and how this CampusNexus instance is running." />
-      <Card>
-        <CardHeader title="Account" />
-        <CardBody>
-          <Row label="Name" value={user.display_name} />
-          <Row label="Email" value={user.email} />
-          <Row label="Role" value={ROLE_LABELS[user.role]} />
-          {user.student_id && <Row label="Student ID" value={user.student_id} />}
-          {user.department_name && <Row label="Department" value={user.department_name} />}
-        </CardBody>
-      </Card>
-      {health && (
-        <Card>
-          <CardHeader title="AI mode" />
-          <CardBody>
-            <Row label="Mode" value={health.llm.live ? "Live AI" : "Local / deterministic (no external AI)"} />
-            <Row label="Provider" value={health.llm.provider} />
-            {health.llm.model && <Row label="Model" value={health.llm.model} />}
-          </CardBody>
-        </Card>
-      )}
+      <div>
+        <FormSection title="Account" description="Managed by your institution. Contact an administrator to change these details.">
+          <DetailList>
+            <DetailRow label="Name">{user.display_name}</DetailRow>
+            <DetailRow label="Email">{user.email}</DetailRow>
+            <DetailRow label="Role">{ROLE_LABELS[user.role]}</DetailRow>
+            {user.student_id && <DetailRow label="Student ID">{user.student_id}</DetailRow>}
+          </DetailList>
+        </FormSection>
+        <FormSection title="Workspace">
+          <DetailList>
+            <DetailRow label="Workspace">{WORKSPACE_LABELS[user.role]}</DetailRow>
+            {user.department_name && <DetailRow label="Department">{user.department_name}</DetailRow>}
+          </DetailList>
+        </FormSection>
+        {health && (
+          <FormSection title="System information" description="Deterministic output is never presented as live AI.">
+            <DetailList>
+              <DetailRow label="AI mode">
+                <ModeBadge />
+              </DetailRow>
+              <DetailRow label="Provider">{health.llm.provider}</DetailRow>
+              {health.llm.model && <DetailRow label="Model">{health.llm.model}</DetailRow>}
+            </DetailList>
+          </FormSection>
+        )}
+        <FormSection title="Session">
+          <div className="flex items-center justify-between gap-4 py-3">
+            <p className="text-sm text-muted">Sign out of CampusNexus on this device.</p>
+            <Button variant="danger" size="sm" onClick={() => void logout()}>
+              Sign out
+            </Button>
+          </div>
+        </FormSection>
+      </div>
     </div>
   );
 }

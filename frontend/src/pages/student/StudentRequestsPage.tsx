@@ -1,26 +1,31 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { FilePlus2, X } from "lucide-react";
-import { Link } from "react-router-dom";
+import { X } from "lucide-react";
+import { useState } from "react";
+import { ApiError } from "@/api/client";
 import { api, queryKeys } from "@/api/endpoints";
+import { AskAgentLink } from "@/components/agents/AskAgentLink";
 import { RequestsCard } from "@/components/dashboard/RequestsCard";
-import { buttonVariants } from "@/components/ui/button-variants";
 import { Button } from "@/components/ui/button";
-import { SkeletonRows } from "@/components/ui/skeleton";
-import { EmptyState, ErrorState } from "@/components/ui/states";
-import { WorkflowRequestCard } from "@/features/requests/WorkflowRequestCard";
-import { useWorkflowRequests } from "@/hooks/useStudentData";
+import { ErrorState } from "@/components/ui/states";
+import { TabPanel, Tabs } from "@/components/ui/tabs";
+import { RequestList } from "@/features/requests/RequestList";
+import { useRequests, useWorkflowRequests } from "@/hooks/useStudentData";
 import { PageTitle } from "@/pages/PageTitle";
 import type { WorkflowRequest } from "@/types/api";
 
-function CancelButton({ request }: { request: WorkflowRequest }) {
+function WithdrawAction({ request, onDone }: { request: WorkflowRequest; onDone: () => void }) {
   const client = useQueryClient();
   const cancel = useMutation({
     mutationFn: () => api.cancelRequest(request.request_id),
-    onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.workflowRequests }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: queryKeys.workflowRequests });
+      onDone();
+    },
   });
   return (
-    <div className="flex justify-end">
-      <Button variant="ghost" size="sm" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
+    <div className="space-y-2">
+      {cancel.isError && <ErrorState message={cancel.error instanceof ApiError ? cancel.error.message : "That didn't work. Please try again."} />}
+      <Button variant="danger" className="w-full" onClick={() => cancel.mutate()} disabled={cancel.isPending}>
         <X /> Withdraw request
       </Button>
     </div>
@@ -28,43 +33,45 @@ function CancelButton({ request }: { request: WorkflowRequest }) {
 }
 
 export function StudentRequestsPage() {
-  const { data, isLoading, isError, error, refetch } = useWorkflowRequests();
+  const { data, isLoading, error, refetch } = useWorkflowRequests();
+  const approvals = useRequests();
+  const [section, setSection] = useState("permissions");
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="space-y-6">
       <PageTitle
         title="Requests"
         description="Permission, leave and on-duty requests you have sent, and actions awaiting approval."
-        action={
-          <Link to="/student/agents/permission" className={buttonVariants({ variant: "accent" })}>
-            <FilePlus2 /> New Permission Request
-          </Link>
-        }
+        action={<AskAgentLink to="/student/agents/permission" label="Ask Permission Agent" />}
       />
-
-      <section className="space-y-3">
-        <h2 className="text-base font-semibold">Permission requests</h2>
-        {isLoading && <SkeletonRows rows={3} />}
-        {isError && <ErrorState message={`CampusNexus couldn't load your requests. ${(error as Error).message}`} onRetry={() => void refetch()} />}
-        {data && data.length === 0 && (
-          <EmptyState
-            title="No permission requests yet"
-            description="Ask the Permission Agent. It prepares the request with your classes and attendance, and you confirm before it is sent."
-          />
-        )}
-        {data?.map((request) => (
-          <WorkflowRequestCard
-            key={request.request_id}
-            request={request}
-            viewer="student"
-            actions={request.status === "pending" || request.status === "needs_review" ? <CancelButton request={request} /> : undefined}
-          />
-        ))}
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-base font-semibold">Action approvals</h2>
-        <RequestsCard />
-      </section>
+      {approvals.data && approvals.data.length > 0 && (
+        <Tabs
+          label="Request type"
+          value={section}
+          onChange={setSection}
+          tabs={[
+            { id: "permissions", label: "Permission requests" },
+            { id: "approvals", label: "Action approvals", count: approvals.data.length },
+          ]}
+        />
+      )}
+      {section === "approvals" ? (
+        <TabPanel className="pt-0">
+          <RequestsCard />
+        </TabPanel>
+      ) : (
+        <RequestList
+          requests={data}
+          isLoading={isLoading}
+          error={error as Error | null}
+          onRetry={() => void refetch()}
+          actions={(request, close) => (request.status === "pending" || request.status === "needs_review" ? <WithdrawAction request={request} onDone={close} /> : null)}
+          empty={{
+            title: "No permission requests yet",
+            description: "Ask the Permission Agent. It prepares the request with your classes and attendance, and you confirm before it is sent.",
+            action: <AskAgentLink to="/student/agents/permission" label="Ask Permission Agent" />,
+          }}
+        />
+      )}
     </div>
   );
 }

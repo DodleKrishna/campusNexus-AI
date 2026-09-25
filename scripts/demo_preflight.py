@@ -29,7 +29,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from sqlalchemy import func, select
 
 from app.db.models import Event, Student
-from app.db.session import open_database, create_session_factory, get_database_url
+from app.db.session import create_session_factory, describe_database, get_database_url, open_database, safe_error
 from app.llm.base import LLMProviderError
 from app.llm.factory import get_llm_provider
 from app.rag.config import get_rag_config
@@ -45,10 +45,19 @@ Result = Tuple[str, bool, str]
 
 def check_database() -> List[Result]:
     results: List[Result] = []
-    db_path = get_database_url().removeprefix("sqlite:///")
-    if not Path(db_path).exists():
-        return [("database", False, f"{db_path} does not exist. Run: python scripts/reset_demo_env.py")]
-    engine = open_database()
+    url = get_database_url()
+    if describe_database(url)["dialect"] == "sqlite":
+        db_path = url.removeprefix("sqlite:///")
+        if not Path(db_path).exists():
+            return [("database", False, f"{db_path} does not exist. Run: python scripts/reset_demo_env.py")]
+        label = db_path
+    else:
+        # Phase 21: never print a PostgreSQL URL, host or user -- only which kind of database it is.
+        label = describe_database(url)["label"]
+    try:
+        engine = open_database()
+    except Exception as exc:  # noqa: BLE001 -- a preflight reports, never crashes
+        return [("database", False, f"{label}: {safe_error(exc, url)}")]
     session_factory = create_session_factory(engine)
     try:
         with session_factory() as session:
@@ -58,15 +67,15 @@ def check_database() -> List[Result]:
                 select(func.count()).select_from(Event).where(Event.start_at > datetime.now(timezone.utc))
             ).scalar_one()
     except Exception as exc:  # noqa: BLE001 -- a preflight reports, never crashes
-        return [("database", False, f"{db_path}: {type(exc).__name__}: {exc}")]
+        return [("database", False, f"{label}: {safe_error(exc, url)}")]
     finally:
         engine.dispose()
-    results.append(("database seeded", students > 0, f"{db_path} ({students} students)"))
+    results.append(("database seeded", students > 0, f"{label} ({students} students)"))
     results.append(("demo student", demo is not None, DEMO_STUDENT))
     results.append((
         "upcoming events",
         upcoming > 0,
-        f"{upcoming} events still in the future" + ("" if upcoming else ". Seed dates are stale: re-run reset_demo_env.py"),
+        f"{upcoming} events still in the future" + ("" if upcoming else ". Seed dates are stale: re-run reset_demo_env.py (SQLite) or seed_database.py --demo-classes (PostgreSQL)"),
     ))
     return results
 

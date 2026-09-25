@@ -1,4 +1,22 @@
-import { Bot, Building2, Cpu, FileCheck2, ScrollText, UserCog, Users, Briefcase, CalendarDays, ClipboardCheck, ClipboardList, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, type LucideIcon } from "lucide-react";
+import {
+  Bot,
+  Briefcase,
+  Building2,
+  CalendarDays,
+  ClipboardCheck,
+  ClipboardList,
+  Cpu,
+  FileCheck2,
+  GraduationCap,
+  Inbox,
+  LayoutDashboard,
+  MessageSquareWarning,
+  School,
+  ScrollText,
+  UserCog,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import type { Role } from "@/types/api";
 
 export interface NavItem {
@@ -51,6 +69,14 @@ const ADMIN_NAV: NavItem[] = [
   { label: "Agents", to: "/admin/agents", icon: Bot },
 ];
 
+export const WORKSPACE_LABELS: Record<Role, string> = {
+  student: "Student workspace",
+  faculty: "Faculty workspace",
+  hod: "HOD workspace",
+  admin: "Admin workspace",
+  staff: "Staff",
+};
+
 export function navigationFor(role: Role): NavItem[] {
   if (role === "student") return STUDENT_NAV;
   if (role === "faculty") return FACULTY_NAV;
@@ -62,4 +88,24 @@ export function navigationFor(role: Role): NavItem[] {
 export function settingsPathFor(role: Role): string {
   const home = navigationFor(role)[0];
   return home ? `${home.to}/settings` : "/";
+}
+
+/** Where "Ask CampusNexus" sends a question: the role's own read-only Enquiry Agent. */
+export function enquiryPathFor(role: Role): string | null {
+  const home = navigationFor(role)[0];
+  return home ? `${home.to}/agents/enquiry` : null;
+}
+
+/** The section title shown in the top bar for the current path. */
+export function sectionTitleFor(role: Role, pathname: string): string {
+  if (pathname.endsWith("/settings")) return "Settings";
+  const items = navigationFor(role);
+  const exact = items.find((item) => item.to === pathname);
+  if (exact) return exact.label;
+  const prefix = items
+    .filter((item) => pathname.startsWith(`${item.to}/`))
+    .sort((a, b) => b.to.length - a.to.length)[0];
+  if (prefix) return prefix.label;
+  if (pathname.includes("/agents")) return "Agents";
+  return items[0]?.label ?? "";
 }

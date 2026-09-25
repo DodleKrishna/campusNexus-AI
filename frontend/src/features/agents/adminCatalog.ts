@@ -5,6 +5,8 @@ import type { AgentDefinition } from "@/features/agents/catalog";
 export const ADMIN_AGENTS: AgentDefinition[] = [
   {
     key: "enquiry",
+    title: "CampusNexus Assistant",
+    tagline: "Ask across the institution",
     name: "Enquiry Agent",
     backendAgent: null,
     responsibility: "Institution-wide questions, answered by checking operations, attendance, requests, complaints and system health.",
@@ -14,6 +16,7 @@ export const ADMIN_AGENTS: AgentDefinition[] = [
   },
   {
     key: "academic",
+    tagline: "Classes and attendance risk campus-wide",
     name: "Academic Agent",
     backendAgent: "academic_agent",
     responsibility: "Classes running or not started, and attendance risk across departments.",
@@ -23,6 +26,7 @@ export const ADMIN_AGENTS: AgentDefinition[] = [
   },
   {
     key: "complaints",
+    tagline: "Complaints and SLA state campus-wide",
     name: "Complaints Agent",
     backendAgent: "campus_services_agent",
     responsibility: "Complaints across the institution and their SLA state.",
@@ -32,6 +36,7 @@ export const ADMIN_AGENTS: AgentDefinition[] = [
   },
   {
     key: "permission",
+    tagline: "Pending requests and escalations",
     name: "Permission Agent",
     backendAgent: null,
     responsibility: "Requests pending anywhere, and escalations to HODs and the administration.",
@@ -41,6 +46,7 @@ export const ADMIN_AGENTS: AgentDefinition[] = [
   },
   {
     key: "events",
+    tagline: "Upcoming campus events",
     name: "Events Agent",
     backendAgent: "events_opportunity_agent",
     responsibility: "Upcoming campus events.",

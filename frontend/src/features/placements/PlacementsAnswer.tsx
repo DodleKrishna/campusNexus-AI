@@ -1,4 +1,4 @@
-import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { Badge, StatusBadge, type BadgeTone } from "@/components/ui/badge";
 import { asArray } from "@/features/facts";
 import { AnswerText, FactCard } from "@/features/shared";
 import type { Facts } from "@/types/api";
@@ -28,13 +28,15 @@ export function PlacementsAnswer({ facts, answer }: { facts: Facts; answer: stri
         <FactCard title="Skills to develop">
           <div className="flex flex-wrap gap-1.5 pt-1">
             {gaps.map((gap) => (
-              <Badge key={gap} tone="warning">{gap}</Badge>
+              <Badge key={gap} tone="warning">
+                {gap}
+              </Badge>
             ))}
           </div>
         </FactCard>
       )}
       {eligibleFirst.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {eligibleFirst.map((e) => {
             const missing = [...e.missing_mandatory_skills, ...e.missing_recommended_skills].map(skillName);
             return (
@@ -46,7 +48,7 @@ export function PlacementsAnswer({ facts, answer }: { facts: Facts; answer: stri
                     <span className="block text-xs font-normal text-muted">{e.opportunity.company}</span>
                   </span>
                 }
-                aside={<Badge tone={TONES[e.status] ?? "neutral"}>{titleCase(e.status)}</Badge>}
+                aside={<StatusBadge label={titleCase(e.status)} tone={TONES[e.status] ?? "neutral"} />}
               >
                 <div>
                   {titleCase(e.opportunity.opportunity_type)} · min CGPA {e.opportunity.minimum_cgpa}

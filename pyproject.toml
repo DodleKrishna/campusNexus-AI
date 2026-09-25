@@ -35,6 +35,12 @@ llm = [
     # plain httpx (already installed transitively via chromadb) -- no Groq/OpenAI SDK.
     "httpx>=0.27,<1",
 ]
+# Phase 21: PostgreSQL / Supabase (CAMPUSNEXUS_DATABASE_URL=postgresql+psycopg://...).
+# psycopg 3 is the only supported PostgreSQL driver; SQLAlchemy imports it only
+# when a PostgreSQL engine is created, so SQLite-only installs never need it.
+postgres = [
+    "psycopg[binary]>=3.2,<4",
+]
 # Phase 8: the FastAPI application layer + Streamlit demo UI. Kept as a
 # separate extra so a pure-backend/test install (`pip install -e ".[dev]"`)
 # stays lean -- nothing under app/ (agents, rules, verification, etc.) ever

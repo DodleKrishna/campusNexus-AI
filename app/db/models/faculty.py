@@ -18,11 +18,11 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 
 
 def _enum(cls: type[enum.Enum]) -> SAEnum:
-    return SAEnum(cls, values_callable=lambda e: [m.value for m in e])
+    return portable_enum(cls)
 
 
 class FacultyProfile(Base):

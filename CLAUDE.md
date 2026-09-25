@@ -355,6 +355,32 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - Tests that depend on the seeded dates (seed is relative to "now") must derive expectations from the seed
   (e.g. `TIMETABLE_SEED`), never hard-code the weekday they were written on.
 
+## Database Portability: SQLite + Supabase PostgreSQL (Phase 21)
+
+- SQLite is the local/offline/test database. Supabase PostgreSQL is the cloud/product database. Both use the
+  same SQLAlchemy models, repositories and services. Never add a Supabase REST/Data API path, and never
+  give the frontend direct database access (React → FastAPI → SQLAlchemy only).
+- Selection (`app/db/session.py::get_database_url`): an explicit `db_path` (always SQLite), then
+  `CAMPUSNEXUS_DATABASE_URL`, then `CAMPUSNEXUS_DB_PATH`, then `data/campusnexus.db`. psycopg 3
+  (`postgresql+psycopg`, the `postgres` extra) is the only PostgreSQL driver. Every engine comes from
+  `create_database_engine`. Never create an engine, connect, upgrade or seed at import time.
+- Column types must stay portable. Enum columns use `portable_enum` (VARCHAR, never a native PostgreSQL
+  ENUM). Timestamps use `UTCDateTime` (timestamptz on PostgreSQL, aware UTC in and out, naive input
+  rejected). No JSONB/ARRAY without a real need. Remember that PostgreSQL enforces VARCHAR lengths and
+  case-sensitive `LIKE`, which SQLite does not.
+- Never print or return a database URL, host, user or password. Report the dialect/label only
+  (`describe_database`) and pass driver errors through `safe_error`.
+- `upgrade_schema` keeps application tables out of Supabase's Data API (RLS on, `anon`/`authenticated`
+  revoked). Never grant those roles access or ship a Supabase key to React. Tenant RLS policies are a future
+  multi-tenancy requirement.
+- Remote data is never deleted by default. `reset_demo_env.py` touches only local SQLite.
+  `seed_database.py --reset` on PostgreSQL needs `--allow-remote-reset --confirm-database <name>`.
+  `migrate_sqlite_to_postgres.py` refuses a non-empty target, except `--merge-identical`, which only adds
+  missing rows and refuses any differing row.
+- `tests/conftest.py` removes `CAMPUSNEXUS_DATABASE_URL`, so the normal suite stays SQLite/offline. PostgreSQL
+  tests (`tests/test_phase21_postgres.py`) run only with `CAMPUSNEXUS_TEST_DATABASE_URL`, each in a throwaway
+  schema. Auth (bcrypt + JWT) and RAG (Chroma) are unchanged: no Supabase Auth, no pgvector.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -519,6 +545,17 @@ pytest tests/test_phase17_hod_ops.py -v
 powershell -ExecutionPolicy Bypass -File scripts/start_campusnexus.ps1 -Reset
 powershell -ExecutionPolicy Bypass -File scripts/start_campusnexus.ps1
 
+# Phase 21: PostgreSQL / Supabase. Put the Session pooler URI in the shell only (never in a committed file).
+pip install -e ".[dev,app,postgres]"
+$env:CAMPUSNEXUS_DATABASE_URL = "<Supabase session pooler URI>"
+python scripts/init_postgres_db.py                     # create/upgrade schema, lock down the Data API, verify
+python scripts/seed_database.py --demo-classes          # idempotent seed (or --sqlite PATH for SQLite)
+python scripts/migrate_sqlite_to_postgres.py --source data/demo/campusnexus_demo.db --dry-run
+python scripts/migrate_sqlite_to_postgres.py --source data/demo/campusnexus_demo.db   # copy + count/FK verification
+powershell -ExecutionPolicy Bypass -File scripts/start_campusnexus.ps1   # prints "Database: PostgreSQL"
+# Optional PostgreSQL tests (throwaway schemas); add CAMPUSNEXUS_TEST_ALL_ON_POSTGRES=1 to run the whole suite there.
+$env:CAMPUSNEXUS_TEST_DATABASE_URL = "postgresql://..."; pytest tests/test_phase21_postgres.py
+
 # Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
 # resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,
 # execute exactly once with a verified postcondition. Exits non-zero on any deviation.
@@ -541,3 +578,49 @@ A change is done only when:
 4. Relevant `pytest` tests are added/updated and pass.
 5. No policy/fact claim is made without RAG-backed evidence.
 6. The audit trail captures the action and any approval decision.
+
+<!-- code-review-graph MCP tools -->
+## MCP Tools: code-review-graph
+
+**This project has a knowledge graph. Start with the code-review-graph
+MCP tools to narrow scope, then read the source.** The graph is cheaper than scanning files and
+gives you structural context (callers, dependents, test coverage) that file search cannot.
+
+### When to use graph tools FIRST
+
+- **Exploring code**: `semantic_search_nodes_tool` or `query_graph_tool` instead of Grep
+- **Understanding impact**: `get_impact_radius_tool` instead of manually tracing imports
+- **Code review**: `detect_changes_tool` + `get_review_context_tool` instead of reading entire files
+- **Finding relationships**: `query_graph_tool` with callers_of/callees_of/imports_of/tests_for
+- **Architecture questions**: `get_architecture_overview_tool` + `list_communities_tool`
+
+### Verify in the source
+
+- Narrow scope with the graph, then read the source. Do not change code from graph output alone.
+- For any non-trivial change, read the implementation and the relevant tests before concluding.
+- Verify the exact source when touching behavior, database logic, migrations, retries, fallbacks,
+  recovery, or compatibility code.
+- When the graph and the source disagree, the source wins. The graph may be stale or may not
+  model that relationship.
+- An empty graph result can mean "not indexed" or "not statically visible", not "does not exist".
+
+### Key Tools
+
+| Tool | Use when |
+| ------ | ---------- |
+| `detect_changes_tool` | Reviewing code changes — gives risk-scored analysis |
+| `get_review_context_tool` | Need source snippets for review — token-efficient |
+| `get_impact_radius_tool` | Understanding blast radius of a change |
+| `get_affected_flows_tool` | Finding which execution paths are impacted |
+| `query_graph_tool` | Tracing callers, callees, imports, tests, dependencies |
+| `semantic_search_nodes_tool` | Finding functions/classes by name or keyword |
+| `get_architecture_overview_tool` | Understanding high-level codebase structure |
+| `refactor_tool` | Planning renames, finding dead code |
+
+### Workflow
+
+1. The graph auto-updates on file changes (via hooks).
+2. Use `detect_changes_tool` for code review.
+3. Use `get_affected_flows_tool` to understand impact.
+4. Use `query_graph_tool` pattern="tests_for" to check coverage.
+<!-- /code-review-graph MCP tools -->

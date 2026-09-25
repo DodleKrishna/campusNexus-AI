@@ -1,4 +1,5 @@
-import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { CalendarClock, MapPin } from "lucide-react";
+import { StatusBadge, type BadgeTone } from "@/components/ui/badge";
 import { asArray } from "@/features/facts";
 import { AnswerText, FactCard } from "@/features/shared";
 import type { Facts } from "@/types/api";
@@ -19,7 +20,7 @@ interface Assessment {
 function status(a: Assessment): { label: string; tone: BadgeTone; detail?: string } {
   if (a.already_registered) return { label: "Registered", tone: "success" };
   const clashes = [...a.timetable_conflicts.map((c) => `${c.course_code} class`), ...a.exam_conflicts.map((c) => `${c.course_code} ${c.exam_type ?? ""} exam`.replace("  ", " "))];
-  if (clashes.length) return { label: "Clash", tone: "danger", detail: `Clashes with ${clashes.join(", ")}` };
+  if (clashes.length) return { label: "Conflict", tone: "danger", detail: `Clashes with ${clashes.join(", ")}` };
   if (a.availability === "full") return { label: "Full", tone: "danger" };
   if (a.availability === "registration_closed") return { label: "Closed", tone: "neutral" };
   if (a.availability === "not_open") return { label: "Not open yet", tone: "neutral" };
@@ -32,16 +33,20 @@ export function EventsAnswer({ facts, answer }: { facts: Facts; answer: string }
   return (
     <div className="space-y-3">
       {assessments.length > 0 && (
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {assessments.map((a) => {
             const s = status(a);
             const matched = a.matched_skill_gaps.length ? a.matched_skill_gaps : a.matched_terms;
             return (
-              <FactCard key={a.event.event_id} title={a.event.title} aside={<Badge tone={s.tone}>{s.label}</Badge>}>
-                <div className="text-ink">
+              <FactCard key={a.event.event_id} title={a.event.title} aside={<StatusBadge label={s.label} tone={s.tone} />}>
+                <div className="flex items-center gap-1.5 text-ink">
+                  <CalendarClock aria-hidden className="size-3.5 shrink-0 text-subtle" />
                   {formatDate(a.event.start_at)} · {formatTime(a.event.start_at)}–{formatTime(a.event.end_at)} IST
                 </div>
-                <div>{a.event.location}</div>
+                <div className="flex items-center gap-1.5">
+                  <MapPin aria-hidden className="size-3.5 shrink-0 text-subtle" />
+                  {a.event.location}
+                </div>
                 {s.detail && <div className={s.tone === "danger" ? "text-danger-strong" : undefined}>{s.detail}</div>}
                 {matched.length > 0 && <div className="text-xs">Matches: {matched.join(", ")}</div>}
               </FactCard>

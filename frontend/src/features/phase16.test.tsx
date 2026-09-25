@@ -54,7 +54,7 @@ describe("Faculty dashboard", () => {
     renderApp("/faculty");
 
     expect(await screen.findByText(/, Dr. Ashok Verma$/)).toBeInTheDocument();
-    expect(screen.getByText("Students across today's classes").parentElement?.textContent).toContain("12");
+    expect(screen.getByText("Students today").parentElement?.textContent).toContain("12");
     expect(await screen.findByText("Aditi Rao — Event Permission: Competitive Coding Contest")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Student Requests" })).toBeInTheDocument();
 

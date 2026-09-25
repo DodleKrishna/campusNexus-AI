@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
@@ -106,13 +107,17 @@ def schedule_tomorrow_afternoon(session: Session, *, course_code: str = "CS303",
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("--db", default=str(DEFAULT_DB), help="SQLite database (default: the demo database).")
+    parser.add_argument(
+        "--db", default=None,
+        help="SQLite database (default: CAMPUSNEXUS_DATABASE_URL when set, e.g. PostgreSQL; else the demo database).",
+    )
     parser.add_argument("--course", default="CS303")
     parser.add_argument("--section", default="1")
     parser.add_argument("--minutes", type=int, default=60)
     parser.add_argument("--tomorrow-afternoon", action="store_true", help="Also schedule an extra class tomorrow 14:00-15:00.")
     args = parser.parse_args()
-    engine = open_database(args.db)
+    db = args.db if args.db or os.environ.get("CAMPUSNEXUS_DATABASE_URL") else str(DEFAULT_DB)
+    engine = open_database(db)
     with create_session_factory(engine)() as session:
         rows = [schedule_extra_class(session, course_code=args.course, section=args.section, minutes=args.minutes)]
         if args.tomorrow_afternoon:

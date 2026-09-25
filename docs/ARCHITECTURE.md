@@ -139,7 +139,8 @@ later (e.g., SQLite → Postgres) as long as the frozen agent boundaries and cor
 
 ## Database Implementation (Phase 2)
 
-- SQLite via SQLAlchemy 2.x typed ORM (`app/db/`). No Alembic yet -- schema changes recreate the dev DB by
+- SQLite via SQLAlchemy 2.x typed ORM (`app/db/`); Phase 21 adds PostgreSQL / Supabase on the same models (see
+  "Database Portability" below). No Alembic yet -- schema changes recreate the dev DB by
   re-running `scripts/seed_data.py`, which is an acceptable hackathon-scope tradeoff for now.
 - `app/db/models/` groups ORM models by domain (identity, academic, career, events, services, communication,
   mission) mirroring the frozen agent boundaries, but these are **persistence** representations -- they
@@ -1463,9 +1464,99 @@ Operations, Audit Log, Agents and Settings.
 - Any active admin can decide an admin-routed request; there is no per-admin assignment.
 - Delayed-class warnings are still generated on HOD view; admins read the class state live.
 
+## Database Portability: SQLite + Supabase PostgreSQL (Phase 21)
+
+The same SQLAlchemy models, repositories, Context Service, rules and agents run on either database.
+Nothing above the engine knows which one is in use:
+
+```
+React → FastAPI → SQLAlchemy → PostgreSQL (Supabase, cloud/product)
+                             → SQLite     (local, offline, tests)
+```
+
+### Connection selection (`app/db/session.py`)
+
+| Priority | Source | Database |
+|---|---|---|
+| 1 | explicit `db_path` argument (tests, evals, `reset_demo_env.py`) | always that SQLite file |
+| 2 | `CAMPUSNEXUS_DATABASE_URL` | PostgreSQL (`postgresql://`, `postgres://` or `postgresql+psycopg://`, all routed to psycopg 3) or `sqlite:///` |
+| 3 | `CAMPUSNEXUS_DB_PATH` | SQLite |
+| 4 | default | SQLite `data/campusnexus.db` |
+
+Any other dialect or driver (e.g. psycopg2) is refused with an error that never echoes the URL.
+`create_database_engine` is the single dialect-aware factory:
+
+- **SQLite**: `check_same_thread=False`, `PRAGMA foreign_keys=ON` per connection (unchanged).
+- **PostgreSQL**: `pool_pre_ping=True`, pool 5 + overflow 5 (`CAMPUSNEXUS_DB_POOL_SIZE`,
+  `CAMPUSNEXUS_DB_MAX_OVERFLOW`), 30 s pool timeout, 1800 s recycle, 15 s connect timeout, server-side
+  prepared statements off (`prepare_threshold=None`) so the URL also works behind a transaction-mode pooler.
+  SSL and host come only from the URL. The long-running API is expected to use Supabase's Session pooler.
+
+Creating an engine never connects, and no module creates, upgrades or seeds a database at import time
+(`app.api.main` builds its engine lazily; the schema upgrade runs in the lifespan hook).
+
+### Portable types
+
+- `UTCDateTime`: `timestamp with time zone` on PostgreSQL, naive-UTC `DATETIME` on SQLite. On both, naive
+  input is rejected and every value read back is timezone-aware UTC, whatever the session time zone.
+- Enums (`app.db.base.portable_enum`): `VARCHAR(64)` holding the enum `.value`, no CHECK constraint, and no
+  native PostgreSQL `ENUM` type. A native type would need `ALTER TYPE` whenever a phase adds a member, which
+  the additive `upgrade_schema` cannot do. Values and API contracts are unchanged.
+- JSON stays `JSON` (not JSONB); ids, string lengths, booleans, `Date`/`Time` and floats are unchanged.
+- One query was dialect-sensitive: the admin audit action filter used `LIKE` (case-insensitive on SQLite,
+  case-sensitive on PostgreSQL). It now uses `icontains` (`ILIKE` / `lower() LIKE`).
+- `upgrade_schema` issues only `ALTER TABLE "t" ADD COLUMN "c" <type>`, valid on both dialects.
+
+### Supabase Data API exposure
+
+The browser reaches data only through FastAPI; FastAPI authorization (JWT, role guards, structural scope)
+remains the only application authorization layer. Supabase grants the `anon`/`authenticated` roles access
+to new `public` tables by default, which would let anyone holding the public anon key read every table over
+REST. Wherever those roles exist, `restrict_data_api_access` (run by `upgrade_schema`, so also at API
+startup) enables row level security with no policies on every application table and revokes those roles'
+privileges. The application connects as the table owner, which RLS does not restrict. No Supabase key of any
+kind is used by the backend or the React app.
+
+**Future (multi-tenancy):** real RLS policies keyed by tenant, and a non-owner application role, are
+required before any tenant data is shared in one database. Not implemented in Phase 21.
+
+### Tools
+
+- `scripts/init_postgres_db.py`: confirms PostgreSQL, tests the connection, creates missing tables, runs
+  the additive upgrade and the Data API lockdown, and verifies critical tables and foreign keys. Never drops.
+- `scripts/seed_database.py`: the same idempotent seed on whichever database is configured (or `--sqlite`).
+  `--reset` on PostgreSQL additionally needs `--allow-remote-reset` and `--confirm-database <name>`.
+  `reset_demo_env.py` always rebuilds the local SQLite demo and can never reach a remote database.
+- `scripts/migrate_sqlite_to_postgres.py --source <file.db> [--dry-run] [--merge-identical]`: copies
+  through `app/db/portability.py`. The source opens read-only. The copy checks VARCHAR lengths (SQLite
+  ignores them, PostgreSQL enforces them), orphan rows and enum values first. It then copies parent-first
+  in one transaction, keeping primary keys, timestamps and JSON. Forward foreign keys (the
+  `departments.hod_faculty_id` ↔ `faculty_profiles` cycle) are inserted as NULL and filled in afterwards.
+  After the copy it moves id sequences past the copied ids, compares per-table counts and checks every
+  foreign key for orphans. A non-empty target is refused. `--merge-identical` adds only missing rows, and
+  refuses if any existing row differs from the source.
+- `scripts/start_campusnexus.ps1` uses `CAMPUSNEXUS_DATABASE_URL` when set and prints only
+  `Database: PostgreSQL` / `Database: SQLite`. `/health` reports `database.ready`, `dialect` and `label`,
+  and Admin Settings shows "PostgreSQL" / "PostgreSQL / Supabase" / "SQLite -- ...". Neither shows a
+  host, user, password or URL, and `safe_error` removes those (and IP addresses) from printed driver errors.
+
+### Tests
+
+The normal suite is SQLite-only and offline. `tests/conftest.py` removes `CAMPUSNEXUS_DATABASE_URL` from the
+environment so no test (or subprocess) can reach a real database. `tests/test_phase21_database_portability.py`
+covers selection, the engine factory, types, redaction and the copy logic (SQLite → SQLite).
+`tests/test_phase21_postgres.py` runs only with `CAMPUSNEXUS_TEST_DATABASE_URL`. Each test gets a throwaway
+schema, and the module re-runs real earlier-phase flows (attendance, workflow requests, approvals, missions,
+candidate selection, audit) on PostgreSQL. `CAMPUSNEXUS_TEST_ALL_ON_POSTGRES=1` moves the shared `engine`
+fixture of the whole suite onto PostgreSQL as a portability audit.
+
+### Unchanged
+
+Authentication (bcrypt + CampusNexus JWT; not Supabase Auth) and RAG (Chroma + ONNX MiniLM; not pgvector).
+
 ## Non-Goals (for now)
 
-- No multi-tenant/campus-scale deployment concerns yet (auth, scaling, multi-region) — single-campus,
+- No multi-tenant/campus-scale deployment concerns yet (Phase 21 adds a cloud PostgreSQL option, not tenancy) (auth, scaling, multi-region) — single-campus,
   hackathon-scope only.
 - No new agents beyond the frozen 10 components without an explicit decision to unfreeze the architecture.
 - No direct LLM-to-tool calling outside the Action Agent, under any circumstance.

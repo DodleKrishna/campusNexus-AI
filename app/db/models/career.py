@@ -11,10 +11,10 @@ import enum
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import Enum as SAEnum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now
 
 
 class OpportunityType(str, enum.Enum):
@@ -75,12 +75,12 @@ class Opportunity(Base):
     title: Mapped[str] = mapped_column(String(150))
     description: Mapped[str] = mapped_column(Text)
     opportunity_type: Mapped[OpportunityType] = mapped_column(
-        SAEnum(OpportunityType, values_callable=lambda e: [m.value for m in e])
+        portable_enum(OpportunityType)
     )
     minimum_cgpa: Mapped[float]
     deadline: Mapped[datetime] = mapped_column(UTCDateTime)
     status: Mapped[OpportunityStatus] = mapped_column(
-        SAEnum(OpportunityStatus, values_callable=lambda e: [m.value for m in e])
+        portable_enum(OpportunityStatus)
     )
     posted_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
@@ -154,7 +154,7 @@ class Application(Base):
     student_id: Mapped[int] = mapped_column(ForeignKey("students.id"))
     opportunity_id: Mapped[int] = mapped_column(ForeignKey("opportunities.id"))
     status: Mapped[ApplicationStatus] = mapped_column(
-        SAEnum(ApplicationStatus, values_callable=lambda e: [m.value for m in e]),
+        portable_enum(ApplicationStatus),
         default=ApplicationStatus.SUBMITTED,
     )
     applied_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
