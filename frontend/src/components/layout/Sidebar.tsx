@@ -60,7 +60,10 @@ function NavContent({ rail, onNavigate }: { rail: boolean; onNavigate?: () => vo
         {!rail && (
           <div className="min-w-0 leading-tight">
             <p className="truncate text-[13px] font-medium text-white">{user.display_name}</p>
-            <p className="truncate text-xs text-nav-text">{ROLE_LABELS[user.role]}</p>
+            <p className="truncate text-xs text-nav-text">
+              {ROLE_LABELS[user.role]}
+              {user.organization && <span title={user.organization.name}> · {user.organization.name}</span>}
+            </p>
           </div>
         )}
       </div>

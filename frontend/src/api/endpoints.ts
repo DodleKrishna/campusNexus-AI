@@ -5,6 +5,8 @@ import type {
   AdminComplaint,
   AdminDashboard,
   AIOperations,
+  AIUsageSummary,
+  AgentCatalogView,
   AuditEntry,
   DepartmentDetail,
   DepartmentRow,
@@ -127,6 +129,9 @@ export const api = {
   adminSetRole: (accountId: number, role: string) => apiRequest<UserView>(`/admin/users/${accountId}/role`, { method: "POST", body: { role } }),
   adminResetPassword: (accountId: number) => apiRequest<PasswordReset>(`/admin/users/${accountId}/reset-password`, { method: "POST" }),
   adminAIOperations: () => apiRequest<AIOperations>("/admin/ai-operations"),
+  adminSetAIBudget: (monthlyBudgetUsd: number | null) =>
+    apiRequest<AIUsageSummary>("/admin/ai-budget", { method: "PUT", body: { monthly_budget_usd: monthlyBudgetUsd } }),
+  adminAgentCatalog: () => apiRequest<AgentCatalogView>("/admin/agent-catalog"),
   adminAudit: (filters: { source?: string; action?: string }) => apiRequest<AuditEntry[]>(`/admin/audit${qs(filters)}`),
   adminSystem: () => apiRequest<SystemStatus>("/admin/system"),
   adminNotifications: () => apiRequest<NotificationItem[]>("/admin/notifications"),

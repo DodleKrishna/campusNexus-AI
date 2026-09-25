@@ -1,22 +1,4 @@
-import {
-  Bot,
-  Briefcase,
-  Building2,
-  CalendarDays,
-  ClipboardCheck,
-  ClipboardList,
-  Cpu,
-  FileCheck2,
-  GraduationCap,
-  Inbox,
-  LayoutDashboard,
-  MessageSquareWarning,
-  School,
-  ScrollText,
-  UserCog,
-  Users,
-  type LucideIcon,
-} from "lucide-react";
+import { Bot, Boxes, Briefcase, Building2, CalendarDays, ClipboardCheck, ClipboardList, Cpu, FileCheck2, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, ScrollText, type LucideIcon, UserCog, Users } from "lucide-react";
 import type { Role } from "@/types/api";
 
 export interface NavItem {
@@ -65,6 +47,7 @@ const ADMIN_NAV: NavItem[] = [
   { label: "Requests", to: "/admin/requests", icon: Inbox },
   { label: "Complaints", to: "/admin/complaints", icon: MessageSquareWarning },
   { label: "AI Operations", to: "/admin/ai-operations", icon: Cpu },
+  { label: "Agent Catalog", to: "/admin/agent-catalog", icon: Boxes },
   { label: "Audit Log", to: "/admin/audit", icon: ScrollText },
   { label: "Agents", to: "/admin/agents", icon: Bot },
 ];

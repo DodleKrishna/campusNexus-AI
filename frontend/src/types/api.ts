@@ -11,6 +11,7 @@ export interface AuthUser {
   department_code: string | null;
   department_name: string | null;
   home_route: string;
+  organization?: { id: number; slug: string; name: string };
 }
 
 export interface LoginResponse {
@@ -689,6 +690,55 @@ export interface AIOperations {
   rag_ready: boolean;
   database_ready: boolean;
   token_usage: string;
+  routing?: Record<string, string>;
+  usage?: AIUsageSummary;
+  control_tower?: ControlTowerMission[];
+}
+
+export interface AIUsageSummary {
+  total_requests: number;
+  no_ai_count: number;
+  no_ai_percent: number | null;
+  light_calls: number;
+  advanced_calls: number;
+  estimated_cost_usd: number | null;
+  cost_available_for: number;
+  average_latency_ms: number | null;
+  success_rate_percent: number | null;
+  month_spend_usd: number;
+  monthly_budget_usd: number | null;
+}
+
+export interface ControlTowerMission {
+  mission_id: string;
+  status: string;
+  role: string;
+  organization: string | null;
+  goal: string;
+  created_at: string;
+  intelligence: "no_ai" | "light" | "advanced";
+  models: string[];
+  ai_calls: number;
+  estimated_cost_usd: number | null;
+  latency_ms: number | null;
+  approvals_required: number;
+}
+
+export interface CatalogAgent {
+  key: string;
+  name: string;
+  purpose: string;
+  status: string;
+  intelligence_level: "no_ai" | "light" | "advanced";
+  allowed_roles: string[];
+  requires_approval: boolean;
+  deployable: boolean;
+}
+
+export interface AgentCatalogView {
+  agents: CatalogAgent[];
+  internal_components: CatalogAgent[];
+  flow: string[];
 }
 
 export interface AuditEntry {

@@ -53,6 +53,7 @@ const AdminAttendancePage = lazyPage(admin, "AdminAttendancePage");
 const AdminRequestsPage = lazyPage(admin, "AdminRequestsPage");
 const AdminComplaintsPage = lazyPage(admin, "AdminComplaintsPage");
 const AdminAIOperationsPage = lazyPage(admin, "AdminAIOperationsPage");
+const AdminAgentCatalogPage = lazyPage(admin, "AdminAgentCatalogPage");
 const AdminAuditPage = lazyPage(admin, "AdminAuditPage");
 const AdminAgentsPage = lazyPage(admin, "AdminAgentsPage");
 const AdminAgentPage = lazyPage(admin, "AdminAgentPage");
@@ -139,6 +140,7 @@ export function AppRoutes() {
         <Route path="requests" element={<AdminRequestsPage />} />
         <Route path="complaints" element={<AdminComplaintsPage />} />
         <Route path="ai-operations" element={<AdminAIOperationsPage />} />
+        <Route path="agent-catalog" element={<AdminAgentCatalogPage />} />
         <Route path="audit" element={<AdminAuditPage />} />
         <Route path="agents" element={<AdminAgentsPage />} />
         <Route path="agents/:agentKey" element={<AdminAgentPage />} />

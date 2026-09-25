@@ -19,6 +19,7 @@ export const useAdminComplaints = (filters: { department?: string; status?: stri
   });
 export const useAdminUsers = () => useQuery({ queryKey: queryKeys.admin("users"), queryFn: api.adminUsers, staleTime: STALE });
 export const useAdminAIOperations = () => useQuery({ queryKey: queryKeys.admin("ai"), queryFn: api.adminAIOperations, ...LIVE });
+export const useAdminAgentCatalog = () => useQuery({ queryKey: queryKeys.admin("agent-catalog"), queryFn: api.adminAgentCatalog, staleTime: STALE });
 export const useAdminAudit = (filters: { source?: string; action?: string }) =>
   useQuery({ queryKey: queryKeys.admin("audit", filters.source, filters.action), queryFn: () => api.adminAudit(filters), staleTime: 10_000 });
 export const useAdminSystem = () => useQuery({ queryKey: queryKeys.admin("system"), queryFn: api.adminSystem, ...LIVE });

@@ -27,9 +27,11 @@ import { SkeletonRows, SkeletonTable } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState, Notice } from "@/components/ui/states";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { ADMIN_AGENTS, adminAgentByKey } from "@/features/agents/adminCatalog";
+import { AgentCatalog, ControlTower, IntelligencePanel } from "@/features/admin/IntelligenceOps";
 import { ReviewerInbox } from "@/features/requests/ReviewerInbox";
 import {
   useAdminAIOperations,
+  useAdminAgentCatalog,
   useAdminAttendance,
   useAdminAudit,
   useAdminComplaints,
@@ -664,7 +666,7 @@ export function AdminAIOperationsPage() {
     <div className="space-y-6">
       <PageTitle
         title="AI Operations"
-        description="Provider, readiness, agent activity and recent issues, from the audit trail. Nothing here is estimated."
+        description="Routing, usage and cost per intelligence level, the Control Tower of recent missions, readiness and recent issues. Costs are estimates; missing token counts are shown as unavailable."
         action={<AskAgentLink to="/admin/agents/enquiry" label="Ask CampusNexus about operations" question="Are there any failed agent workflows today?" />}
       />
       {isLoading && <SkeletonTable rows={6} />}
@@ -699,6 +701,8 @@ export function AdminAIOperationsPage() {
               </ul>
             </Panel>
           </div>
+          <IntelligencePanel usage={data.usage} routing={data.routing} />
+          <ControlTower rows={data.control_tower} />
           <Panel title="Agent activity">
             <dl className="grid grid-cols-2 divide-border sm:grid-cols-4 sm:divide-x">
               {[
@@ -761,6 +765,18 @@ export function AdminAIOperationsPage() {
           <p className="text-xs text-muted">Token usage: {data.token_usage}</p>
         </>
       )}
+    </div>
+  );
+}
+
+export function AdminAgentCatalogPage() {
+  const { data, isLoading, isError, error, refetch } = useAdminAgentCatalog();
+  return (
+    <div className="space-y-6">
+      <PageTitle title="Agent Catalog" description="The product agents deployed for this institution, the intelligence level each uses, and where a human must approve." />
+      {isLoading && <SkeletonTable rows={4} />}
+      {isError && <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />}
+      {data && <AgentCatalog data={data} />}
     </div>
   );
 }
