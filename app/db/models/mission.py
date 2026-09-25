@@ -20,7 +20,7 @@ from sqlalchemy import Enum as SAEnum
 from sqlalchemy import ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 from app.schemas.enums import (
     AgentName,
     AgentResultStatus,
@@ -37,7 +37,7 @@ def _enum_column(enum_cls: type) -> SAEnum:
     return portable_enum(enum_cls)
 
 
-class Mission(Base):
+class Mission(TenantMixin, Base):
     __tablename__ = "missions"
 
     mission_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -53,7 +53,7 @@ class Mission(Base):
     steps: Mapped[List["MissionStep"]] = relationship(back_populates="mission", cascade="all, delete-orphan")
 
 
-class MissionStep(Base):
+class MissionStep(TenantMixin, Base):
     __tablename__ = "mission_steps"
 
     step_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -69,7 +69,7 @@ class MissionStep(Base):
     mission: Mapped["Mission"] = relationship(back_populates="steps")
 
 
-class AgentRun(Base):
+class AgentRun(TenantMixin, Base):
     """One recorded execution of an agent against a mission step.
 
     ``facts``/``errors`` mirror the free-form ``Dict[str, JsonValue]``/``List[str]``
@@ -102,7 +102,7 @@ class AgentRun(Base):
     step = relationship("MissionStep")
 
 
-class ToolCallRecord(Base):
+class ToolCallRecord(TenantMixin, Base):
     __tablename__ = "tool_call_records"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -126,7 +126,7 @@ class ToolCallRecord(Base):
     step = relationship("MissionStep")
 
 
-class ApprovalRecord(Base):
+class ApprovalRecord(TenantMixin, Base):
     __tablename__ = "approval_records"
 
     approval_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -158,7 +158,7 @@ class ApprovalRecord(Base):
     step = relationship("MissionStep")
 
 
-class AuditLog(Base):
+class AuditLog(TenantMixin, Base):
     """Append-only audit trail. Ordering by ``id`` (insertion order) is authoritative."""
 
     __tablename__ = "audit_logs"
@@ -176,7 +176,7 @@ class AuditLog(Base):
     mission = relationship("Mission")
 
 
-class ActionCandidateRecord(Base):
+class ActionCandidateRecord(TenantMixin, Base):
     """Phase 13: one resource the student may select as an action's target.
 
     Recorded when a mission ends needing a selection; re-assessed (never
@@ -206,7 +206,7 @@ class ActionCandidateRecord(Base):
     mission = relationship("Mission")
 
 
-class TargetSelectionRecord(Base):
+class TargetSelectionRecord(TenantMixin, Base):
     """Phase 13: the student's explicit, server-validated choice of a target.
 
     The only thing that can make an action's target USER_SELECTION. A newer
@@ -231,7 +231,7 @@ class TargetSelectionRecord(Base):
     mission = relationship("Mission")
 
 
-class MemoryRecord(Base):
+class MemoryRecord(TenantMixin, Base):
     """Freeform memory scoped to a student and/or mission, for future recall."""
 
     __tablename__ = "memory_records"

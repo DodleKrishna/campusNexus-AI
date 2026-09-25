@@ -23,6 +23,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import func, inspect, select, text
 
+from app.db.base import Base
 from app.db.models import Department, Event, EventStatus, Mission, Student
 from app.db.models.workflow import OperationAuditEvent
 from app.db.portability import compare_counts, copy_database, find_orphans, missing_foreign_keys
@@ -90,7 +91,7 @@ from tests.test_phase18_admin_ops import (  # noqa: E402,F401
 
 def test_schema_is_created_with_portable_types(engine) -> None:
     inspector = inspect(engine)
-    assert len(inspector.get_table_names()) == 42
+    assert set(inspector.get_table_names()) == set(Base.metadata.tables)  # 44 with Phase 22's organizations
     assert missing_foreign_keys(engine) == []
     with engine.connect() as connection:
         column_type = connection.execute(text(

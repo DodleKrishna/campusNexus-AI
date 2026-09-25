@@ -11,10 +11,10 @@ import enum
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 
 
 class OpportunityType(str, enum.Enum):
@@ -36,8 +36,9 @@ class ApplicationStatus(str, enum.Enum):
     WITHDRAWN = "withdrawn"
 
 
-class Company(Base):
+class Company(TenantMixin, Base):
     __tablename__ = "companies"
+    __table_args__ = (Index("ux_companies_org_name", "organization_id", "name", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(150), unique=True, index=True)
@@ -45,14 +46,15 @@ class Company(Base):
     website: Mapped[Optional[str]] = mapped_column(String(255), default=None)
 
 
-class Skill(Base):
+class Skill(TenantMixin, Base):
     __tablename__ = "skills"
+    __table_args__ = (Index("ux_skills_org_name", "organization_id", "name", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(80), unique=True, index=True)
 
 
-class StudentSkill(Base):
+class StudentSkill(TenantMixin, Base):
     """A skill a student has, with self-reported proficiency 1 (novice) - 5 (expert)."""
 
     __tablename__ = "student_skills"
@@ -67,7 +69,7 @@ class StudentSkill(Base):
     skill = relationship("Skill")
 
 
-class Opportunity(Base):
+class Opportunity(TenantMixin, Base):
     __tablename__ = "opportunities"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -96,7 +98,7 @@ class Opportunity(Base):
     )
 
 
-class OpportunityDepartment(Base):
+class OpportunityDepartment(TenantMixin, Base):
     """One row per department allowed to apply to an opportunity."""
 
     __tablename__ = "opportunity_departments"
@@ -112,7 +114,7 @@ class OpportunityDepartment(Base):
     department = relationship("Department")
 
 
-class OpportunityEligibleYear(Base):
+class OpportunityEligibleYear(TenantMixin, Base):
     """One row per student year (1-4) eligible for an opportunity."""
 
     __tablename__ = "opportunity_eligible_years"
@@ -127,7 +129,7 @@ class OpportunityEligibleYear(Base):
     opportunity = relationship("Opportunity", back_populates="eligible_years")
 
 
-class OpportunitySkill(Base):
+class OpportunitySkill(TenantMixin, Base):
     """A skill required (with an optional minimum proficiency) by an opportunity."""
 
     __tablename__ = "opportunity_skills"
@@ -144,7 +146,7 @@ class OpportunitySkill(Base):
     skill = relationship("Skill")
 
 
-class Application(Base):
+class Application(TenantMixin, Base):
     __tablename__ = "applications"
     __table_args__ = (
         UniqueConstraint("student_id", "opportunity_id", name="uq_applications_student_opportunity"),

@@ -42,6 +42,7 @@ from app.db.models.faculty import (
     TeachingAssignment,
 )
 from app.db.models.identity import Department, Student, User
+from app.db.models.organization import Organization, OrganizationMembership
 from app.db.models.mission import (
     ActionCandidateRecord,
     AgentRun,
@@ -62,6 +63,8 @@ from app.db.models.workflow import (
 )
 
 __all__ = [
+    "Organization",
+    "OrganizationMembership",
     "AuthAccount",
     "AttendanceRecord",
     "Course",

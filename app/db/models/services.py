@@ -8,7 +8,7 @@ from typing import Optional
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 
 
 class CaseStatus(str, enum.Enum):
@@ -25,7 +25,7 @@ class CasePriority(str, enum.Enum):
     URGENT = "urgent"
 
 
-class CampusCase(Base):
+class CampusCase(TenantMixin, Base):
     __tablename__ = "campus_cases"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -53,7 +53,7 @@ class CampusCase(Base):
     )
 
 
-class CaseAssignment(Base):
+class CaseAssignment(TenantMixin, Base):
     __tablename__ = "case_assignments"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -64,7 +64,7 @@ class CaseAssignment(Base):
     case = relationship("CampusCase", back_populates="assignments")
 
 
-class CaseSLA(Base):
+class CaseSLA(TenantMixin, Base):
     """Deterministic SLA targets/actuals for one case (breach = past-due, unresolved)."""
 
     __tablename__ = "case_slas"

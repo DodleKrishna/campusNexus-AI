@@ -30,6 +30,7 @@ from app.db.models.identity import Department, Student
 from app.db.models.mission import AgentRun, ApprovalRecord, AuditLog, Mission
 from app.db.models.workflow import OperationAuditEvent, WorkflowRequest, WorkflowRequestStatus
 from app.db.repositories import operations_audit
+from app.db.tenancy import set_account_role
 from app.rules.class_session import ClassState
 from app.schemas.admin_console import (
     AdminAttendance,
@@ -276,7 +277,7 @@ def change_role(session: Session, actor: AuthAccount, account_id: int, role: str
         raise AdminError(f"{account.email} cannot hold the role '{role}' with its current profile links (allowed: {', '.join(permitted)}).")
     if account.role.value != role:
         previous = account.role.value
-        account.role = UserRole(role)
+        set_account_role(session, account, UserRole(role))  # membership (authoritative) + account mirror
         _audit(session, actor, "account_role_changed", account, f"{actor.display_name} changed {account.email} from {previous} to {role}.",
                now, previous=previous, role=role)
         session.commit()

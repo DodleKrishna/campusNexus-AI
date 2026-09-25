@@ -14,21 +14,22 @@ import enum
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import Enum as SAEnum
+from sqlalchemy import Enum as SAEnum, Index
 from sqlalchemy import ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 
 
 def _enum(cls: type[enum.Enum]) -> SAEnum:
     return portable_enum(cls)
 
 
-class FacultyProfile(Base):
+class FacultyProfile(TenantMixin, Base):
     """A teaching staff member. ``auth_accounts.linked_faculty_id`` points here."""
 
     __tablename__ = "faculty_profiles"
+    __table_args__ = (Index("ux_faculty_profiles_org_employee_code", "organization_id", "employee_code", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     employee_code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
@@ -43,7 +44,7 @@ class FacultyProfile(Base):
     department = relationship("Department", foreign_keys=[department_id])
 
 
-class TeachingAssignment(Base):
+class TeachingAssignment(TenantMixin, Base):
     """Faculty X teaches course Y to section Z of a year/semester in an academic term.
 
     The roster is every student enrolled in the course for ``academic_term``
@@ -76,7 +77,7 @@ class AttendanceSessionStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class AttendanceSession(Base):
+class AttendanceSession(TenantMixin, Base):
     """One meeting of a taught class.
 
     A recurring meeting has ``timetable_slot_id`` set; an extra class does
@@ -118,7 +119,7 @@ class AttendanceMarkStatus(str, enum.Enum):
     EXCUSED = "excused"
 
 
-class SessionAttendanceMark(Base):
+class SessionAttendanceMark(TenantMixin, Base):
     """One student's attendance in one session. Changing a mark updates this row."""
 
     __tablename__ = "session_attendance_marks"

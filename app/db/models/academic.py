@@ -11,10 +11,10 @@ import enum
 from datetime import datetime, time
 from typing import Optional
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 
 
 class CourseStatus(str, enum.Enum):
@@ -22,10 +22,11 @@ class CourseStatus(str, enum.Enum):
     ARCHIVED = "archived"
 
 
-class Course(Base):
+class Course(TenantMixin, Base):
     """A course offering (one row per course, not per section)."""
 
     __tablename__ = "courses"
+    __table_args__ = (Index("ux_courses_org_code", "organization_id", "code", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
@@ -42,7 +43,7 @@ class Course(Base):
     department = relationship("Department")
 
 
-class Enrollment(Base):
+class Enrollment(TenantMixin, Base):
     """A student's enrollment in a course for a given academic year."""
 
     __tablename__ = "enrollments"
@@ -65,7 +66,7 @@ class Enrollment(Base):
     )
 
 
-class AttendanceRecord(Base):
+class AttendanceRecord(TenantMixin, Base):
     """Raw attendance counters for one enrollment.
 
     Percentage is deliberately NOT stored here; future deterministic rule
@@ -88,7 +89,7 @@ class AttendanceRecord(Base):
     enrollment: Mapped["Enrollment"] = relationship(back_populates="attendance")
 
 
-class TimetableSlot(Base):
+class TimetableSlot(TenantMixin, Base):
     """A recurring weekly class slot for a course.
 
     ``weekday`` is 0=Monday .. 6=Sunday. Start/end are wall-clock local times
@@ -110,7 +111,7 @@ class TimetableSlot(Base):
     course = relationship("Course")
 
 
-class Exam(Base):
+class Exam(TenantMixin, Base):
     """A scheduled exam for a course."""
 
     __tablename__ = "exams"

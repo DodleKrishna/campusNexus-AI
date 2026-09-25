@@ -18,7 +18,7 @@ from sqlalchemy import JSON
 from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 
 
 class WorkflowRequestType(str, enum.Enum):
@@ -47,7 +47,7 @@ class WorkflowRequestStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class WorkflowRequest(Base):
+class WorkflowRequest(TenantMixin, Base):
     __tablename__ = "workflow_requests"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -89,7 +89,7 @@ class WorkflowRequest(Base):
     requester_faculty = relationship("FacultyProfile", foreign_keys=[requester_faculty_id])
 
 
-class OperationAuditEvent(Base):
+class OperationAuditEvent(TenantMixin, Base):
     """Append-only: who did what to which campus-operations record, and when."""
 
     __tablename__ = "operation_audit_events"

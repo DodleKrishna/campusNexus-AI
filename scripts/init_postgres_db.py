@@ -41,7 +41,7 @@ CRITICAL_TABLES = (
     "attendance_sessions", "session_attendance_marks", "events", "event_registrations", "workflow_requests",
     "notifications", "staff_notifications", "account_notifications", "missions", "mission_steps",
     "approval_records", "audit_logs", "operation_audit_events", "action_candidates", "target_selections",
-    "auth_accounts",
+    "auth_accounts", "organizations", "organization_memberships",
 )
 
 

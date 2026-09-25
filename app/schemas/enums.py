@@ -99,3 +99,17 @@ class VerificationStatus(str, Enum):
     VERIFIED = "verified"
     NEEDS_REVIEW = "needs_review"
     FAILED = "failed"
+
+
+class OrganizationStatus(str, Enum):
+    """Phase 22: whether an organization (tenant) may be used."""
+
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+
+
+class MembershipStatus(str, Enum):
+    """Phase 22: whether an account's membership in an organization is in force."""
+
+    ACTIVE = "active"
+    INACTIVE = "inactive"

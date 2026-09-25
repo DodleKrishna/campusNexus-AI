@@ -11,11 +11,11 @@ from __future__ import annotations
 
 import enum
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
-from sqlalchemy import DateTime, MetaData
+from sqlalchemy import DateTime, ForeignKey, MetaData
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TypeDecorator, TypeEngine
 
 # A fixed naming convention keeps auto-generated constraint/index names
@@ -94,3 +94,16 @@ def portable_enum(enum_cls: type[enum.Enum]) -> SAEnum:
 def utc_now() -> datetime:
     """Return the current time as a timezone-aware UTC datetime."""
     return datetime.now(timezone.utc)
+
+
+class TenantMixin:
+    """A row owned by exactly one organization (Phase 22).
+
+    Every table except ``organizations`` and the global login identity
+    (``auth_accounts``) is tenant-owned. The column is nullable only because
+    ``upgrade_schema`` is additive: an existing database gains it empty and
+    ``scripts/migrate_phase22_tenancy.py`` fills it in. ``app.db.tenancy``
+    reports any row still without an organization.
+    """
+
+    organization_id: Mapped[Optional[int]] = mapped_column(ForeignKey("organizations.id"), index=True, default=None)

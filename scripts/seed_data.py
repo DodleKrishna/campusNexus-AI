@@ -62,6 +62,7 @@ from app.db.models import (  # noqa: F401  (import registers all mapped classes)
     User,
 )
 from app.auth.accounts import DEV_ACCOUNTS, resolve_seed_password, seed_dev_accounts
+from app.db.tenancy import assign_unowned_rows, ensure_default_organization
 from app.db.session import create_db_engine, create_session_factory, init_db
 from app.schemas.enums import UserRole
 
@@ -1081,6 +1082,8 @@ def build_summary(session: Session) -> SeedSummary:
 
 
 def run_seed(session: Session) -> SeedSummary:
+    # Phase 22A: everything seeded belongs to the single demo organization.
+    organization = ensure_default_organization(session)
     departments = seed_departments(session)
     students = seed_students(session, departments)
     courses = seed_courses(session, departments)
@@ -1093,6 +1096,7 @@ def run_seed(session: Session) -> SeedSummary:
     faculty = seed_faculty(session, departments)
     seed_classmates(session, departments, courses)
     seed_teaching(session, courses, faculty)
+    assign_unowned_rows(session, organization)
     session.commit()
     return build_summary(session)
 

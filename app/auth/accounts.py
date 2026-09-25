@@ -21,6 +21,7 @@ from app.db.base import utc_now
 from app.db.models.auth import AuthAccount
 from app.db.models.faculty import FacultyProfile
 from app.db.models.identity import Department, Student
+from app.db.tenancy import ensure_default_organization, sync_memberships
 from app.schemas.enums import UserRole
 
 DEMO_PASSWORD_ENV = "CAMPUSNEXUS_DEMO_PASSWORD"
@@ -147,5 +148,8 @@ def seed_dev_accounts(session: Session, password: str) -> List[str]:
             linked_student_id=spec.student_code, linked_faculty_id=faculty_id, department_id=department_id, is_active=True,
         ))
         created.append(spec.email)
+    session.flush()
+    # Phase 22A: every account gets its membership in the demo organization (the authoritative role).
+    sync_memberships(session, ensure_default_organization(session))
     session.commit()
     return created

@@ -20,7 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
 
-from sqlalchemy import Engine, create_engine, event, inspect, text
+from sqlalchemy import Column, Engine, Table, create_engine, event, inspect, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -207,6 +207,10 @@ def upgrade_schema(engine: Engine) -> list[str]:
     *nullable* columns and never drops, renames or rewrites anything. Returns
     the ``table.column`` names it added. A table that did not exist yet (e.g.
     Phase 13's candidate/selection tables) is created, which is equally additive.
+
+    Phase 22: an added column that references another table (``organization_id``)
+    is added with its foreign key, and model indexes missing from an existing
+    table are created (reported as ``index:<name>``). Still additive only.
     """
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
@@ -224,11 +228,36 @@ def upgrade_schema(engine: Engine) -> list[str]:
                 if column.name in present or not column.nullable or column.primary_key:
                     continue
                 column_type = column.type.compile(dialect=engine.dialect)
-                connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column_type}'))
+                connection.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column_type}{_references(table, column)}'))
                 added.append(f"{table.name}.{column.name}")
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            live = inspect(connection)
+            present_indexes = {index["name"] for index in live.get_indexes(table.name)}
+            present_columns = {column["name"] for column in live.get_columns(table.name)}
+            for index in sorted(table.indexes, key=lambda i: i.name):
+                # A NOT NULL model column is never added to an old table, so neither is an index on it.
+                if index.name not in present_indexes and set(index.columns.keys()) <= present_columns:
+                    index.create(connection)
+                    added.append(f"index:{index.name}")
     if engine.dialect.name == "postgresql":
         restrict_data_api_access(engine)
     return added
+
+
+def _references(table: Table, column: Column) -> str:
+    """The inline foreign key for a column added to an existing table (named per ``NAMING_CONVENTION``).
+
+    Both SQLite and PostgreSQL accept ``ADD COLUMN ... CONSTRAINT name REFERENCES t(c)`` for a column that is
+    empty in every existing row.
+    """
+    foreign_keys = list(column.foreign_keys)
+    if len(foreign_keys) != 1:
+        return ""
+    target = foreign_keys[0].column
+    name = f"fk_{table.name}_{column.name}_{target.table.name}"
+    return f' CONSTRAINT "{name}" REFERENCES "{target.table.name}" ("{target.name}")'
 
 
 def restrict_data_api_access(engine: Engine) -> list[str]:

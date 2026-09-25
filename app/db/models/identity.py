@@ -4,17 +4,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 from app.schemas.enums import UserRole
 
 
-class Department(Base):
+class Department(TenantMixin, Base):
     """An academic department (e.g. Computer Science)."""
 
     __tablename__ = "departments"
+    __table_args__ = (Index("ux_departments_org_code", "organization_id", "code", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     code: Mapped[str] = mapped_column(String(20), unique=True, index=True)
@@ -27,10 +28,11 @@ class Department(Base):
     students: Mapped[List["Student"]] = relationship(back_populates="department")
 
 
-class User(Base):
+class User(TenantMixin, Base):
     """A campus identity (student, faculty, staff, or admin)."""
 
     __tablename__ = "users"
+    __table_args__ = (Index("ux_users_org_email", "organization_id", "email", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
@@ -43,7 +45,7 @@ class User(Base):
     student: Mapped[Optional["Student"]] = relationship(back_populates="user", uselist=False)
 
 
-class Student(Base):
+class Student(TenantMixin, Base):
     """Student-specific profile data layered on top of a User identity.
 
     ``student_code`` is the stable, human-referenceable natural key (e.g.
@@ -52,7 +54,12 @@ class Student(Base):
     """
 
     __tablename__ = "students"
-    __table_args__ = (UniqueConstraint("user_id", name="uq_students_user_id"),)
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_students_user_id"),
+        # Phase 22 (D1): student_code stays globally unique for now (legacy FKs point at it), but every
+        # application lookup is by organization + student_code.
+        Index("ix_students_org_student_code", "organization_id", "student_code"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     student_code: Mapped[str] = mapped_column(String(20), unique=True, index=True)

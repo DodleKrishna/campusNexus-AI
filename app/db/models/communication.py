@@ -12,7 +12,7 @@ from typing import Optional
 from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 
 
 class NotificationStatus(str, enum.Enum):
@@ -21,7 +21,7 @@ class NotificationStatus(str, enum.Enum):
     READ = "read"
 
 
-class Notification(Base):
+class Notification(TenantMixin, Base):
     __tablename__ = "notifications"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -39,7 +39,7 @@ class Notification(Base):
     student = relationship("Student")
 
 
-class StaffNotification(Base):
+class StaffNotification(TenantMixin, Base):
     """Phase 17: an in-app notification for a faculty member or HOD.
 
     ``notifications`` belongs to students (``student_id`` is required), so staff
@@ -63,7 +63,7 @@ class StaffNotification(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
-class AccountNotification(Base):
+class AccountNotification(TenantMixin, Base):
     """Phase 18: an in-app notification for an account with no faculty/student profile (administrators)."""
 
     __tablename__ = "account_notifications"
@@ -82,7 +82,7 @@ class AccountNotification(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
 
 
-class CalendarEvent(Base):
+class CalendarEvent(TenantMixin, Base):
     """A student-facing calendar entry, e.g. mirroring an exam or event."""
 
     __tablename__ = "calendar_events"

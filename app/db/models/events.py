@@ -5,10 +5,10 @@ import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.db.base import Base, portable_enum, UTCDateTime, utc_now
+from app.db.base import Base, portable_enum, UTCDateTime, utc_now, TenantMixin
 
 
 class EventStatus(str, enum.Enum):
@@ -25,8 +25,9 @@ class RegistrationStatus(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
-class Club(Base):
+class Club(TenantMixin, Base):
     __tablename__ = "clubs"
+    __table_args__ = (Index("ux_clubs_org_name", "organization_id", "name", unique=True),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
@@ -34,7 +35,7 @@ class Club(Base):
     category: Mapped[str] = mapped_column(String(60))
 
 
-class Event(Base):
+class Event(TenantMixin, Base):
     __tablename__ = "events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -55,7 +56,7 @@ class Event(Base):
     club = relationship("Club")
 
 
-class EventRegistration(Base):
+class EventRegistration(TenantMixin, Base):
     """A student's registration for an event.
 
     Unique (event_id, student_id) is the structural basis for future

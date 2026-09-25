@@ -392,6 +392,27 @@ across a component boundary. Free text is allowed only in the final user-facing 
   `test_phase14_ux.py`) are time-of-day dependent and fail around midnight (also on the pre-Phase-21 commit).
   They are not a Phase 21 regression.
 
+## Organizations / Multi-Tenancy (Phase 22)
+
+- Shared tables with `organization_id`, never schema-per-tenant. The tenant always comes from the authenticated
+  server-side identity, never from a query parameter, body, plan or tool argument. FastAPI RBAC is the primary
+  authorization; database isolation (22B ORM filter, 22F PostgreSQL RLS) is defense in depth.
+- `auth_accounts` is the global login identity and has no `organization_id`. `organizations` is the only other
+  global table. Every other table uses `app.db.base.TenantMixin` (`tests/test_phase22a_tenancy.py` enforces it).
+- `organization_memberships` (`app/db/models/organization.py`) holds the authoritative role and the
+  role-specific profile: student -> `student_id`, faculty/hod -> `faculty_profile_id`, admin/staff -> none (a
+  CHECK constraint). One active membership per account in Phase 22 (partial unique index); the table already
+  allows several organizations later. `auth_accounts.role` is only a compatibility mirror: change a role with
+  `app.db.tenancy.set_account_role`, and never authorize from `auth_accounts.role`.
+- D1: `students.student_code` stays globally unique for now (legacy FKs point at it). Every lookup still uses
+  organization + student_code (`ix_students_org_student_code`).
+- `organization_id` is nullable only because `upgrade_schema` is additive. `upgrade_schema` adds it with its
+  foreign key and creates missing model indexes. `scripts/migrate_phase22_tenancy.py` (`--dry-run` first)
+  creates the demo organization, assigns unowned rows, creates memberships and runs `tenancy_report` in one
+  transaction; any problem rolls it back. `assign_unowned_rows` refuses when more than one organization exists.
+- 22A known gap: runtime writes do not set `organization_id` until the 22B tenant session. Do not add a generic
+  fallback that assigns an organization to unowned rows at runtime.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
@@ -566,6 +587,11 @@ python scripts/migrate_sqlite_to_postgres.py --source data/demo/campusnexus_demo
 powershell -ExecutionPolicy Bypass -File scripts/start_campusnexus.ps1   # prints "Database: PostgreSQL"
 # Optional PostgreSQL tests (throwaway schemas); add CAMPUSNEXUS_TEST_ALL_ON_POSTGRES=1 to run the whole suite there.
 $env:CAMPUSNEXUS_TEST_DATABASE_URL = "postgresql://..."; pytest tests/test_phase21_postgres.py
+
+# Phase 22A: move an existing database onto organizations (read-only dry run first; --sqlite PATH for a file).
+python scripts/migrate_phase22_tenancy.py --dry-run
+python scripts/migrate_phase22_tenancy.py
+pytest tests/test_phase22a_tenancy.py -v
 
 # Phase 11 demo on a throwaway DB: approve a conflict-free registration, reschedule an exam onto it,
 # resume (write blocked, approval STALE), move the exam away, resume (NEW approval required), approve,
