@@ -1,7 +1,8 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { STUDENT, mockApi, renderApp, signIn } from "@/test/utils";
-import type { AIOperations, AgentCatalogView, AuthUser } from "@/types/api";
+import type { AIOperations, AgentCatalogView, AuthUser, CatalogEntry, DeploymentView } from "@/types/api";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -12,14 +13,21 @@ const ADMIN: AuthUser = {
   department_code: null, department_name: null, home_route: "/admin", organization: ORG,
 };
 
-const agent = (key: string, name: string, level: "no_ai" | "light" | "advanced", deployable = true) => ({
+const template = (key: string, name: string, level: "no_ai" | "light" | "advanced", deployable = true) => ({
   key, name, purpose: `${name} purpose`, status: deployable ? "active" : "internal", intelligence_level: level,
-  allowed_roles: deployable ? ["student"] : [], requires_approval: key === "events", deployable,
+  allowed_roles: deployable ? ["student"] : [], requires_approval: false, deployable,
 });
-const CATALOG: AgentCatalogView = {
-  agents: [agent("academic", "Academic Agent", "light"), agent("attendance", "Attendance Agent", "no_ai"), agent("events", "Events Agent", "light"),
-    agent("enquiry", "Enquiry Agent", "advanced")],
-  internal_components: [agent("action", "Action Agent", "no_ai", false), agent("approval_gate", "Approval Gate", "no_ai", false)],
+const ACADEMIC_DEPLOYMENT: DeploymentView = {
+  id: 7, agent_key: "academic", display_name: "Academic Agent", status: "active", intelligence_level: "advanced",
+  monthly_budget_usd: 25, requires_approval: false, allowed_roles: ["student"], runs: 3, success_rate_percent: 100,
+  estimated_cost_usd: null, updated_at: "2026-09-26T04:00:00Z",
+};
+const ENTRIES: CatalogEntry[] = [
+  { ...template("academic", "Academic Agent", "advanced"), deployment: ACADEMIC_DEPLOYMENT },
+  { ...template("career", "Career / Placement Agent", "advanced"), deployment: null },
+];
+const STATIC: AgentCatalogView = {
+  agents: [], internal_components: [template("action", "Action Agent", "no_ai", false), template("approval_gate", "Approval Gate", "no_ai", false)],
   flow: ["User", "Mission Orchestrator", "Approval Gate (when sensitive)"],
 };
 const OPS: AIOperations = {
@@ -32,43 +40,70 @@ const OPS: AIOperations = {
     total_requests: 10, no_ai_count: 4, no_ai_percent: 40, light_calls: 5, advanced_calls: 1, estimated_cost_usd: null, cost_available_for: 0,
     average_latency_ms: 120, success_rate_percent: 100, month_spend_usd: 0, monthly_budget_usd: 0,
   },
-  control_tower: [{
-    mission_id: "mission-abc", status: "awaiting_approval", role: "student", organization: ORG.name, goal: "Register me for the coding contest",
-    created_at: "2026-09-26T04:00:00Z", intelligence: "advanced", models: ["openai/gpt-oss-120b"], ai_calls: 4, estimated_cost_usd: null,
-    latency_ms: 900, approvals_required: 1,
+  control_tower: [],
+  agent_runs: [{
+    run_id: "run-abc", agent_key: "academic", agent_name: "Academic Agent", organization: ORG.name, intelligence: "advanced",
+    models: ["openai/gpt-oss-120b"], status: "succeeded", latency_ms: 90, estimated_cost_usd: null, requires_approval: false,
+    created_at: "2026-09-26T04:00:00Z",
   }],
 };
 
 function admin() {
   signIn(ADMIN);
-  mockApi((url) => {
+  const calls: { url: string; method: string; body: unknown }[] = [];
+  mockApi((url, init) => {
+    const method = init?.method ?? "GET";
+    if (method !== "GET") calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : null });
     if (url.endsWith("/auth/me")) return { body: ADMIN };
     if (url.endsWith("/health")) return { body: HEALTH };
-    if (url.endsWith("/admin/agent-catalog")) return { body: CATALOG };
+    if (url.endsWith("/admin/agents/catalog")) return { body: ENTRIES };
+    if (url.endsWith("/admin/agents/deployments")) return { body: [ACADEMIC_DEPLOYMENT] };
+    if (url.endsWith("/admin/agent-catalog")) return { body: STATIC };
     if (url.endsWith("/admin/ai-operations")) return { body: OPS };
+    if (method !== "GET") return { body: ACADEMIC_DEPLOYMENT };
     return { body: [] };
   });
+  return calls;
 }
 
-describe("AgentOS surfaces", () => {
-  it("lists deployable product agents and keeps internal components non-deployable", async () => {
+describe("Agent-as-a-Product", () => {
+  it("shows deployed and deployable agents, and keeps internal components non-deployable", async () => {
     admin();
     renderApp("/admin/agent-catalog");
-    expect(await screen.findByText("Academic Agent")).toBeInTheDocument();
-    expect(screen.getByText("Product agents (4)")).toBeInTheDocument();
+    expect(await screen.findByText("Deployed Agents")).toBeInTheDocument();
+    expect(await screen.findByText("Product agents (2)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Configure Academic Agent" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deploy Career / Placement Agent" })).toBeInTheDocument();
     expect(screen.getAllByText("Internal")).toHaveLength(2);
-    expect(screen.getByText("120B · Advanced")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Agent Catalog" })).toBeInTheDocument();
   });
 
-  it("shows routing usage, the budget state and the control tower", async () => {
+  it("configures a deployment and deploys a new agent without ever sending an organization", async () => {
+    const calls = admin();
+    const user = userEvent.setup();
+    renderApp("/admin/agent-catalog");
+    await user.click(await screen.findByRole("button", { name: "Configure Academic Agent" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.selectOptions(within(dialog).getByLabelText("Status"), "paused");
+    await user.click(within(dialog).getByRole("button", { name: "Save configuration" }));
+    await vi.waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
+    const patch = calls.find((c) => c.method === "PATCH")!;
+    expect(patch.url).toMatch(/\/admin\/agents\/deployments\/7$/);
+    expect(patch.body).toMatchObject({ status: "paused", intelligence_level: "advanced", monthly_budget_usd: 25 });
+    expect(JSON.stringify(patch.body)).not.toMatch(/organization/);
+
+    await user.click(await screen.findByRole("button", { name: "Deploy Career / Placement Agent" }));
+    const deploy = await screen.findByRole("dialog");
+    await user.click(within(deploy).getByRole("button", { name: "Deploy agent" }));
+    await vi.waitFor(() => expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/admin/agents/career/deploy"))).toBe(true));
+  });
+
+  it("shows deployed agent runs in the Control Tower", async () => {
     admin();
     renderApp("/admin/ai-operations");
-    expect(await screen.findByText("Adaptive intelligence routing")).toBeInTheDocument();
-    expect(screen.getByText("40%")).toBeInTheDocument();
-    expect(screen.getByText("AI_BUDGET_EXCEEDED")).toBeInTheDocument(); // budget 0, spend 0: exhausted
-    expect(screen.getByText("Register me for the coding contest")).toBeInTheDocument();
-    expect(screen.getByText("1 required")).toBeInTheDocument();
-    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0); // no token counts -> never invented
+    expect(await screen.findByText("Control Tower · deployed agent runs")).toBeInTheDocument();
+    expect(screen.getByText("Adaptive intelligence routing")).toBeInTheDocument();
+    expect(screen.getByText("AI_BUDGET_EXCEEDED")).toBeInTheDocument();
+    expect(screen.getAllByText("Academic Agent").length).toBeGreaterThan(0);
   });
 });

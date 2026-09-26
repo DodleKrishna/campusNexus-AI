@@ -693,6 +693,7 @@ export interface AIOperations {
   routing?: Record<string, string>;
   usage?: AIUsageSummary;
   control_tower?: ControlTowerMission[];
+  agent_runs?: AgentRunRow[];
 }
 
 export interface AIUsageSummary {
@@ -733,6 +734,49 @@ export interface CatalogAgent {
   allowed_roles: string[];
   requires_approval: boolean;
   deployable: boolean;
+}
+
+export type IntelligenceLevel = "no_ai" | "light" | "advanced";
+
+export interface DeploymentView {
+  id: number;
+  agent_key: string;
+  display_name: string;
+  status: "active" | "paused";
+  intelligence_level: IntelligenceLevel;
+  monthly_budget_usd: number | null;
+  requires_approval: boolean;
+  allowed_roles: string[];
+  runs: number;
+  success_rate_percent: number | null;
+  estimated_cost_usd: number | null;
+  updated_at: string;
+}
+
+export interface CatalogEntry extends CatalogAgent {
+  deployment: DeploymentView | null;
+}
+
+export interface DeploymentConfig {
+  status?: "active" | "paused";
+  intelligence_level?: IntelligenceLevel;
+  monthly_budget_usd?: number | null;
+  requires_approval?: boolean;
+  allowed_roles?: string[];
+}
+
+export interface AgentRunRow {
+  run_id: string;
+  agent_key: string;
+  agent_name: string;
+  organization: string | null;
+  intelligence: IntelligenceLevel;
+  models: string[];
+  status: string;
+  latency_ms: number | null;
+  estimated_cost_usd: number | null;
+  requires_approval: boolean;
+  created_at: string;
 }
 
 export interface AgentCatalogView {

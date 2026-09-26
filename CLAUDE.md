@@ -451,6 +451,19 @@ across a component boundary. Free text is allowed only in the final user-facing 
 - `/admin/agent-catalog` (`app/services/agent_catalog.py`) is a static AgentOS catalog. The Action Agent,
   Verifier and Approval Gate are listed only as internal, non-deployable components -- never expose them.
 
+## Agent-as-a-Product MVP
+
+- `agent_deployments` (`app/db/models/agent_deployment.py`, tenant-owned, unique per organization + agent_key):
+  status active/paused, intelligence level, monthly budget (recorded; the organization AI budget enforces),
+  approval requirement, allowed roles. Only `agent_catalog.TEMPLATES` (academic, attendance, career, events,
+  campus_services, enquiry) are deployable; internal components are refused (`AGENT_NOT_DEPLOYABLE`).
+- Admin API (organization from the token only): `GET /admin/agents/catalog`, `GET /admin/agents/deployments`,
+  `POST /admin/agents/{agent_key}/deploy`, `PATCH /admin/agents/deployments/{id}` -- all audited.
+- Every chat run goes through `app.api.ai.deployed_agent_run`: not deployed / paused / role not allowed ->
+  403 `AGENT_NOT_DEPLOYED` / `AGENT_DISABLED` / `AGENT_ROLE_NOT_ALLOWED`, never an answer. The deployment's
+  LIGHT/ADVANCED level overrides the router for that run (`route(operation, override)`); runs are attributed
+  through `ai_usage_events.agent_key/run_id`. The seed deploys the six defaults for the demo organization.
+
 ## Hackathon Demo Freeze
 
 The demo runs on local SQLite with the mock provider (`start_campusnexus.ps1 -Reset -Provider mock`, with

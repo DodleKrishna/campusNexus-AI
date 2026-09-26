@@ -42,11 +42,14 @@ function messageFrom(status: number, body: unknown): string {
   const detail = (body as { detail?: unknown } | null)?.detail;
   if (typeof detail === "string" && detail.trim()) return detail;
   if (Array.isArray(detail)) return "Some of the information sent was not valid.";
+  // Structured refusals (AGENT_DISABLED, AI_BUDGET_EXCEEDED, ...) keep their machine-readable code visible.
+  const coded = detail as { code?: unknown; message?: unknown } | null;
+  if (coded && typeof coded.code === "string") return typeof coded.message === "string" ? `${coded.message} (${coded.code})` : coded.code;
   return FALLBACK_MESSAGES[status] ?? FALLBACK_MESSAGES[500];
 }
 
 export interface RequestOptions {
-  method?: "GET" | "POST" | "PUT" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   auth?: boolean;
   signal?: AbortSignal;

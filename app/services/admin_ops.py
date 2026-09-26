@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 from app.db.models.organization import Organization
 from app.db.tenant_session import session_organization
 from app.llm.router import ADVANCED_MODEL, LIGHT_MODEL
-from app.services import ai_usage
+from app.services import agent_deployments, ai_usage
 from app.auth.passwords import hash_password
 from app.db.models.auth import AuthAccount
 from app.db.models.organization import OrganizationMembership
@@ -351,6 +351,7 @@ def ai_operations(session: Session, provider, knowledge: KnowledgeService) -> AI
         routing={"no_ai": "deterministic rules / workflow", "light": LIGHT_MODEL, "advanced": ADVANCED_MODEL},
         usage=AIUsageSummary(**ai_usage.usage_summary(session)),
         control_tower=[ControlTowerMission(**row) for row in ai_usage.control_tower(session)],
+        agent_runs=agent_deployments.agent_runs(session),
     )
 
 

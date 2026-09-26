@@ -22,6 +22,7 @@ from __future__ import annotations
 import contextvars
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -81,8 +82,11 @@ class AIBudgetExceededError(LLMProviderError):
         self.organization_id, self.budget, self.spent = organization_id, budget, spent
 
 
-def route(operation: str) -> RoutingDecision:
+def route(operation: str, override: Optional[IntelligenceLevel] = None) -> RoutingDecision:
+    """The level/model for ``operation``; a deployed agent's configured LIGHT/ADVANCED level overrides the default."""
     level, reason = OPERATION_LEVELS.get(operation, (IntelligenceLevel.LIGHT, "default for an unlisted AI operation"))
+    if override in (IntelligenceLevel.LIGHT, IntelligenceLevel.ADVANCED):
+        level, reason = override, f"agent deployment configured {override.value}"
     return RoutingDecision(operation=operation, level=level, reason=reason,
                            model=ADVANCED_MODEL if level == IntelligenceLevel.ADVANCED else LIGHT_MODEL)
 
@@ -110,6 +114,8 @@ class UsageRecord:
     model: Optional[str]
     provider: str
     mission_id: Optional[str]
+    agent_key: Optional[str]
+    run_id: Optional[str]
     input_tokens: Optional[int]
     output_tokens: Optional[int]
     latency_ms: int
@@ -123,6 +129,9 @@ class UsageRecord:
 class AIContext:
     organization_id: Optional[int]
     mission_id: Optional[str] = None
+    agent_key: Optional[str] = None  # the deployed product agent serving this run
+    run_id: Optional[str] = None
+    level_override: Optional[IntelligenceLevel] = None  # from the agent deployment
     records: List[UsageRecord] = field(default_factory=list)
 
 
@@ -134,13 +143,16 @@ def current_ai_context() -> Optional[AIContext]:
 
 
 @contextmanager
-def ai_context(organization_id: Optional[int], mission_id: Optional[str] = None, *, recorder: Any = None) -> Iterator[AIContext]:
-    """Attribute the AI calls inside the block to an organization (and mission); persist them on exit."""
+def ai_context(organization_id: Optional[int], mission_id: Optional[str] = None, *, recorder: Any = None,
+               agent_key: Optional[str] = None, level_override: Optional[IntelligenceLevel] = None) -> Iterator[AIContext]:
+    """Attribute the AI calls inside the block to an organization (and mission / deployed agent); persist on exit."""
     parent = _CURRENT.get()
-    if parent is not None and parent.organization_id == organization_id and mission_id in (None, parent.mission_id):
+    if (parent is not None and parent.organization_id == organization_id and mission_id in (None, parent.mission_id)
+            and agent_key in (None, parent.agent_key)):
         yield parent  # nested: the outer context owns the records
         return
-    context = AIContext(organization_id=organization_id, mission_id=mission_id)
+    context = AIContext(organization_id=organization_id, mission_id=mission_id, agent_key=agent_key,
+                        run_id=f"run-{uuid.uuid4().hex[:12]}" if agent_key else None, level_override=level_override)
     token = _CURRENT.set(context)
     try:
         yield context
@@ -181,9 +193,9 @@ class RoutedLLMProvider(LLMProvider):
         return getattr(light, item)
 
     def _call(self, operation: str, *args: Any, **kwargs: Any) -> Any:
-        decision = route(operation)
-        provider = self._advanced if decision.level == IntelligenceLevel.ADVANCED else self._light
         context = current_ai_context()
+        decision = route(operation, context.level_override if context is not None else None)
+        provider = self._advanced if decision.level == IntelligenceLevel.ADVANCED else self._light
         if self.recorder is not None and context is not None and context.organization_id is not None:
             self.recorder.check_budget(context.organization_id)  # raises AIBudgetExceededError
         take_usage = getattr(provider, "take_last_usage", None)
@@ -205,7 +217,7 @@ class RoutedLLMProvider(LLMProvider):
                 model = provider.model_name or decision.model
                 context.records.append(UsageRecord(
                     operation=operation, level=decision.level, model=model, provider=provider.name,
-                    mission_id=context.mission_id, input_tokens=input_tokens, output_tokens=output_tokens,
+                    mission_id=context.mission_id, agent_key=context.agent_key, run_id=context.run_id, input_tokens=input_tokens, output_tokens=output_tokens,
                     latency_ms=int((time.perf_counter() - started) * 1000), success=success, error_kind=error_kind,
                     estimated_cost_usd=estimate_cost(model, input_tokens, output_tokens) if provider.is_live else None,
                     created_at=datetime.now(timezone.utc),

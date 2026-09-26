@@ -27,11 +27,14 @@ import { SkeletonRows, SkeletonTable } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState, Notice } from "@/components/ui/states";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { ADMIN_AGENTS, adminAgentByKey } from "@/features/agents/adminCatalog";
+import { AgentRuns, DeployableCatalog, DeployedAgents } from "@/features/admin/AgentProducts";
 import { AgentCatalog, ControlTower, IntelligencePanel } from "@/features/admin/IntelligenceOps";
 import { ReviewerInbox } from "@/features/requests/ReviewerInbox";
 import {
   useAdminAIOperations,
   useAdminAgentCatalog,
+  useAdminAgentsCatalog,
+  useAdminDeployments,
   useAdminAttendance,
   useAdminAudit,
   useAdminComplaints,
@@ -702,6 +705,7 @@ export function AdminAIOperationsPage() {
             </Panel>
           </div>
           <IntelligencePanel usage={data.usage} routing={data.routing} />
+          <AgentRuns rows={data.agent_runs} />
           <ControlTower rows={data.control_tower} />
           <Panel title="Agent activity">
             <dl className="grid grid-cols-2 divide-border sm:grid-cols-4 sm:divide-x">
@@ -771,11 +775,18 @@ export function AdminAIOperationsPage() {
 
 export function AdminAgentCatalogPage() {
   const { data, isLoading, isError, error, refetch } = useAdminAgentCatalog();
+  const entries = useAdminAgentsCatalog();
+  const deployments = useAdminDeployments();
   return (
     <div className="space-y-6">
-      <PageTitle title="Agent Catalog" description="The product agents deployed for this institution, the intelligence level each uses, and where a human must approve." />
-      {isLoading && <SkeletonTable rows={4} />}
+      <PageTitle
+        title="Agent Catalog"
+        description="Configure and deploy product agents for this institution: status, intelligence level, budget and where a human must approve."
+      />
+      {(isLoading || entries.isLoading) && <SkeletonTable rows={4} />}
       {isError && <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />}
+      {deployments.data && <DeployedAgents rows={deployments.data} />}
+      {entries.data && <DeployableCatalog entries={entries.data} />}
       {data && <AgentCatalog data={data} />}
     </div>
   );

@@ -13,11 +13,13 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from app.api.ai import budget_exceeded, request_ai_context
+from sqlalchemy.orm import Session
+
+from app.api.ai import budget_exceeded, deployed_agent_run
 from app.llm.router import AIBudgetExceededError
 from app.agents.enquiry.agent import EnquiryAgent
 from app.api.auth_deps import AuthenticatedUser, current_student, require_authenticated_user
-from app.api.deps import get_now
+from app.api.deps import get_now, get_session
 from app.services.class_schedule import get_current_class
 from app.llm.base import LLMProviderError, LLMTransientError
 from app.schemas.agent_chat import (
@@ -97,13 +99,14 @@ def query(
     user: AuthenticatedUser = Depends(require_authenticated_user),  # cached: the same resolved identity
     gateway: SpecialistGateway = Depends(_gateway),
     now: datetime = Depends(get_now),
+    session: Session = Depends(get_session),
 ) -> AgentQueryResponse:
     organization_id = user.organization_id
     if agent_key not in CHAT_AGENT_KEYS:
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     provider = request.app.state.llm_provider
     try:
-        with request_ai_context(request, organization_id):
+        with deployed_agent_run(request, session, agent_key, "student", organization_id):
             if agent_key == "enquiry":
                 agent = EnquiryAgent(
                     llm_provider=provider,

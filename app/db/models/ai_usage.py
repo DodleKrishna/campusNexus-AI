@@ -24,6 +24,8 @@ class AIUsageEvent(TenantMixin, Base):
     model: Mapped[Optional[str]] = mapped_column(String(80), default=None)
     provider: Mapped[Optional[str]] = mapped_column(String(30), default=None)
     mission_id: Mapped[Optional[str]] = mapped_column(String(64), index=True, default=None)
+    agent_key: Mapped[Optional[str]] = mapped_column(String(40), index=True, default=None)  # deployed agent
+    run_id: Mapped[Optional[str]] = mapped_column(String(40), index=True, default=None)  # one agent run
     input_tokens: Mapped[Optional[int]] = mapped_column(default=None)
     output_tokens: Mapped[Optional[int]] = mapped_column(default=None)
     latency_ms: Mapped[Optional[int]] = mapped_column(default=None)

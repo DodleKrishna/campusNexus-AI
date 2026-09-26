@@ -63,6 +63,7 @@ from app.db.models import (  # noqa: F401  (import registers all mapped classes)
 )
 from app.auth.accounts import DEV_ACCOUNTS, resolve_seed_password, seed_dev_accounts
 from app.db.tenancy import assign_unowned_rows, ensure_default_organization
+from app.services.agent_deployments import ensure_default_deployments
 from app.db.session import create_db_engine, create_session_factory, init_db
 from app.schemas.enums import UserRole
 
@@ -1097,6 +1098,7 @@ def run_seed(session: Session) -> SeedSummary:
     seed_classmates(session, departments, courses)
     seed_teaching(session, courses, faculty)
     assign_unowned_rows(session, organization)
+    ensure_default_deployments(session, organization.id)  # the six catalog agents, deployed with defaults
     session.commit()
     return build_summary(session)
 

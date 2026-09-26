@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Boxes, Cpu, ShieldCheck, Sparkles, Zap } from "lucide-react";
+import { ArrowRight, Cpu, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { useState } from "react";
 import { ApiError } from "@/api/client";
 import { api, queryKeys } from "@/api/endpoints";
@@ -173,16 +173,6 @@ export function AgentCatalog({ data }: { data: AgentCatalogView }) {
           ))}
         </ol>
       </Section>
-      <div>
-        <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink">
-          <Boxes className="size-4 text-primary" aria-hidden /> Product agents ({data.agents.length})
-        </h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {data.agents.map((a) => (
-            <AgentCard key={a.key} agent={a} />
-          ))}
-        </div>
-      </div>
       <div>
         <h2 className="mb-1 text-sm font-semibold text-ink">Internal infrastructure</h2>
         <Notice tone="info" className="mb-3">

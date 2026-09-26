@@ -17,11 +17,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.services.ai_usage import record_no_ai
-from app.api.ai import budget_exceeded, request_ai_context
+from app.api.ai import budget_exceeded, deployed_agent_run
 from app.llm.router import AIBudgetExceededError
 from app.db.tenant_session import session_organization
 from app.agents.enquiry.faculty import FACULTY_AGENT_KEYS, FACULTY_DISPLAY_NAMES, FacultyAgent
-from app.api.auth_deps import FacultyCaller, current_faculty_profile
+from app.api.auth_deps import AuthenticatedUser, FacultyCaller, current_faculty_profile, require_authenticated_user
 from app.api.deps import get_knowledge_service, get_now, get_session
 from app.llm.base import LLMProviderError, LLMTransientError
 from app.schemas.agent_chat import AgentQueryRequest, AgentQueryResponse
@@ -192,6 +192,7 @@ def agent_catalog(request: Request, _: FacultyCaller = Depends(current_faculty_p
 @router.post("/agents/{agent_key}/query", response_model=AgentQueryResponse)
 def agent_query(
     agent_key: str, body: AgentQueryRequest, request: Request, caller: FacultyCaller = Depends(current_faculty_profile),
+    user: AuthenticatedUser = Depends(require_authenticated_user),
     session: Session = Depends(get_session), knowledge: KnowledgeService = Depends(get_knowledge_service),
     now: datetime = Depends(get_now),
 ) -> AgentQueryResponse:
@@ -199,7 +200,7 @@ def agent_query(
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     agent = FacultyAgent(llm_provider=request.app.state.llm_provider, knowledge=knowledge)
     try:
-        with request_ai_context(request, session_organization(session)):
+        with deployed_agent_run(request, session, agent_key, user.role.value, session_organization(session)):
             return agent.handle(session, caller.faculty, agent_key, body.message, now)
     except AIBudgetExceededError as exc:
         raise budget_exceeded(exc) from exc

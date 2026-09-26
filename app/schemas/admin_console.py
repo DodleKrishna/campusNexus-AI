@@ -173,6 +173,48 @@ class CatalogAgent(BaseModel):
     deployable: bool = True
 
 
+class DeploymentConfig(BaseModel):
+    """What an admin may configure. The organization is never part of it."""
+    status: Optional[Literal["active", "paused"]] = None
+    intelligence_level: Optional[Literal["no_ai", "light", "advanced"]] = None
+    monthly_budget_usd: Optional[float] = Field(default=None, ge=0)
+    requires_approval: Optional[bool] = None
+    allowed_roles: Optional[List[Literal["student", "faculty", "hod", "admin"]]] = None
+
+
+class DeploymentView(BaseModel):
+    id: int
+    agent_key: str
+    display_name: str
+    status: str
+    intelligence_level: str
+    monthly_budget_usd: Optional[float] = None
+    requires_approval: bool
+    allowed_roles: List[str]
+    runs: int = 0
+    success_rate_percent: Optional[float] = None
+    estimated_cost_usd: Optional[float] = None
+    updated_at: datetime
+
+
+class CatalogEntry(CatalogAgent):
+    deployment: Optional[DeploymentView] = None
+
+
+class AgentRunRow(BaseModel):
+    run_id: str
+    agent_key: str
+    agent_name: str
+    organization: Optional[str] = None
+    intelligence: str
+    models: List[str]
+    status: str
+    latency_ms: Optional[int] = None
+    estimated_cost_usd: Optional[float] = None
+    requires_approval: bool = False
+    created_at: datetime
+
+
 class AgentCatalogView(BaseModel):
     agents: List[CatalogAgent]
     internal_components: List[CatalogAgent]
@@ -199,6 +241,7 @@ class AIOperations(BaseModel):
     routing: Dict[str, str] = {}
     usage: AIUsageSummary = AIUsageSummary()
     control_tower: List[ControlTowerMission] = []
+    agent_runs: List[AgentRunRow] = []
     requests_needing_review: int
     rag_chunks: int
     rag_ready: bool

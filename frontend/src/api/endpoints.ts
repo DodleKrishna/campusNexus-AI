@@ -7,6 +7,9 @@ import type {
   AIOperations,
   AIUsageSummary,
   AgentCatalogView,
+  CatalogEntry,
+  DeploymentConfig,
+  DeploymentView,
   AuditEntry,
   DepartmentDetail,
   DepartmentRow,
@@ -132,6 +135,12 @@ export const api = {
   adminSetAIBudget: (monthlyBudgetUsd: number | null) =>
     apiRequest<AIUsageSummary>("/admin/ai-budget", { method: "PUT", body: { monthly_budget_usd: monthlyBudgetUsd } }),
   adminAgentCatalog: () => apiRequest<AgentCatalogView>("/admin/agent-catalog"),
+  adminAgentsCatalog: () => apiRequest<CatalogEntry[]>("/admin/agents/catalog"),
+  adminDeployments: () => apiRequest<DeploymentView[]>("/admin/agents/deployments"),
+  adminDeployAgent: (agentKey: string, config: DeploymentConfig) =>
+    apiRequest<DeploymentView>(`/admin/agents/${encodeURIComponent(agentKey)}/deploy`, { method: "POST", body: config }),
+  adminConfigureAgent: (deploymentId: number, config: DeploymentConfig) =>
+    apiRequest<DeploymentView>(`/admin/agents/deployments/${deploymentId}`, { method: "PATCH", body: config }),
   adminAudit: (filters: { source?: string; action?: string }) => apiRequest<AuditEntry[]>(`/admin/audit${qs(filters)}`),
   adminSystem: () => apiRequest<SystemStatus>("/admin/system"),
   adminNotifications: () => apiRequest<NotificationItem[]>("/admin/notifications"),

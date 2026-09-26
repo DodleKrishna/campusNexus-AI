@@ -22,7 +22,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.services import agent_catalog as agent_catalog_service
-from app.api.ai import budget_exceeded, request_ai_context
+from app.services import agent_deployments
+from app.api.ai import budget_exceeded, deployed_agent_run
 from app.llm.router import AIBudgetExceededError
 from app.db.tenant_session import session_organization
 from app.agents.enquiry.admin import ADMIN_AGENT_KEYS, ADMIN_DISPLAY_NAMES, AdminAgent
@@ -32,6 +33,9 @@ from app.auth.accounts import get_account
 from app.db.models.auth import AuthAccount
 from app.llm.base import LLMProviderError, LLMTransientError
 from app.schemas.admin_console import (
+    CatalogEntry,
+    DeploymentConfig,
+    DeploymentView,
     AIBudgetBody,
     AIUsageSummary,
     AgentCatalogView,
@@ -192,6 +196,42 @@ def agent_catalog(_: AuthAccount = Depends(current_admin)) -> AgentCatalogView:
     return agent_catalog_service.catalog()
 
 
+# --- Agent-as-a-Product: catalog -> configure -> deploy (organization from the token, never the client) -------
+
+
+def _deployment_call(operation):
+    try:
+        return operation()
+    except agent_deployments.DeploymentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.message}) from exc
+
+
+@router.get("/agents/catalog", response_model=List[CatalogEntry])
+def agents_catalog(_: AuthAccount = Depends(current_admin), session: Session = Depends(get_session)) -> List[CatalogEntry]:
+    return agent_deployments.catalog(session)
+
+
+@router.get("/agents/deployments", response_model=List[DeploymentView])
+def agents_deployments(_: AuthAccount = Depends(current_admin), session: Session = Depends(get_session)) -> List[DeploymentView]:
+    return agent_deployments.deployments(session)
+
+
+@router.post("/agents/{agent_key}/deploy", response_model=DeploymentView)
+def deploy_agent(
+    agent_key: str, body: DeploymentConfig, admin: AuthAccount = Depends(current_admin), session: Session = Depends(get_session),
+    now: datetime = Depends(get_now),
+) -> DeploymentView:
+    return _deployment_call(lambda: agent_deployments.deploy(session, admin, agent_key, body, now))
+
+
+@router.patch("/agents/deployments/{deployment_id}", response_model=DeploymentView)
+def configure_agent(
+    deployment_id: int, body: DeploymentConfig, admin: AuthAccount = Depends(current_admin),
+    session: Session = Depends(get_session), now: datetime = Depends(get_now),
+) -> DeploymentView:
+    return _deployment_call(lambda: agent_deployments.configure(session, admin, deployment_id, body, now))
+
+
 @router.get("/audit", response_model=List[AuditEntry])
 def audit(
     source: Optional[Literal["mission", "operations"]] = None, action: Optional[str] = Query(default=None, max_length=60),
@@ -232,7 +272,7 @@ def agent_query(
         raise HTTPException(status_code=404, detail=f"There is no '{agent_key}' agent available to chat with.")
     agent = AdminAgent(llm_provider=request.app.state.llm_provider, knowledge=knowledge)
     try:
-        with request_ai_context(request, session_organization(session)):
+        with deployed_agent_run(request, session, agent_key, "admin", session_organization(session)):
             return agent.handle(session, admin, agent_key, body.message, now)
     except AIBudgetExceededError as exc:
         raise budget_exceeded(exc) from exc
