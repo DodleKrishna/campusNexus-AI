@@ -1,0 +1,16 @@
+# Netlify: the React/Vite frontend in frontend/.
+# Set VITE_API_BASE_URL in the Netlify UI to the backend origin (e.g. https://<service>.onrender.com, no trailing
+# slash); it is read at build time by frontend/src/api/client.ts. No secrets belong in this file.
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "20"
+
+# Single-page app: every client-side route is served by index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

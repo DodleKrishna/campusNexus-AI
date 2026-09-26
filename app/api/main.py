@@ -8,11 +8,13 @@ reimplements agent/rule/verification logic; every route composes existing
 """
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncContextManager, AsyncIterator, Callable
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agents.academic.agent import AcademicAgent
@@ -47,6 +49,14 @@ def _build_registry(knowledge_service: KnowledgeService, llm_provider: LLMProvid
     registry.register(AgentName.CAMPUS_SERVICES_AGENT, lambda s: ServicesAgent(session=s, knowledge_service=knowledge_service, llm_provider=llm_provider))
     registry.register(AgentName.ACTION_AGENT, lambda s: ActionAgent(session=s, knowledge_service=knowledge_service, tool_gateway=tool_gateway))
     return registry
+
+
+_DEV_ORIGINS = ("http://127.0.0.1:5173", "http://localhost:5173", "http://127.0.0.1:4173", "http://localhost:4173")
+
+
+def _allowed_origins() -> list[str]:
+    configured = [o.strip().rstrip("/") for o in os.environ.get("CAMPUSNEXUS_FRONTEND_ORIGIN", "").split(",") if o.strip()]
+    return [*_DEV_ORIGINS, *configured]
 
 
 def create_app(
@@ -84,6 +94,14 @@ def create_app(
         ),
         version="0.8.0",
         lifespan=lifespan,
+    )
+    # The dev frontend reaches the API through the Vite proxy (same origin); a hosted frontend (e.g. Netlify)
+    # calls it cross-origin. Allowed origins: local dev plus CAMPUSNEXUS_FRONTEND_ORIGIN (comma-separated).
+    # Bearer tokens travel in the Authorization header, so no cookies / credentials mode is needed.
+    fastapi_app.add_middleware(
+        CORSMiddleware, allow_origins=_allowed_origins(), allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Demo-Identity"],
     )
     fastapi_app.state.session_factory = session_factory
     fastapi_app.state.orchestrator = orchestrator
@@ -131,6 +149,11 @@ def _build_default_app() -> FastAPI:
         # must never touch the dev DB): additively brings a database created by
         # an earlier phase up to the current columns (e.g. Phase 11 approval
         # binding) without touching data.
+        if os.environ.get("CAMPUSNEXUS_DEMO_BOOTSTRAP", "").strip() == "1":
+            # Hosted demo (ephemeral SQLite): seed once at startup if empty -- never per request, never a reset.
+            from scripts.render_bootstrap import bootstrap_demo
+
+            bootstrap_demo(engine, vector_store, config.policy_dir)
         upgrade_schema(engine)
         yield
 

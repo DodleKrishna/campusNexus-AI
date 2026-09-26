@@ -1,0 +1,19 @@
+# CampusNexus API -- runtime dependencies for a Linux deployment (e.g. Render).
+# Versions are the ones the frozen hackathon build was tested with. The FastAPI app runs
+# from the repository root (`uvicorn app.api.main:app`), so the package itself is not installed.
+# Not included on purpose: streamlit (debug console), pytest (tests), psycopg (Supabase is
+# disabled for this deployment), anthropic (mock / Groq only; Groq uses httpx).
+pydantic==2.13.5
+sqlalchemy==2.0.54
+pyyaml==6.0.3
+chromadb==1.5.9
+langgraph==0.3.18
+langgraph-checkpoint==2.1.2
+langgraph-prebuilt==0.1.8
+langchain-core==0.3.86
+xxhash>=3.0,<4
+fastapi==0.141.1
+uvicorn==0.53.0
+httpx==0.28.1
+bcrypt==5.0.0
+pyjwt==2.15.0
