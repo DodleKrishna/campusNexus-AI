@@ -20,7 +20,7 @@ from app.agents.action.agent import ActionAgent
 from app.agents.career.agent import CareerAgent
 from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
-from app.api.routers import admin, admin_console, agents, approvals, auth, faculty, health, hod, me, missions, requests, students
+from app.api.routers import admin, admin_console, agents, approvals, auth, enterprise, faculty, health, hod, me, missions, requests, students
 from app.db.session import create_db_engine, upgrade_schema
 from app.db.tenant_session import TenantSessionFactory
 from app.llm.router import build_routed_provider, routed
@@ -109,6 +109,7 @@ def create_app(
     fastapi_app.include_router(hod.router)
     # Phase 18: the administrator console (JWT, institution-wide).
     fastapi_app.include_router(admin_console.router)
+    fastapi_app.include_router(enterprise.router)
     return fastapi_app
 
 
