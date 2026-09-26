@@ -107,3 +107,67 @@ describe("Agent-as-a-Product", () => {
     expect(screen.getAllByText("Academic Agent").length).toBeGreaterThan(0);
   });
 });
+
+describe("Enterprise surfaces", () => {
+  const CENTER = {
+    kpis: [
+      { key: "agents", label: "Active agents", value: "6", note: "of 6 deployed" },
+      { key: "workflows", label: "Automated workflow runs", value: "12", note: "requests + agent missions" },
+      { key: "approvals", label: "Pending approvals", value: "2", note: "" },
+      { key: "sla", label: "SLA risks", value: "3", note: "" },
+      { key: "no_ai", label: "No-AI resolution", value: "40%", note: "" },
+      { key: "spend", label: "Estimated AI spend", value: "$0.00", note: "" },
+    ],
+    health: [{ key: "attendance", label: "Attendance risks", value: 14, note: "students below the requirement", link: "/admin/attendance" }],
+    workforce: [ACADEMIC_DEPLOYMENT],
+    activity: [{ timestamp: "2026-09-26T04:00:00Z", source: "operations", actor: "Priya", role: "admin", action: "agent_configured", target: "", reference: "", outcome: "Priya set the Academic Agent to active, advanced." }],
+  };
+  function enterpriseApi() {
+    signIn(ADMIN);
+    mockApi((url) => {
+      if (url.endsWith("/auth/me")) return { body: ADMIN };
+      if (url.endsWith("/health")) return { body: HEALTH };
+      if (url.endsWith("/admin/command-center")) return { body: CENTER };
+      if (url.endsWith("/admin/connectors")) {
+        return { body: [
+          { key: "campusnexus_db", name: "CampusNexus Database", category: "Database", description: "", status: "connected", detail: "SQLite · live" },
+          { key: "csv", name: "CSV / Excel import", category: "CSV / Excel", description: "", status: "coming_next", detail: "Planned" },
+        ] };
+      }
+      return { body: [] };
+    });
+  }
+
+  it("groups the admin navigation and opens the Command Center", async () => {
+    enterpriseApi();
+    renderApp("/admin");
+    expect(await screen.findByRole("heading", { name: "CampusNexus Command Center" })).toBeInTheDocument();
+    expect(await screen.findByText("Attendance risks")).toBeInTheDocument();
+    expect(screen.getByText("Priya set the Academic Agent to active, advanced.")).toBeInTheDocument();
+    for (const section of ["Operations", "AI Workforce", "Enterprise"]) expect(screen.getAllByText(section).length).toBeGreaterThan(0);
+    for (const link of ["Workflows", "Connectors", "Knowledge", "Control Tower", "Institution Value"]) {
+      expect(screen.getByRole("link", { name: link })).toBeInTheDocument();
+    }
+  });
+
+  it("recalculates illustrative unit economics and labels them as illustrative", async () => {
+    enterpriseApi();
+    const user = userEvent.setup();
+    renderApp("/admin/value");
+    expect(await screen.findByText("~52%")).toBeInTheDocument(); // 25,000 revenue - 12,000 COGS
+    expect(screen.getByText("Illustrative — not yet market validated")).toBeInTheDocument();
+    expect(screen.getByText("Tenant-aware architecture implemented")).toBeInTheDocument();
+    const ai = screen.getByLabelText("AI usage");
+    await user.clear(ai);
+    await user.type(ai, "7000");
+    expect(screen.getByText("~32%")).toBeInTheDocument(); // 25,000 - 17,000
+  });
+
+  it("shows only the live database as connected", async () => {
+    enterpriseApi();
+    renderApp("/admin/connectors");
+    expect(await screen.findByText("CampusNexus Database")).toBeInTheDocument();
+    expect(screen.getAllByText("Connected")).toHaveLength(1);
+    expect(screen.getByText("Coming next")).toBeInTheDocument();
+  });
+});

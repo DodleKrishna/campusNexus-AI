@@ -1,4 +1,4 @@
-import { Loader2, LockKeyhole } from "lucide-react";
+import { Gauge, Loader2, LockKeyhole, Scale, ScrollText, ShieldCheck } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ApiError } from "@/api/client";
@@ -41,13 +41,39 @@ export function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-dvh flex-col bg-background px-4 py-8 sm:py-12">
-      <main className="flex flex-1 items-center justify-center">
+    <div className="flex min-h-dvh flex-col bg-background lg:flex-row">
+      <aside className="hidden flex-col justify-between bg-nav px-12 py-12 text-white lg:flex lg:w-[44%] xl:px-16">
+        <div className="flex items-center gap-2.5">
+          <BrandMark className="size-9" />
+          <span className="text-[15px] font-semibold tracking-tight">
+            CampusNexus <span className="text-accent-bright">AgentOS</span>
+          </span>
+        </div>
+        <div className="max-w-md">
+          <h2 className="text-3xl leading-tight font-semibold tracking-tight text-balance">One intelligent operating layer for your entire campus.</h2>
+          <p className="mt-4 text-[15px] text-nav-text">Connect systems. Deploy agents. Automate workflows. Keep humans in control.</p>
+          <ul className="mt-8 grid grid-cols-2 gap-3">
+            {[
+              { label: "Deterministic rules", icon: <Scale /> },
+              { label: "Human approval", icon: <ShieldCheck /> },
+              { label: "Audit ready", icon: <ScrollText /> },
+              { label: "Cost controlled", icon: <Gauge /> },
+            ].map((v) => (
+              <li key={v.label} className="flex items-center gap-2 rounded-lg border border-nav-border bg-nav-raised/50 px-3 py-2 text-[13px] text-white [&_svg]:size-4 [&_svg]:text-accent-bright">
+                {v.icon}
+                {v.label}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <p className="text-xs text-nav-text">The intelligent automation and agent layer above your existing ERP, SIS and LMS.</p>
+      </aside>
+      <main className="flex flex-1 flex-col items-center justify-center px-4 py-8 sm:py-12">
         <div className="w-full max-w-[400px]">
           <div className="flex flex-col items-center text-center">
             <BrandMark className="size-11" />
             <p className="mt-3 text-base font-semibold tracking-tight text-ink">
-              CampusNexus <span className="text-primary">AI</span>
+              CampusNexus <span className="text-primary">AgentOS</span>
             </p>
             {INSTITUTION && <p className="mt-0.5 text-sm text-muted">{INSTITUTION}</p>}
           </div>
@@ -97,8 +123,8 @@ export function LoginPage() {
             <LockKeyhole className="size-3.5" /> Secure role-based campus access
           </p>
         </div>
+        <p className="mt-8 text-center text-xs text-subtle">CampusNexus AgentOS · Campus Intelligence Platform</p>
       </main>
-      <p className="mt-8 text-center text-xs text-subtle">CampusNexus AI · Campus Intelligence Platform</p>
     </div>
   );
 }

@@ -57,7 +57,7 @@ describe("Admin console", () => {
 
   it("shows institution metrics from the API", async () => {
     adminApi((url) => (url.includes("/admin/dashboard") ? { body: DASHBOARD } : undefined));
-    renderApp("/admin");
+    renderApp("/admin/institution");
     expect(await screen.findByText("Campus overview")).toBeInTheDocument();
     expect((await screen.findByText("Students")).parentElement?.textContent).toContain("28");
     expect(screen.getByText("SLA breaches").parentElement?.textContent).toContain("3");

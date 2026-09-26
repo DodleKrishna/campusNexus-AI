@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -145,7 +146,10 @@ export function RequestDetail({ request, viewer, showTitle = false }: { request:
         <div>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <Badge tone="primary">{request.type_label}</Badge>
-            <StatusBadge {...statusOf(WORKFLOW_STATUS, request.status)} />
+            <span className="flex items-center gap-1.5">
+              <SlaChip request={request} />
+              <StatusBadge {...statusOf(WORKFLOW_STATUS, request.status)} />
+            </span>
           </div>
           <h3 className="mt-2 text-base font-semibold text-ink">{requestHeading(request, viewer)}</h3>
         </div>
@@ -205,6 +209,23 @@ export function RequestDetail({ request, viewer, showTitle = false }: { request:
 }
 
 /** A request as a standalone card (request detail with its own heading). */
+/** Demo SLA indicator for an open request (48 h review target, "due soon" after 24 h). Computed on read;
+ * routing escalation is real, a scheduled auto-escalation job is on the roadmap. */
+export function SlaChip({ request }: { request: WorkflowRequest }) {
+  const [now] = useState(() => Date.now()); // captured once per mount: render stays pure
+  if (request.status !== "pending" && request.status !== "needs_review") return null;
+  const escalated = request.status === "needs_review" || /escalation/.test(request.routing_basis ?? "");
+  const hours = (now - new Date(request.submitted_at ?? request.created_at).getTime()) / 3_600_000;
+  const [label, tone] = escalated
+    ? (["Escalated", "danger"] as const)
+    : hours >= 48
+      ? (["SLA Risk", "danger"] as const)
+      : hours >= 24
+        ? (["Due Soon", "warning"] as const)
+        : (["On Track", "success"] as const);
+  return <StatusBadge label={label} tone={tone} title={`Demo SLA indicator · ${Math.max(0, Math.round(hours))} h elapsed of a 48 h review target`} />;
+}
+
 export function WorkflowRequestCard({ request, viewer, actions }: { request: WorkflowRequest; viewer: "student" | "faculty"; actions?: ReactNode }) {
   return (
     <Card className="overflow-hidden">

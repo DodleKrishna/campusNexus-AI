@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Boxes, ShieldCheck } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { ArrowRight, BookOpen, Boxes, Briefcase, CalendarDays, ClipboardCheck, MessagesSquare, ShieldCheck, Wrench } from "lucide-react";
+import { Fragment, useState, type ReactNode } from "react";
 import { ApiError } from "@/api/client";
 import { api, queryKeys } from "@/api/endpoints";
 import { Badge, StatusBadge } from "@/components/ui/badge";
@@ -31,6 +31,30 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <CardHeader title={title} />
       <div className="border-t border-border">{children}</div>
     </Card>
+  );
+}
+
+const AGENT_ICON: Record<string, ReactNode> = {
+  academic: <BookOpen />, attendance: <ClipboardCheck />, career: <Briefcase />, events: <CalendarDays />,
+  campus_services: <Wrench />, enquiry: <MessagesSquare />,
+};
+
+const LIFECYCLE = ["Select", "Configure", "Deploy", "Run", "Monitor", "Control"];
+
+/** The Agent-as-a-Product lifecycle shown under the catalog header. */
+export function LifecycleStrip() {
+  return (
+    <ol aria-label="Agent lifecycle" className="flex flex-wrap items-center gap-1.5">
+      {LIFECYCLE.map((step, i) => (
+        <Fragment key={step}>
+          <li className="rounded-md border border-border bg-surface px-2.5 py-1 text-xs font-semibold tracking-wide text-ink uppercase">
+            <span className="mr-1 text-subtle tabular-nums">{i + 1}</span>
+            {step}
+          </li>
+          {i < LIFECYCLE.length - 1 && <ArrowRight aria-hidden className="size-3.5 text-subtle" />}
+        </Fragment>
+      ))}
+    </ol>
   );
 }
 
@@ -117,9 +141,14 @@ function ProductCard({ entry, onConfigure }: { entry: CatalogEntry; onConfigure:
   return (
     <Card className="flex h-full flex-col gap-3 p-5">
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="font-semibold text-ink">{entry.name}</p>
-          <p className="mt-1 text-[13px] leading-5 text-muted">{entry.purpose}</p>
+        <div className="flex min-w-0 gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary [&_svg]:size-[18px]">
+            {AGENT_ICON[entry.key] ?? <Boxes />}
+          </span>
+          <div className="min-w-0">
+            <p className="font-semibold text-ink">{entry.name}</p>
+            <p className="mt-1 text-[13px] leading-5 text-muted">{entry.purpose}</p>
+          </div>
         </div>
         {d ? <StatusPill status={d.status} /> : <StatusBadge label="Not deployed" tone="neutral" />}
       </div>
@@ -131,9 +160,14 @@ function ProductCard({ entry, onConfigure }: { entry: CatalogEntry; onConfigure:
           </Badge>
         )}
         <Badge>Budget {budgetLabel(d?.monthly_budget_usd)}</Badge>
+        {(d?.allowed_roles ?? entry.allowed_roles).map((r) => (
+          <Badge key={r} className="font-normal">{titleCase(r)}</Badge>
+        ))}
       </div>
       <div className="mt-auto flex items-center justify-between gap-2 pt-1">
-        <span className="text-xs text-muted">{d ? `Deployed · ${d.runs} runs` : "Available to deploy"}</span>
+        <span className="text-xs text-muted">
+          {d ? `${d.runs} runs · ${d.runs ? `cost ${money(d.estimated_cost_usd)}` : "no runs yet"}` : "Available to deploy"}
+        </span>
         <Button size="sm" variant={d ? "outline" : "primary"} onClick={onConfigure} aria-label={`${d ? "Configure" : "Deploy"} ${entry.name}`}>
           {d ? "Configure" : "Deploy"}
         </Button>

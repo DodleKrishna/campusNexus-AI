@@ -464,6 +464,16 @@ across a component boundary. Free text is allowed only in the final user-facing 
   LIGHT/ADVANCED level overrides the router for that run (`route(operation, override)`); runs are attributed
   through `ai_usage_events.agent_key/run_id`. The seed deploys the six defaults for the demo organization.
 
+## Enterprise Admin Surfaces (final evaluation sprint)
+
+- `app/services/enterprise.py` + `app/api/routers/enterprise.py`: Command Center, Workflows, Proactive Monitors,
+  Knowledge and Connectors -- read-only aggregations in the admin's tenant session (a monitor "Run check" is
+  audited as `monitor_run`). Every figure comes from rows; never add invented metrics.
+- Honesty rules: only the CampusNexus database connector is "connected" (others are "available" architecture or
+  "coming next"); request SLA chips are a demo indicator (48 h target, computed on read -- no scheduler);
+  per-organization knowledge scope, production RLS and billing are labelled roadmap; pricing and unit
+  economics on `/admin/value` are labelled illustrative.
+
 ## Hackathon Demo Freeze
 
 The demo runs on local SQLite with the mock provider (`start_campusnexus.ps1 -Reset -Provider mock`, with

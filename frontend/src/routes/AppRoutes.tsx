@@ -54,6 +54,15 @@ const AdminRequestsPage = lazyPage(admin, "AdminRequestsPage");
 const AdminComplaintsPage = lazyPage(admin, "AdminComplaintsPage");
 const AdminAIOperationsPage = lazyPage(admin, "AdminAIOperationsPage");
 const AdminAgentCatalogPage = lazyPage(admin, "AdminAgentCatalogPage");
+const enterprise = () => import("@/pages/admin/EnterprisePages");
+const AdminCommandCenterPage = lazyPage(enterprise, "AdminCommandCenterPage");
+const AdminWorkflowsPage = lazyPage(enterprise, "AdminWorkflowsPage");
+const AdminMonitorsPage = lazyPage(enterprise, "AdminMonitorsPage");
+const AdminConnectorsPage = lazyPage(enterprise, "AdminConnectorsPage");
+const AdminKnowledgePage = lazyPage(enterprise, "AdminKnowledgePage");
+const AdminValuePage = lazyPage(enterprise, "AdminValuePage");
+const AdminControlTowerPage = lazyPage(enterprise, "AdminControlTowerPage");
+const AdminDeployedAgentsPage = lazyPage(enterprise, "AdminDeployedAgentsPage");
 const AdminAuditPage = lazyPage(admin, "AdminAuditPage");
 const AdminAgentsPage = lazyPage(admin, "AdminAgentsPage");
 const AdminAgentPage = lazyPage(admin, "AdminAgentPage");
@@ -132,7 +141,15 @@ export function AppRoutes() {
       </Route>
 
       <Route path="/admin" element={<StaffRoutes role="admin" />}>
-        <Route index element={<AdminDashboardPage />} />
+        <Route index element={<AdminCommandCenterPage />} />
+        <Route path="institution" element={<AdminDashboardPage />} />
+        <Route path="workflows" element={<AdminWorkflowsPage />} />
+        <Route path="monitors" element={<AdminMonitorsPage />} />
+        <Route path="connectors" element={<AdminConnectorsPage />} />
+        <Route path="knowledge" element={<AdminKnowledgePage />} />
+        <Route path="value" element={<AdminValuePage />} />
+        <Route path="control-tower" element={<AdminControlTowerPage />} />
+        <Route path="deployed-agents" element={<AdminDeployedAgentsPage />} />
         <Route path="departments" element={<AdminDepartmentsPage />} />
         <Route path="departments/:code" element={<AdminDepartmentPage />} />
         <Route path="users" element={<AdminUsersPage />} />

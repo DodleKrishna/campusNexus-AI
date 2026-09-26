@@ -19,6 +19,11 @@ export const useAdminComplaints = (filters: { department?: string; status?: stri
   });
 export const useAdminUsers = () => useQuery({ queryKey: queryKeys.admin("users"), queryFn: api.adminUsers, staleTime: STALE });
 export const useAdminAIOperations = () => useQuery({ queryKey: queryKeys.admin("ai"), queryFn: api.adminAIOperations, ...LIVE });
+export const useAdminCommandCenter = () => useQuery({ queryKey: queryKeys.admin("command-center"), queryFn: api.adminCommandCenter, ...LIVE });
+export const useAdminWorkflows = () => useQuery({ queryKey: queryKeys.admin("workflows"), queryFn: api.adminWorkflows, ...LIVE });
+export const useAdminMonitors = () => useQuery({ queryKey: queryKeys.admin("monitors"), queryFn: api.adminMonitors, staleTime: STALE });
+export const useAdminKnowledge = () => useQuery({ queryKey: queryKeys.admin("knowledge"), queryFn: api.adminKnowledge, staleTime: STALE });
+export const useAdminConnectors = () => useQuery({ queryKey: queryKeys.admin("connectors"), queryFn: api.adminConnectors, staleTime: STALE });
 export const useAdminAgentsCatalog = () => useQuery({ queryKey: queryKeys.admin("agents-catalog"), queryFn: api.adminAgentsCatalog, staleTime: 5_000 });
 export const useAdminDeployments = () => useQuery({ queryKey: queryKeys.admin("deployments"), queryFn: api.adminDeployments, staleTime: 5_000 });
 export const useAdminAgentCatalog = () => useQuery({ queryKey: queryKeys.admin("agent-catalog"), queryFn: api.adminAgentCatalog, staleTime: STALE });

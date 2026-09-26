@@ -1,4 +1,5 @@
 import { LogOut, Settings, X } from "lucide-react";
+import { Fragment } from "react";
 import { NavLink } from "react-router-dom";
 import { navigationFor, settingsPathFor, WORKSPACE_LABELS } from "@/components/layout/navigation";
 import { Avatar } from "@/components/ui/avatar";
@@ -11,7 +12,7 @@ import { cn } from "@/utils/cn";
 
 const itemClass = (active: boolean, rail: boolean) =>
   cn(
-    "group relative flex h-9 items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors duration-150 [&_svg]:size-4 [&_svg]:shrink-0",
+    "group relative flex h-8 items-center gap-2.5 rounded-md px-2.5 text-[13px] transition-colors duration-150 [&_svg]:size-4 [&_svg]:shrink-0",
     rail && "justify-center px-0",
     active ? "bg-nav-raised font-medium text-white [&_svg]:text-accent-bright" : "text-nav-text hover:bg-nav-raised/60 hover:text-white",
   );
@@ -25,9 +26,12 @@ function NavContent({ rail, onNavigate }: { rail: boolean; onNavigate?: () => vo
     <>
       {!rail && <p className="px-5 pt-1 pb-2 text-[11px] font-semibold tracking-wider text-nav-text/70 uppercase">{WORKSPACE_LABELS[user.role]}</p>}
       <nav aria-label="Main navigation" className={cn("flex-1 space-y-0.5 overflow-y-auto pb-3", rail ? "px-2 pt-2" : "px-3")}>
-        {items.map((item) => (
+        {items.map((item, index) => (
+          <Fragment key={item.to}>
+          {!rail && item.section && item.section !== items[index - 1]?.section && (
+            <p className="px-2.5 pt-2.5 pb-0.5 text-[10.5px] font-semibold tracking-wider text-nav-text/60 uppercase">{item.section}</p>
+          )}
           <NavLink
-            key={item.to}
             to={item.to}
             end={item.end}
             aria-label={item.label}
@@ -43,6 +47,7 @@ function NavContent({ rail, onNavigate }: { rail: boolean; onNavigate?: () => vo
               </>
             )}
           </NavLink>
+          </Fragment>
         ))}
       </nav>
       <div className={cn("space-y-0.5 border-t border-nav-border py-3", rail ? "px-2" : "px-3")}>

@@ -1,4 +1,4 @@
-import { Bot, Boxes, Briefcase, Building2, CalendarDays, ClipboardCheck, ClipboardList, Cpu, FileCheck2, GraduationCap, Inbox, LayoutDashboard, MessageSquareWarning, School, ScrollText, type LucideIcon, UserCog, Users } from "lucide-react";
+import { Activity, BookOpen, Bot, Boxes, Briefcase, Building2, CalendarDays, ClipboardCheck, ClipboardList, Cpu, FileCheck2, GraduationCap, Inbox, Landmark, LayoutDashboard, MessageSquareWarning, Plug, Radar, School, ScrollText, Sparkles, TrendingUp, UserCog, Users, Workflow, type LucideIcon } from "lucide-react";
 import type { Role } from "@/types/api";
 
 export interface NavItem {
@@ -6,6 +6,8 @@ export interface NavItem {
   to: string;
   icon: LucideIcon;
   end?: boolean;
+  /** Section header shown above the first item of a group (admin workspace). */
+  section?: string;
 }
 
 const STUDENT_NAV: NavItem[] = [
@@ -40,16 +42,24 @@ const HOD_NAV: NavItem[] = [
 ];
 
 const ADMIN_NAV: NavItem[] = [
-  { label: "Overview", to: "/admin", icon: LayoutDashboard, end: true },
-  { label: "Departments", to: "/admin/departments", icon: Building2 },
-  { label: "Users", to: "/admin/users", icon: UserCog },
-  { label: "Attendance", to: "/admin/attendance", icon: ClipboardCheck },
-  { label: "Requests", to: "/admin/requests", icon: Inbox },
-  { label: "Complaints", to: "/admin/complaints", icon: MessageSquareWarning },
-  { label: "AI Operations", to: "/admin/ai-operations", icon: Cpu },
-  { label: "Agent Catalog", to: "/admin/agent-catalog", icon: Boxes },
-  { label: "Audit Log", to: "/admin/audit", icon: ScrollText },
-  { label: "Agents", to: "/admin/agents", icon: Bot },
+  { label: "Command Center", to: "/admin", icon: LayoutDashboard, end: true, section: "Overview" },
+  { label: "Institution", to: "/admin/institution", icon: Landmark, section: "Overview" },
+  { label: "Workflows", to: "/admin/workflows", icon: Workflow, section: "Operations" },
+  { label: "Monitors", to: "/admin/monitors", icon: Radar, section: "Operations" },
+  { label: "Requests", to: "/admin/requests", icon: Inbox, section: "Operations" },
+  { label: "Attendance", to: "/admin/attendance", icon: ClipboardCheck, section: "Operations" },
+  { label: "Complaints", to: "/admin/complaints", icon: MessageSquareWarning, section: "Operations" },
+  { label: "Agent Catalog", to: "/admin/agent-catalog", icon: Boxes, section: "AI Workforce" },
+  { label: "Deployed Agents", to: "/admin/deployed-agents", icon: Bot, section: "AI Workforce" },
+  { label: "AI Operations", to: "/admin/ai-operations", icon: Cpu, section: "AI Workforce" },
+  { label: "Control Tower", to: "/admin/control-tower", icon: Activity, section: "AI Workforce" },
+  { label: "Agents", to: "/admin/agents", icon: Sparkles, section: "AI Workforce" },
+  { label: "Connectors", to: "/admin/connectors", icon: Plug, section: "Enterprise" },
+  { label: "Knowledge", to: "/admin/knowledge", icon: BookOpen, section: "Enterprise" },
+  { label: "Audit Log", to: "/admin/audit", icon: ScrollText, section: "Enterprise" },
+  { label: "Institution Value", to: "/admin/value", icon: TrendingUp, section: "Enterprise" },
+  { label: "Users", to: "/admin/users", icon: UserCog, section: "Admin" },
+  { label: "Departments", to: "/admin/departments", icon: Building2, section: "Admin" },
 ];
 
 export const WORKSPACE_LABELS: Record<Role, string> = {

@@ -17,10 +17,10 @@ export function Logo({ tone = "dark", caption, className, markClassName }: { ton
     <div className={cn("flex min-w-0 items-center gap-2.5", className)}>
       <BrandMark className={markClassName} />
       <div className="min-w-0 leading-tight">
-        <div className={cn("truncate text-[15px] font-semibold tracking-tight", tone === "light" ? "text-white" : "text-ink")}>
-          CampusNexus <span className={tone === "light" ? "text-accent-bright" : "text-primary"}>AI</span>
+        <div className={cn("truncate text-[15px] font-semibold tracking-tight", tone === "light" ? "text-white" : "text-ink")}>CampusNexus</div>
+        <div className={cn("truncate text-[11px] font-semibold tracking-[0.14em] uppercase", tone === "light" ? "text-accent-bright" : "text-primary")}>
+          {caption ?? "AgentOS"}
         </div>
-        {caption && <div className={cn("truncate text-xs", tone === "light" ? "text-nav-text" : "text-muted")}>{caption}</div>}
       </div>
     </div>
   );

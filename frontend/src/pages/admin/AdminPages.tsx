@@ -27,7 +27,7 @@ import { SkeletonRows, SkeletonTable } from "@/components/ui/skeleton";
 import { EmptyState, ErrorState, Notice } from "@/components/ui/states";
 import { TabPanel, Tabs } from "@/components/ui/tabs";
 import { ADMIN_AGENTS, adminAgentByKey } from "@/features/agents/adminCatalog";
-import { AgentRuns, DeployableCatalog, DeployedAgents } from "@/features/admin/AgentProducts";
+import { AgentRuns, DeployableCatalog, DeployedAgents, LifecycleStrip } from "@/features/admin/AgentProducts";
 import { AgentCatalog, ControlTower, IntelligencePanel } from "@/features/admin/IntelligenceOps";
 import { ReviewerInbox } from "@/features/requests/ReviewerInbox";
 import {
@@ -783,6 +783,7 @@ export function AdminAgentCatalogPage() {
         title="Agent Catalog"
         description="Configure and deploy product agents for this institution: status, intelligence level, budget and where a human must approve."
       />
+      <LifecycleStrip />
       {(isLoading || entries.isLoading) && <SkeletonTable rows={4} />}
       {isError && <ErrorState message={(error as Error).message} onRetry={() => void refetch()} />}
       {deployments.data && <DeployedAgents rows={deployments.data} />}

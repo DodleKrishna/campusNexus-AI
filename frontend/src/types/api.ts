@@ -736,6 +736,25 @@ export interface CatalogAgent {
   deployable: boolean;
 }
 
+export interface Kpi { key: string; label: string; value: string; note: string }
+export interface HealthItem { key: string; label: string; value: number; note: string; link: string }
+export interface CommandCenter { kpis: Kpi[]; health: HealthItem[]; workforce: DeploymentView[]; activity: AuditEntry[] }
+export interface WorkflowCard {
+  key: string; name: string; trigger: string; chain: string[]; sla: string; status: "active" | "partial";
+  processed: number; pending: number; escalations: number; note: string | null;
+}
+export interface MonitorFinding { title: string; detail: string; severity: "info" | "warning" | "critical" }
+export interface Monitor {
+  key: string; name: string; description: string; findings_count: number; findings: MonitorFinding[]; last_checked: string | null; actions: string;
+}
+export interface KnowledgeDoc {
+  document_id: string; title: string; document_type: string; version: string | null; effective_from: string | null; agents: Record<string, boolean>;
+}
+export interface KnowledgeHub { documents: KnowledgeDoc[]; indexed_chunks: number; scope_note: string }
+export interface Connector {
+  key: string; name: string; category: string; description: string; status: "connected" | "available" | "coming_next"; detail: string;
+}
+
 export type IntelligenceLevel = "no_ai" | "light" | "advanced";
 
 export interface DeploymentView {
