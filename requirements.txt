@@ -1,8 +1,9 @@
 # CampusNexus API -- runtime dependencies for a Linux deployment (e.g. Render).
 # Versions are the ones the frozen hackathon build was tested with. The FastAPI app runs
 # from the repository root (`uvicorn app.api.main:app`), so the package itself is not installed.
-# Not included on purpose: streamlit (debug console), pytest (tests), psycopg (Supabase is
-# disabled for this deployment), anthropic (mock / Groq only; Groq uses httpx).
+# Not included on purpose: streamlit (debug console), pytest (tests), psycopg (native libpq),
+# anthropic (mock / Groq only; Groq uses httpx).
+# pg8000 (pure Python) serves CAMPUSNEXUS_DATABASE_URL=postgresql+pg8000://... (Supabase session pooler).
 pydantic==2.13.5
 sqlalchemy==2.0.54
 pyyaml==6.0.3
@@ -17,3 +18,4 @@ uvicorn==0.53.0
 httpx==0.28.1
 bcrypt==5.0.0
 pyjwt==2.15.0
+pg8000==1.31.5

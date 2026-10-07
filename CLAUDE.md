@@ -519,6 +519,31 @@ the current demo:
   and an `UnconfiguredBrain` until Phase 2 wires a provider. UI is deferred.
 - During AgentOS phases run focused tests only (`tests/test_agentos_kernel.py` + directly affected suites).
 
+## AgentOS V2 Current State & Production Data Foundation (Phase 2.5)
+
+- Done: the durable Agent Kernel (Phase 1) and the Nexus assistant with its Groq brain (Phase 2). Assignment
+  Guardian is next.
+- Production/online DB = Supabase PostgreSQL; local/offline edge and tests = SQLite. One SQLAlchemy model/service
+  layer for both; no Supabase-specific ORM or API. AgentRuntime uses only SQLAlchemy sessions, so a later
+  edge->cloud sync (outbox, deferred) can sit beside it.
+- `CAMPUSNEXUS_DATABASE_MODE=local|postgres`. `postgres` requires a PostgreSQL `CAMPUSNEXUS_DATABASE_URL` and
+  never falls back to SQLite; `local` refuses a PostgreSQL URL. Unset = Phase 21 inference. An explicit
+  `db_path` is always SQLite. The suite stays SQLite (`tests/conftest.py` clears both variables).
+- Drivers: `postgresql+psycopg://` or `postgresql+pg8000://` (pure Python, for hosts where psycopg's DLL is
+  blocked), used as written; bare `postgresql://` = psycopg. Supabase hosts always use SSL. Pools are bounded
+  (`CAMPUSNEXUS_DB_POOL_SIZE`/`MAX_OVERFLOW`/`POOL_TIMEOUT`, out-of-range refused). For a persistent IPv4
+  backend use the Supabase Session pooler (port 5432).
+- The API upgrades SQLite at startup but only verifies PostgreSQL (`verify_database_ready`: unreachable or
+  behind = startup fails). Upgrade deliberately: `python scripts/upgrade_database.py [--dry-run]` (additive,
+  one transaction, advisory lock; NOT NULL columns are reported, never added). `python
+  scripts/database_preflight.py [--json]` reports mode/driver/redacted host/tables/tenant + AgentOS
+  indexes/upgrade state/Data API lockdown and exits non-zero on any failure.
+- Access boundary: browser -> FastAPI auth/authorization -> SQLAlchemy -> PostgreSQL. No direct browser DB
+  access, no Supabase keys in React, no Supabase Auth (deferred), no anon/authenticated policies: every
+  application table has RLS on with no policies and no privileges for those roles (`restrict_data_api_access`).
+- Health/preflight expose only `connected|unavailable`, `sqlite|postgresql`, and a host kind; never a URL,
+  host, user, password or project ref.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so

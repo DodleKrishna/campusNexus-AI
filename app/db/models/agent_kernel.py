@@ -44,6 +44,13 @@ class AgentStepStatus(str, enum.Enum):
 
 class AgentMission(TenantMixin, Base):
     __tablename__ = "agent_missions"
+    __table_args__ = (
+        # An owner's missions of one agent, newest first (Nexus list_missions / list_active_missions).
+        Index("ix_agent_missions_org_owner_agent", "organization_id", "owner_account_id", "agent_key"),
+        # Waiting missions whose wake timer is due (status IN waiting AND next_wake_at <= now): the scan a
+        # background waker runs; also serves per-status listings.
+        Index("ix_agent_missions_org_status_wake", "organization_id", "status", "next_wake_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     owner_account_id: Mapped[int] = mapped_column(ForeignKey("auth_accounts.id"), index=True)
@@ -89,6 +96,8 @@ class DomainEvent(TenantMixin, Base):
     """A durable fact that happened (published by deterministic code), consumed at most once."""
 
     __tablename__ = "domain_events"
+    # Unconsumed events of one type (EventBus.pending / next_for_mission: consumed_at IS NULL AND event_type = ...).
+    __table_args__ = (Index("ix_domain_events_org_type_consumed", "organization_id", "event_type", "consumed_at"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     event_type: Mapped[str] = mapped_column(String(64), index=True)

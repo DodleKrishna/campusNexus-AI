@@ -28,7 +28,7 @@ from app.agentos.providers import build_agent_brain
 from app.agentos.registry import AgentRegistry as KernelAgentRegistry, ToolRegistry as KernelToolRegistry
 from app.agentos.runtime import AgentRuntime
 from app.api.routers import admin, admin_console, agentos, agents, approvals, auth, enterprise, faculty, health, hod, me, missions, requests, students
-from app.db.session import create_db_engine, upgrade_schema
+from app.db.session import create_db_engine, upgrade_schema, verify_database_ready
 from app.db.tenant_session import TenantSessionFactory
 from app.llm.router import build_routed_provider, routed
 from app.services.ai_usage import AIUsageRecorder
@@ -168,7 +168,12 @@ def _build_default_app() -> FastAPI:
             from scripts.render_bootstrap import bootstrap_demo
 
             bootstrap_demo(engine, vector_store, config.policy_dir)
-        upgrade_schema(engine)
+        if engine.dialect.name == "postgresql":
+            # Production PostgreSQL: fail startup visibly if unreachable or behind; never alter its schema here
+            # (python scripts/upgrade_database.py applies the additive upgrade deliberately).
+            verify_database_ready(engine)
+        else:
+            upgrade_schema(engine)
         yield
 
     return create_app(

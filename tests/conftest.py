@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 
 os.environ.pop("CAMPUSNEXUS_DATABASE_URL", None)
+os.environ.pop("CAMPUSNEXUS_DATABASE_MODE", None)  # Phase 2.5: the suite is local (SQLite) unless a test sets it
 os.environ.pop("CAMPUSNEXUS_AGENT_BRAIN", None)  # AgentOS: tests use the offline mock brain unless they inject one
 
 import pytest  # noqa: E402

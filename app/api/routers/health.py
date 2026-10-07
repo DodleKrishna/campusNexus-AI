@@ -9,6 +9,7 @@ of letting mock output pass as live AI output.
 Phase 21: ``database`` also reports ``ready`` and the ``dialect``
 (``sqlite``/``postgresql``) -- never the host, user, password or URL. A
 database that cannot be reached answers ``ready: false`` instead of a 500.
+Phase 2.5 adds ``status`` (``connected``/``unavailable``) and ``type``.
 """
 from __future__ import annotations
 
@@ -47,6 +48,8 @@ def health(request: Request, session: Session = Depends(get_session)) -> dict:
         "service": "campusnexus-api",
         "ready": database_ready and student_count > 0 and policy_store["available"],
         "database": {
+            # Phase 2.5: connected|unavailable and sqlite|postgresql only -- never a host, URL, user or project ref.
+            "status": "connected" if database_ready else "unavailable", "type": backend["dialect"],
             "ready": database_ready, "dialect": backend["dialect"], "label": backend["label"],
             "seeded": student_count > 0, "students": student_count,
         },

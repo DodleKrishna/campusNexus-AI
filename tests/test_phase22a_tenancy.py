@@ -247,11 +247,15 @@ def test_upgrade_schema_adds_the_organization_column_with_its_foreign_key_and_in
     engine.dispose()
 
 
-def build_legacy_database(target: Engine, source: Engine) -> dict[str, int]:
-    """The pre-Phase-22 schema (no organization tables, no organization_id) holding ``source``'s rows."""
+def build_legacy_database(target: Engine, source: Engine,
+                          exclude: tuple[str, ...] = ("organizations", "organization_memberships")) -> dict[str, int]:
+    """The pre-Phase-22 schema (no organization tables, no organization_id) holding ``source``'s rows.
+
+    ``exclude`` names the tables the older schema did not have yet.
+    """
     legacy = MetaData(naming_convention=NAMING_CONVENTION)
     for table in Base.metadata.sorted_tables:
-        if table.name in ("organizations", "organization_memberships"):
+        if table.name in exclude:
             continue
         columns = [
             Column(c.name, c.type, *[ForeignKey(fk.target_fullname, use_alter=fk.use_alter) for fk in c.foreign_keys],

@@ -1,7 +1,7 @@
 """Initialize the CampusNexus schema in PostgreSQL / Supabase (Phase 21).
 
 Reads ``CAMPUSNEXUS_DATABASE_URL`` and, in order:
-  1. confirms it names a PostgreSQL database (psycopg 3 driver)
+  1. confirms it names a PostgreSQL database (psycopg 3 or pg8000 driver, as the URL names)
   2. tests the connection
   3. creates the application tables that are missing (from the SQLAlchemy models)
   4. runs the additive schema upgrade (new nullable columns; never drops anything)

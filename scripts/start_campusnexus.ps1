@@ -93,7 +93,7 @@ if ($Model) { $env:CAMPUSNEXUS_LLM_MODEL = $Model }
 if (-not $Embedding) { $Embedding = if ($env:CAMPUSNEXUS_EMBEDDING_PROVIDER) { $env:CAMPUSNEXUS_EMBEDDING_PROVIDER } else { "onnx_minilm" } }
 $env:CAMPUSNEXUS_DB_PATH = $DemoDb
 # Phase 21: CAMPUSNEXUS_DATABASE_URL (PostgreSQL / Supabase) outranks CAMPUSNEXUS_DB_PATH in the API.
-$UsePostgres = [bool]("$env:CAMPUSNEXUS_DATABASE_URL".Trim())
+$UsePostgres = [bool]("$env:CAMPUSNEXUS_DATABASE_URL".Trim()) -or ("$env:CAMPUSNEXUS_DATABASE_MODE".Trim() -eq "postgres")
 if ($UsePostgres) { $DatabaseLabel = "PostgreSQL" } else { $DatabaseLabel = "SQLite" }
 Write-Host "Database: $DatabaseLabel"
 $env:CAMPUSNEXUS_VECTOR_STORE_PATH = $DemoChroma
@@ -108,11 +108,6 @@ if (-not (Test-Path $Python)) {
 }
 & $Python -c "import fastapi, uvicorn, sqlalchemy, chromadb, bcrypt, jwt" 2>$null
 if ($LASTEXITCODE -ne 0) { Fail "The .venv is missing app dependencies. Run: .\.venv\Scripts\pip install -e "".[dev,app]""" }
-if ($UsePostgres) {
-    & $Python -c "import psycopg" 2>$null
-    if ($LASTEXITCODE -ne 0) { Fail "CAMPUSNEXUS_DATABASE_URL is set but the PostgreSQL driver is missing. Run: .\.venv\Scripts\pip install -e "".[dev,app,postgres]""" }
-}
-
 foreach ($port in @($ApiPort, $WebPort)) {
     if (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue) {
         Fail "Port $port is already in use. Stop the previous CampusNexus run first."
@@ -130,6 +125,12 @@ if ($Reset) {
         & $Python scripts/seed_database.py --demo-classes
         if ($LASTEXITCODE -ne 0) { Fail "seed_database.py failed." }
     }
+}
+if ($UsePostgres) {
+    # Phase 2.5: the API only verifies PostgreSQL at startup (never upgrades it); check driver, schema and lockdown first.
+    Step "Checking PostgreSQL (driver, connectivity, schema, Data API lockdown)"
+    & $Python scripts/database_preflight.py
+    if ($LASTEXITCODE -ne 0) { Fail "Database preflight failed. Install the driver your URL names (pip install -e "".[dev,app,postgres]"") and/or run: python scripts/upgrade_database.py" }
 }
 
 # --- 3. Frontend dependencies ------------------------------------------------------------------------
