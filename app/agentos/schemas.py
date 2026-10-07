@@ -63,6 +63,8 @@ class DomainEventType(str, enum.Enum):
     COMMUNICATION_FAILED = "COMMUNICATION_FAILED"
     COMMUNICATION_RESPONSE_RECEIVED = "COMMUNICATION_RESPONSE_RECEIVED"
     COMMUNICATION_CANCELLED = "COMMUNICATION_CANCELLED"
+    # Phase 6: cloud connectivity transitions (NETWORK_RESTORED above), published per organization only on change.
+    NETWORK_LOST = "NETWORK_LOST"
 
 
 # Which fields each decision kind may (and must) carry.

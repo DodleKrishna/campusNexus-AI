@@ -452,7 +452,9 @@ def test_pipeline_availability_comes_from_the_env(monkeypatch) -> None:
     assert voice_pipeline_from_env() == (None, "VOICE_PROVIDER_UNSUPPORTED")  # never silently fake speech
     monkeypatch.setenv("CAMPUSNEXUS_TTS_PROVIDER", "groq")
     live, reason = voice_pipeline_from_env()
-    assert reason is None and isinstance(live.stt, GroqSpeechToText) and live.tts.voice == "hannah"
+    # Phase 6: the providers are wrapped for usage metering (no content recorded).
+    assert reason is None and isinstance(live.stt.inner, GroqSpeechToText) and live.tts.inner.voice == "hannah"
+    assert (live.stt.provider_name, live.tts.provider_name, live.brain.provider_name) == ("groq", "groq", "groq")
     assert "gsk_test_not_real" not in repr(VoiceProviderConfig.from_env())
 
 

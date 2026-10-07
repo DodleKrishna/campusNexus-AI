@@ -43,6 +43,7 @@ from app.db.models.communication_delivery import (
     AttemptStatus, CommunicationAttempt, CommunicationJob, CommunicationJobStatus, VoiceSession, VoiceSessionStatus,
 )
 from app.db.tenant_session import TenantSessionFactory
+from app.llm.router import ai_context
 from app.rules.communication_policy import CommunicationPolicy, VoiceOutcome
 
 PIPELINE_FAILED = "VOICE_PIPELINE_FAILED"
@@ -194,9 +195,9 @@ class VoiceConversation:
     one conditional UPDATE, so a replayed or duplicate stream can never open a second live session."""
 
     def __init__(self, factory: Any, setup: Any, pipeline: VoicePipeline, token: str, clock: Callable[[], datetime],
-                 policy: Optional[CommunicationPolicy] = None) -> None:
+                 policy: Optional[CommunicationPolicy] = None, recorder: Any = None) -> None:
         self.factory = TenantSessionFactory.from_sessionmaker(factory)
-        self.setup, self.pipeline, self.clock = setup, pipeline, clock
+        self.setup, self.pipeline, self.clock, self.recorder = setup, pipeline, clock, recorder
         self.policy = policy or setup.policy
         try:
             self.claims = tokens.verify(token, "stream", clock())
@@ -208,6 +209,11 @@ class VoiceConversation:
 
     def _session(self) -> Any:
         return self.factory.open_tenant_session(self.claims.organization_id)
+
+    def _metered(self) -> Any:
+        """Phase 6: speech/brain calls of this call are recorded as AI usage of its organization (no content)."""
+        return ai_context(self.claims.organization_id, mission_id=f"voice_attempt:{self.claims.attempt_id}",
+                          recorder=self.recorder)
 
     def _rows(self, session: Any) -> tuple:
         attempt = session.get(CommunicationAttempt, self.claims.attempt_id)  # tenant-filtered
@@ -240,7 +246,8 @@ class VoiceConversation:
         self._started = now
         self.state = CallState(job.purpose, facts, max_turns=voice.max_turns)
         try:
-            return self.pipeline.opening(self.state)
+            with self._metered():
+                return self.pipeline.opening(self.state)
         except SpeechProviderError:
             self._pipeline_failed("TTS_FAILED")
             raise ConversationError("TTS_FAILED") from None
@@ -255,10 +262,11 @@ class VoiceConversation:
         if settled:  # the provider already ended the call (hang-up) or the attempt failed
             self._finish("CALL_ENDED")
             return VoiceTurnResult("ENDED", None, True, self.state.outcome)
-        if (self.clock() - self._started).total_seconds() >= self.policy.voice_time_limit_seconds:
-            result = self.pipeline.end(self.state, "TIME_LIMIT", SAY["goodbye"], VoiceOutcome.NO_RESPONSE.value)
-        else:
-            result = self.pipeline.on_utterance(self.state, pcm)
+        with self._metered():
+            if (self.clock() - self._started).total_seconds() >= self.policy.voice_time_limit_seconds:
+                result = self.pipeline.end(self.state, "TIME_LIMIT", SAY["goodbye"], VoiceOutcome.NO_RESPONSE.value)
+            else:
+                result = self.pipeline.on_utterance(self.state, pcm)
         self._persist_progress()
         if result.status == "TTS_FAILED":
             self._pipeline_failed("TTS_FAILED")
@@ -335,7 +343,12 @@ def voice_pipeline_from_env(config: Optional[VoiceProviderConfig] = None) -> Tup
     reason = config.unavailable_reason()
     if reason is not None:
         return None, reason
+    from app.agentos.connectivity import cloud_allowed
+    from app.communication.voice.speech_router import MeteredSTT, MeteredTTS, MeteredVoiceBrain
+
+    if not cloud_allowed():
+        return None, "CLOUD_DISABLED_OFFLINE"
     http = GroqHTTP(config.api_key, timeout=config.timeout)
-    return VoicePipeline(GroqSpeechToText(http, config.stt_model, config.language),
-                         GroqTextToSpeech(http, config.tts_model, config.tts_voice),
-                         GroqVoiceBrain(http, config.brain_model)), None
+    return VoicePipeline(MeteredSTT(GroqSpeechToText(http, config.stt_model, config.language), "groq", config.stt_model),
+                         MeteredTTS(GroqTextToSpeech(http, config.tts_model, config.tts_voice), "groq", config.tts_model),
+                         MeteredVoiceBrain(GroqVoiceBrain(http, config.brain_model), "groq", config.brain_model)), None

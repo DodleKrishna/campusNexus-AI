@@ -6,6 +6,10 @@ verified token; the request session is already bound to that organization, and
 request bodies forbid extra fields. A caller sees, runs and cancels only their own
 missions (an admin may also read and cancel missions in their organization);
 anything else is a 404.
+
+Phase 6: ``POST /agentos/assistant/voice`` -- one bounded WAV utterance (``Content-Type: audio/wav`` body, at most
+``MAX_UPLOAD_BYTES``) through the configured speech providers and the same Nexus assistant. The transcript is never
+stored or returned; the reply text and (when TTS works) a WAV reply are.
 """
 from __future__ import annotations
 
@@ -18,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.agentos.nexus import AssistantMissionSummary, AssistantReply, AssistantUnavailable, PersonalAssistant
 from app.agentos.runtime import AgentOSError, AgentRuntime, MissionActor
 from app.agentos.schemas import AgentMissionView, AgentResult, AgentStepView, CreateAgentMission
+from app.agentos.voice_assistant import MAX_UPLOAD_BYTES, WAV_CONTENT_TYPES, VoiceAssistant, VoiceAssistantReply
 from app.api.auth_deps import AuthenticatedUser, require_authenticated_user
 from app.api.deps import get_session
 from app.llm.router import ai_context
@@ -109,6 +114,44 @@ def assistant_message(body: AssistantMessage, request: Request, actor: MissionAc
     except AssistantUnavailable as exc:
         detail = {"code": exc.code, "message": exc.message}
         if exc.reply is not None:  # the mission is kept and can be resumed with /agentos/missions/{id}/run-step
+            detail.update(mission_id=exc.reply.mission_id, status=exc.reply.status.value,
+                          steps_performed=exc.reply.steps_performed)
+        raise HTTPException(status_code=exc.status_code, detail=detail) from None
+    except AgentOSError as exc:
+        raise _http(exc) from None
+
+
+async def _wav_body(request: Request) -> bytes:
+    """The raw WAV body, read with a hard size limit (checked again while streaming)."""
+    content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if content_type not in WAV_CONTENT_TYPES:
+        raise HTTPException(status_code=415, detail={"code": "AUDIO_UNSUPPORTED_TYPE", "message": "Send audio/wav."})
+    declared = request.headers.get("content-length")
+    if declared is not None and (not declared.isdigit() or int(declared) > MAX_UPLOAD_BYTES):
+        raise HTTPException(status_code=413, detail={"code": "AUDIO_TOO_LARGE", "message": "The recording is too long."})
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail={"code": "AUDIO_TOO_LARGE",
+                                                         "message": "The recording is too long."})
+    return bytes(body)
+
+
+@assistant_router.post("/voice", response_model=VoiceAssistantReply)
+def assistant_voice(request: Request, reply_audio: bool = Query(default=True), actor: MissionActor = Depends(_actor),
+                    audio: bytes = Depends(_wav_body), session: Session = Depends(get_session),
+                    runtime: AgentRuntime = Depends(get_agent_runtime)) -> VoiceAssistantReply:
+    speech = getattr(request.app.state, "speech_router", None)
+    if speech is None:
+        reason = getattr(request.app.state, "speech_router_unavailable", None) or "SPEECH_NOT_CONFIGURED"
+        raise HTTPException(status_code=503, detail={"code": reason, "message": "Voice is not available."})
+    try:
+        return VoiceAssistant(PersonalAssistant(runtime), speech).handle(
+            session, actor, audio, recorder=_recorder(request), reply_audio=reply_audio)
+    except AssistantUnavailable as exc:
+        detail = {"code": exc.code, "message": exc.message}
+        if exc.reply is not None:
             detail.update(mission_id=exc.reply.mission_id, status=exc.reply.status.value,
                           steps_performed=exc.reply.steps_performed)
         raise HTTPException(status_code=exc.status_code, detail=detail) from None

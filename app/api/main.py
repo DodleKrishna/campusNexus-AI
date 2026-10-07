@@ -24,7 +24,9 @@ from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
 from app.agentos.brain import AgentBrain
 from app.agentos.bootstrap import build_agent_runtime
-from app.agentos.providers import build_agent_brain
+from app.agentos.brain_router import build_configured_brain
+from app.agentos.connectivity import ConnectivityService, connectivity_from_env
+from app.communication.voice.speech_router import SpeechRouter, speech_router_from_env
 from app.communication.voice.conversation import voice_pipeline_from_env
 from app.api.routers import admin, admin_console, agentos, agents, assignments, approvals, attendance, auth, enterprise, exams, faculty, health, hod, me, missions, requests, students, voice
 from app.db.session import create_db_engine, upgrade_schema, verify_database_ready
@@ -72,6 +74,8 @@ def create_app(
     lifespan: Callable[[FastAPI], AsyncContextManager[None]] | None = None,
     clock: Callable[[], datetime] | None = None,
     agent_brain: AgentBrain | None = None,
+    connectivity: ConnectivityService | None = None,
+    speech_router: SpeechRouter | None = None,
 ) -> FastAPI:
     """Build a fully-wired FastAPI app.
 
@@ -118,8 +122,21 @@ def create_app(
     # AgentOS V2 kernel: Nexus (Phase 2, read-only tools) and the Assignment Guardian (Phase 3, created by publishing,
     # advanced by scripts/process_due_missions.py). The brain comes from CAMPUSNEXUS_AGENT_BRAIN (default: offline
     # mock); an unusable configured provider refuses explicitly.
-    brain = agent_brain if agent_brain is not None else build_agent_brain(recorder=llm_provider.recorder)
-    fastapi_app.state.agent_runtime = build_agent_runtime(brain, clock=lambda: fastapi_app.state.clock())
+    # Phase 6: CAMPUSNEXUS_INTELLIGENCE_MODE=cloud|local|auto routes through ConnectivityAwareBrainRouter (unset: as
+    # before). One ConnectivityService is shared by the brain router, speech routing, health and the worker.
+    connectivity = connectivity or getattr(agent_brain, "connectivity", None) or connectivity_from_env()
+    brain = agent_brain if agent_brain is not None else build_configured_brain(recorder=llm_provider.recorder,
+                                                                               connectivity=connectivity)
+    fastapi_app.state.connectivity = connectivity
+    fastapi_app.state.agent_runtime = build_agent_runtime(brain, clock=lambda: fastapi_app.state.clock(),
+                                                          connectivity=connectivity)
+    # Phase 6: in-app Nexus voice (POST /agentos/assistant/voice). CAMPUSNEXUS_SPEECH_MODE / CAMPUSNEXUS_TTS_MODE.
+    fastapi_app.state.speech_router, fastapi_app.state.speech_router_unavailable = speech_router, None
+    if speech_router is None:
+        try:
+            fastapi_app.state.speech_router = speech_router_from_env(connectivity)
+        except ValueError:
+            fastapi_app.state.speech_router_unavailable = "INVALID_SPEECH_CONFIG"
     # Phase 5.1: the live voice pipeline (Groq Whisper STT -> restricted voice brain -> Groq Orpheus TTS), from the env.
     # Unavailable (no GROQ_API_KEY / TTS voice) = voice streams are refused with the reason; never fake speech.
     fastapi_app.state.voice_pipeline, fastapi_app.state.voice_pipeline_unavailable = voice_pipeline_from_env()

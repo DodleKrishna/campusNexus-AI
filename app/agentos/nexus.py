@@ -23,6 +23,7 @@ Guardians also refuse delegation (created only by exam scheduling / absence dete
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, cast
 
@@ -62,6 +63,8 @@ DEFAULT_ASSISTANT_TRANSITIONS = 4
 SUCCESS_CRITERIA = ["Reply to the user with a brief user_message based only on tool results, "
                     "or say that the capability is not available yet."]
 PROVIDER_UNAVAILABLE_STATUS = {"AI_BUDGET_EXCEEDED": 402}
+# Phase 6: the stored goal of a request whose text must not be persisted (a voice transcript).
+UNSTORED_GOAL = "[voice request - transcript not stored]"
 
 
 # --- Read-only tools (caller-scoped; no input can name another person) ---------------------------------------------
@@ -355,23 +358,30 @@ class PersonalAssistant:
             raise ValueError(f"max_transitions must be 1-{MAX_ASSISTANT_TRANSITIONS}")
         self.runtime, self.max_transitions = runtime, max_transitions
 
-    def handle_message(self, session: Session, actor: MissionActor, message: str, *, recorder: Any = None) -> AssistantReply:
-        """One message -> one persistent mission owned by ``actor`` -> at most ``max_transitions`` transitions."""
+    def handle_message(self, session: Session, actor: MissionActor, message: str, *, recorder: Any = None,
+                       store_message: bool = True) -> AssistantReply:
+        """One message -> one persistent mission owned by ``actor`` -> at most ``max_transitions`` transitions.
+
+        ``store_message=False`` (Phase 6 voice): the mission's goal is a fixed placeholder and the text reaches the
+        brain only from memory while these transitions run (``AgentRuntime.transient_goal``)."""
         brain = self.runtime.brain
         if not getattr(brain, "available", True):
             raise AssistantUnavailable(getattr(brain, "code", "BRAIN_UNAVAILABLE"))  # refused before any mission exists
         mission = self.runtime.create_mission(session, actor, CreateAgentMission(
-            agent_key=NEXUS_AGENT_KEY, goal=message, success_criteria=SUCCESS_CRITERIA, max_steps=NEXUS_MAX_STEPS,
-            context={"channel": "assistant"}))
+            agent_key=NEXUS_AGENT_KEY, goal=message if store_message else UNSTORED_GOAL,
+            success_criteria=SUCCESS_CRITERIA, max_steps=NEXUS_MAX_STEPS,
+            context={"channel": "assistant" if store_message else "assistant_voice"}))
         operations_audit.record(
             session, event_type="NEXUS_REQUEST_RECEIVED", actor_account_id=actor.account_id, actor_role=actor.role.value,
             subject_type=SUBJECT, subject_id=str(mission.id), at=self.runtime.clock(),
             message=f"Nexus request received as mission {mission.id}.",
-            metadata={"agent_key": NEXUS_AGENT_KEY, "message_chars": len(message), "brain": _brain_info(brain).provider},
+            metadata={"agent_key": NEXUS_AGENT_KEY, "message_chars": len(message), "brain": _brain_info(brain).provider,
+                      "input": "text" if store_message else "voice"},
         )
         session.commit()
-        with ai_context(actor.organization_id, mission_id=f"agentos:{mission.id}", recorder=recorder,
-                        agent_key=NEXUS_AGENT_KEY):
+        transient = nullcontext() if store_message else self.runtime.transient_goal(mission.id, message)
+        with transient, ai_context(actor.organization_id, mission_id=f"agentos:{mission.id}", recorder=recorder,
+                                   agent_key=NEXUS_AGENT_KEY):
             results = self.runtime.run_until_blocked(session, actor, mission.id, max_transitions=self.max_transitions)
         mission = self.runtime.get_mission(session, actor, mission.id)
         last = results[-1] if results else None

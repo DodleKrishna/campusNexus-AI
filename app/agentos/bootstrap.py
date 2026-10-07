@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from app.agentos.assignment_guardian import register_assignment_guardian
+from app.agentos.connectivity import ConnectivityService
 from app.agentos.attendance_guardian import policy_from_env as attendance_policy_from_env, register_attendance_guardian
 from app.agentos.exam_guardian import policy_from_env as exam_policy_from_env, register_exam_guardian
 from app.agentos.nexus import register_nexus
@@ -36,7 +37,8 @@ def build_agent_runtime(brain: Any, *, clock: Callable[[], datetime] = utc_now,
                         guardian_policy: Optional[FollowupPolicy] = None, exam_policy: Optional[ExamPolicy] = None,
                         attendance_policy: Optional[AttendancePolicy] = None,
                         communication_policy: Optional[CommunicationPolicy] = None,
-                        connectors: Optional[ConnectorRegistry] = None) -> AgentRuntime:
+                        connectors: Optional[ConnectorRegistry] = None,
+                        connectivity: Optional[ConnectivityService] = None) -> AgentRuntime:
     """Phase 2: Nexus (read-only). Phase 3: the Assignment Guardian. Phase 4: the Exam and Attendance Guardians
     (autonomous; created only by exam scheduling / deterministic absence detection). Phase 5: the Communication Agent
     (autonomous; created only by the intake of a Guardian's follow-up request). Policies default to the env."""
@@ -54,4 +56,6 @@ def build_agent_runtime(brain: Any, *, clock: Callable[[], datetime] = utc_now,
     register_communication_agent(agents, tools, setup.connectors, setup.adapters, setup.policy)
     runtime = AgentRuntime(agents, tools, brain, clock=clock)
     runtime.communication = setup  # type: ignore[attr-defined]
+    # Phase 6: the communication worker defers internet-only channels while this says local_only (None: never checked).
+    runtime.connectivity = connectivity or getattr(brain, "connectivity", None)  # type: ignore[attr-defined]
     return runtime

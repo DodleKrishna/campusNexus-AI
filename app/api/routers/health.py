@@ -10,6 +10,10 @@ Phase 21: ``database`` also reports ``ready`` and the ``dialect``
 (``sqlite``/``postgresql``) -- never the host, user, password or URL. A
 database that cannot be reached answers ``ready: false`` instead of a 500.
 Phase 2.5 adds ``status`` (``connected``/``unavailable``) and ``type``.
+
+Phase 6 adds ``intelligence`` (mode, cloud/local availability, the active brain provider), ``speech`` (STT/TTS
+provider names, local readiness) and ``connectivity`` (online/offline/unknown). Names and booleans only: never a URL,
+host, model file path, credential or key.
 """
 from __future__ import annotations
 
@@ -24,6 +28,30 @@ from app.db.readiness import database_readiness
 from app.db.session import describe_database
 
 router = APIRouter(tags=["health"])
+
+
+def edge_status(state) -> dict:
+    """Phase 6 operating status (safe for an unauthenticated probe)."""
+    connectivity = getattr(state, "connectivity", None)
+    brain = state.agent_runtime.brain
+    mode = getattr(brain, "mode", None)
+    if mode is not None:  # ConnectivityAwareBrainRouter
+        cloud_ok, local_ok = brain.cloud_available(), brain.local_available()
+    else:
+        cloud_ok = (bool(getattr(brain, "is_live", False)) and not getattr(brain, "local", False)
+                    and bool(getattr(brain, "available", True)))
+        local_ok = bool(getattr(brain, "local", False)) and bool(getattr(brain, "available", True))
+    speech = getattr(state, "speech_router", None)
+    speech_status = speech.status() if speech is not None else {
+        "stt_provider": None, "tts_provider": None, "local_ready": False,
+        "unavailable": getattr(state, "speech_router_unavailable", None)}
+    return {
+        "intelligence": {"mode": mode or "single", "cloud_available": cloud_ok, "local_available": local_ok,
+                         "active_provider": getattr(brain, "provider_name", None)},
+        "speech": {k: speech_status.get(k) for k in ("stt_provider", "tts_provider", "local_ready", "unavailable")
+                   if k in speech_status},
+        "connectivity": connectivity.label() if connectivity is not None else "unknown",
+    }
 
 
 @router.get("/health")
@@ -59,4 +87,5 @@ def health(request: Request, session: Session = Depends(get_session)) -> dict:
         # the API's environment). Never the key itself. The running mode is
         # still only what ``llm`` says -- nothing switches automatically.
         "live_ai_configured": {"groq": bool(os.environ.get("GROQ_API_KEY")), "anthropic": bool(os.environ.get("ANTHROPIC_API_KEY"))},
+        **edge_status(request.app.state),
     }

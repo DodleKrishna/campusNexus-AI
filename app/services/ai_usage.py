@@ -62,6 +62,7 @@ class AIUsageRecorder:
                     agent_key=r.agent_key, run_id=r.run_id,
                     input_tokens=r.input_tokens, output_tokens=r.output_tokens, latency_ms=r.latency_ms, success=r.success,
                     error_kind=r.error_kind, estimated_cost_usd=r.estimated_cost_usd, created_at=r.created_at,
+                    audio_ms=r.audio_ms,
                 ) for r in context.records])
                 session.commit()
         except Exception:  # noqa: BLE001 -- telemetry never breaks the user's request

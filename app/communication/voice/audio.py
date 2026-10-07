@@ -82,6 +82,16 @@ def wav_to_pcm(data: bytes, *, max_bytes: int) -> bytes:
     return pcm
 
 
+def upload_wav_to_pcm(data: bytes, *, max_seconds: int) -> bytes:
+    """Phase 6 in-app voice: an uploaded WAV must be exactly linear16 mono 16 kHz and at most ``max_seconds`` long.
+    Codes are ``AUDIO_*`` (e.g. AUDIO_NOT_WAV, AUDIO_WRONG_SAMPLE_RATE, AUDIO_TOO_LONG)."""
+    try:
+        return wav_to_pcm(data, max_bytes=max_seconds * BYTES_PER_SECOND)
+    except AudioFormatError as exc:
+        code = str(exc).removeprefix("TTS_")
+        raise AudioFormatError(code if code.startswith("AUDIO_") else f"AUDIO_{code}") from None
+
+
 def playback_chunks(pcm: bytes) -> Iterator[bytes]:
     for start in range(0, len(pcm), PLAYBACK_CHUNK_BYTES):
         yield pcm[start:start + PLAYBACK_CHUNK_BYTES]

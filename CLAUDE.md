@@ -604,6 +604,31 @@ the current demo:
   time), audited OWNER_INACTIVE_MISSION_PARKED once, never impersonated; a later wake re-checks the owner.
 - Tests: `tests/test_agentos_exam_attendance_guardians.py`; demo: `python scripts/demo_exam_attendance_guardians.py`.
 
+## AgentOS V2 Phase 6: Offline Edge Intelligence & Local Voice
+
+- `CAMPUSNEXUS_INTELLIGENCE_MODE=cloud|local|auto` (`app/agentos/brain_router.py`, unset = the Phase 2 brain).
+  cloud never calls Ollama; local never calls the cloud; auto switches to local only when `ConnectivityService`
+  says `local_only` or the cloud call failed in transport (PROVIDER_UNAVAILABLE/TIMEOUT). Budget, rate-limit,
+  auth or malformed-output failures never switch models. No silent fallback anywhere.
+- `OllamaAgentBrain` (`app/agentos/local_brain.py`, default `gpt-oss:20b`) reuses the Phase 2 prompt, per-transition
+  schema and `parse_decision`; no provider tools; Ollama's `thinking` is dropped unread. The endpoint comes only
+  from env and must be loopback/private (never link-local); no proxies, no redirects, no retries, no model pull.
+  A fallback model runs only with `CAMPUSNEXUS_OLLAMA_FALLBACK_POLICY=model_unavailable`.
+- Same Agent Kernel online and offline: routing changes who decides, never what may run. Audit records the
+  provider/model/route; local telemetry has `provider=ollama` and cost NULL (never invented).
+- `ConnectivityService` (`app/agentos/connectivity.py`): one bounded, cached TCP probe of the configured cloud
+  endpoint; NETWORK_LOST/NETWORK_RESTORED per organization only on change. `CAMPUSNEXUS_OFFLINE_MODE=1` refuses
+  every cloud provider (developer/edge offline mode).
+- Edge mode = `CAMPUSNEXUS_DATABASE_MODE=local` (SQLite is operational); cloud mode = PostgreSQL. There is no
+  automatic DB failover between them (split-brain risk); selective cloud sync is Phase 7.
+- Offline, a job on an internet channel becomes DEFERRED / `WAITING_CONNECTIVITY` (no attempt, no retry loop,
+  never delivered; the source mission continues). NETWORK_RESTORED releases them in staggered batches. In-app works.
+- Local speech (`app/communication/voice/local_speech.py`): whisper.cpp / Piper from absolute env paths only, fixed
+  argv, no shell, bounded input/output, finite timeout; the temp WAV is deleted at once. `CAMPUSNEXUS_SPEECH_MODE`
+  / `CAMPUSNEXUS_TTS_MODE` route cloud/local/auto. `POST /agentos/assistant/voice` stores a placeholder goal: the
+  transcript reaches the brain only from memory (`AgentRuntime.transient_goal`) and is never persisted or logged.
+- Tests: `tests/test_agentos_offline_edge.py` (fake Ollama/speech, no network). Smoke: `scripts/offline_agentos_smoke.py`.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so

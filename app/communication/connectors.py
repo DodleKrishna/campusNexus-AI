@@ -44,6 +44,7 @@ def category_for(purpose: str) -> str:
 
 class InAppConnector(DeliveryConnector):
     channel, provider = IN_APP, "campusnexus_in_app"
+    requires_internet = False  # a row in the local database: works offline
     REFERENCE_PREFIX = "notification:"
 
     def available(self) -> bool:

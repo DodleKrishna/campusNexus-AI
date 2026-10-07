@@ -124,6 +124,7 @@ class UsageRecord:
     error_kind: Optional[str]
     estimated_cost_usd: Optional[float]
     created_at: datetime
+    audio_ms: Optional[int] = None  # Phase 6: speech telemetry (STT input / TTS output duration); never the audio
 
 
 @dataclass

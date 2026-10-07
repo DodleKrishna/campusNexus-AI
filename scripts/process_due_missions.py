@@ -6,7 +6,9 @@ events -> interventions + Attendance Guardian missions; no AI), then the communi
 jobs through their connectors; no AI), then
 ``app.agentos.worker.process_due_missions`` against the configured database
 (``CAMPUSNEXUS_DATABASE_URL`` / ``CAMPUSNEXUS_DB_PATH``, as every other script) with the
-configured brain (``CAMPUSNEXUS_AGENT_BRAIN``, default the offline mock). Bounded per run:
+configured brain (``CAMPUSNEXUS_AGENT_BRAIN``, default the offline mock; Phase 6:
+``CAMPUSNEXUS_INTELLIGENCE_MODE=cloud|local|auto`` routes through the local Ollama brain when offline, and the
+communication worker defers internet-only channels while the deployment is offline). Bounded per run:
 ``--limit`` missions, ``--max-transitions`` each. Prints one JSON report per run (ids,
 statuses, codes; no prompts or personal data).
 
@@ -25,7 +27,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agentos.attendance_guardian import scan_attendance  # noqa: E402
 from app.agentos.bootstrap import build_agent_runtime  # noqa: E402
-from app.agentos.providers import build_agent_brain  # noqa: E402
+from app.agentos.brain_router import build_configured_brain  # noqa: E402
+from app.agentos.connectivity import connectivity_from_env  # noqa: E402
 from app.communication.worker import process_communication_jobs  # noqa: E402
 from app.agentos.worker import DEFAULT_LIMIT, DEFAULT_TRANSITIONS, MAX_BATCH, process_due_missions  # noqa: E402
 from app.db.session import open_database  # noqa: E402
@@ -47,11 +50,12 @@ def main(argv: list[str] | None = None) -> int:
 
     factory = TenantSessionFactory(open_database())
     recorder = AIUsageRecorder(factory)
-    brain = build_agent_brain(recorder=recorder)
+    connectivity = connectivity_from_env()
+    brain = build_configured_brain(recorder=recorder, connectivity=connectivity)
     if not getattr(brain, "available", True):
         print(json.dumps({"error": getattr(brain, "code", "BRAIN_UNAVAILABLE")}))
         return 2
-    runtime = build_agent_runtime(brain)
+    runtime = build_agent_runtime(brain, connectivity=connectivity)
     while True:
         scan = scan_attendance(factory, runtime)
         communication = process_communication_jobs(factory, runtime)

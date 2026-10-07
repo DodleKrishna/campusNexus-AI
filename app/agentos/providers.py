@@ -220,6 +220,7 @@ class _MeteredBrain:
     provider_name: str = ""
     model_name: Optional[str] = None
     is_live = False
+    local = False  # Phase 6: a local model (Ollama) has no API cost and is not gated by the monetary AI budget
     available = True
     audit_calls = True  # the runtime writes AI_BRAIN_CALLED / SUCCEEDED / FAILED
 
@@ -228,7 +229,7 @@ class _MeteredBrain:
 
     def _check_budget(self) -> None:
         ai = current_ai_context()
-        if self.recorder is None or ai is None or ai.organization_id is None:
+        if self.local or self.recorder is None or ai is None or ai.organization_id is None:
             return
         try:
             self.recorder.check_budget(ai.organization_id)
@@ -236,17 +237,20 @@ class _MeteredBrain:
             raise BrainUnavailableError("AI budget exhausted", code="AI_BUDGET_EXCEEDED") from None
 
     def _record(self, context: AgentContext, started: float, success: bool, error_kind: Optional[str],
-                usage: Optional[Tuple[Optional[int], Optional[int]]] = None) -> None:
+                usage: Optional[Tuple[Optional[int], Optional[int]]] = None, *, model: Optional[str] = None) -> None:
         ai = current_ai_context()
         if ai is None:
             return
         input_tokens, output_tokens = usage if usage else (None, None)
+        model = model or self.model_name
         ai.records.append(UsageRecord(
-            operation=OPERATION, level=IntelligenceLevel.LIGHT, model=self.model_name, provider=self.provider_name,
+            operation=OPERATION, level=IntelligenceLevel.LIGHT, model=model, provider=self.provider_name,
             mission_id=f"agentos:{context.mission_id}", agent_key=context.agent_key, run_id=ai.run_id,
             input_tokens=input_tokens, output_tokens=output_tokens, latency_ms=int((time.perf_counter() - started) * 1000),
             success=success, error_kind=error_kind,
-            estimated_cost_usd=estimate_cost(self.model_name, input_tokens, output_tokens) if self.is_live else None,
+            # A local model's monetary cost is unavailable, never invented.
+            estimated_cost_usd=(estimate_cost(model, input_tokens, output_tokens)
+                                if self.is_live and not self.local else None),
             created_at=datetime.now(timezone.utc),
         ))
 
@@ -446,6 +450,10 @@ def build_agent_brain(name: Optional[str] = None, *, recorder: Any = None, provi
     if key == "mock":
         return MockAgentBrain(recorder)
     if key == "groq":
+        from app.agentos.connectivity import cloud_allowed
+
+        if not cloud_allowed():  # CAMPUSNEXUS_OFFLINE_MODE: no cloud provider is built
+            return UnavailableBrain("groq", "CLOUD_DISABLED_OFFLINE")
         if provider is None:
             from app.llm.providers.groq import GroqLLMProvider
 
@@ -455,4 +463,8 @@ def build_agent_brain(name: Optional[str] = None, *, recorder: Any = None, provi
             except LLMProviderError:  # missing GROQ_API_KEY / httpx, or an incompatible model id
                 return UnavailableBrain("groq", "PROVIDER_NOT_CONFIGURED")
         return GroqAgentBrain(provider, recorder=recorder, max_history=history)
+    if key == "ollama":  # Phase 6: the local brain on its own (see app.agentos.brain_router for routing modes)
+        from app.agentos.local_brain import build_local_brain
+
+        return build_local_brain(recorder=recorder)
     return UnavailableBrain(key[:20], "AGENT_BRAIN_NOT_SUPPORTED")  # incl. anthropic: not wired in Phase 2

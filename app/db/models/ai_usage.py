@@ -32,4 +32,5 @@ class AIUsageEvent(TenantMixin, Base):
     success: Mapped[bool] = mapped_column(default=True)
     error_kind: Mapped[Optional[str]] = mapped_column(String(60), default=None)
     estimated_cost_usd: Mapped[Optional[float]] = mapped_column(Float, default=None)
+    audio_ms: Mapped[Optional[int]] = mapped_column(default=None)  # Phase 6: speech duration (nullable, additive)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, index=True)

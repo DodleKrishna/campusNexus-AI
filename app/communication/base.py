@@ -43,6 +43,9 @@ class DeliveryResult:
 class DeliveryConnector(ABC):
     channel: str
     provider: str
+    # Phase 6: a connector that needs the internet (voice/e-mail/SMS providers) is never attempted while the
+    # deployment is offline; its job waits for connectivity instead (``WAITING_CONNECTIVITY``).
+    requires_internet: bool = True
 
     @abstractmethod
     def available(self) -> bool:

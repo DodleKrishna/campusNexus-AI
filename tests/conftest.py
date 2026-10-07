@@ -21,6 +21,10 @@ import os
 os.environ.pop("CAMPUSNEXUS_DATABASE_URL", None)
 os.environ.pop("CAMPUSNEXUS_DATABASE_MODE", None)  # Phase 2.5: the suite is local (SQLite) unless a test sets it
 os.environ.pop("CAMPUSNEXUS_AGENT_BRAIN", None)  # AgentOS: tests use the offline mock brain unless they inject one
+# Phase 6: no routing mode, probe or offline switch from the developer's shell (no connectivity probe in the suite).
+for _name in ("CAMPUSNEXUS_INTELLIGENCE_MODE", "CAMPUSNEXUS_SPEECH_MODE", "CAMPUSNEXUS_TTS_MODE",
+              "CAMPUSNEXUS_OFFLINE_MODE", "CAMPUSNEXUS_CONNECTIVITY_PROBE_URL"):
+    os.environ.pop(_name, None)
 
 import pytest  # noqa: E402
 from sqlalchemy.orm import Session, sessionmaker  # noqa: E402

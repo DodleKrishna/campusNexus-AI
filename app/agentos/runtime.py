@@ -28,10 +28,12 @@ MISSION_WAITING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED, and (for 
 """
 from __future__ import annotations
 
+import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 from pydantic import ValidationError
 from sqlalchemy import event as orm_event, select
@@ -99,6 +101,20 @@ class AgentRuntime:
         self.agents, self.tools, self.brain = agents, tools, brain
         self.events = events or EventService()
         self.clock = clock
+        # Phase 6: a request that must never be stored (a voice transcript) reaches the brain only from memory.
+        self._transient_goals: Dict[int, str] = {}
+        self._transient_lock = threading.Lock()
+
+    @contextmanager
+    def transient_goal(self, mission_id: int, goal: str) -> Iterator[None]:
+        """While the block runs, the brain sees ``goal`` instead of the stored (placeholder) mission goal."""
+        with self._transient_lock:
+            self._transient_goals[mission_id] = goal
+        try:
+            yield
+        finally:
+            with self._transient_lock:
+                self._transient_goals.pop(mission_id, None)
 
     # --- Access ------------------------------------------------------------------------------------------------
 
@@ -391,7 +407,7 @@ class AgentRuntime:
     def _context(self, mission: AgentMission, spec: AgentSpec, actor: MissionActor) -> AgentContext:
         state = {k: v for k, v in (mission.context or {}).items() if k != "observations"}
         return AgentContext(
-            mission_id=mission.id, agent_key=mission.agent_key, goal=mission.goal,
+            mission_id=mission.id, agent_key=mission.agent_key, goal=self._transient_goals.get(mission.id, mission.goal),
             success_criteria=list(mission.success_criteria or []), status=mission.status, step_count=mission.step_count,
             max_steps=mission.max_steps, plan=mission.current_plan, state=redact(state),
             observations=[AgentObservation.model_validate(o) for o in mission.context.get("observations", [])],
@@ -429,6 +445,9 @@ class AgentRuntime:
         prompt, the raw output, reasoning or an error message (which could echo either)."""
         meta = {"provider": getattr(self.brain, "provider_name", None), "model": getattr(self.brain, "model_name", None),
                 "latency_ms": int((time.perf_counter() - started) * 1000)}
+        route = getattr(self.brain, "last_route", None)  # Phase 6: which brain the router chose, and why
+        if route:
+            meta["route"] = route
         self._audit(session, actor, mission, "AI_BRAIN_CALLED", f"Mission {mission.id}: brain called.", meta, now)
         if error_code is None:
             self._audit(session, actor, mission, "AI_BRAIN_SUCCEEDED", f"Mission {mission.id}: brain returned a decision.",

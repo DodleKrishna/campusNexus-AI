@@ -173,7 +173,7 @@ async def _start(stream: _Stream, message: dict) -> bool:
     try:
         conversation = await run_in_threadpool(VoiceConversation, state.session_factory,
                                                state.agent_runtime.communication, stream.pipeline, str(token)[:400],
-                                               state.clock)
+                                               state.clock, recorder=getattr(state.llm_provider, "recorder", None))
         opening = await run_in_threadpool(conversation.start, stream.stream_sid)
     except ConversationError:
         await stream.ws.close(code=POLICY_VIOLATION)
