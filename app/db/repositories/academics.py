@@ -3,11 +3,16 @@ from __future__ import annotations
 
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models.academic import AttendanceRecord, Course, Enrollment, Exam, TimetableSlot
+from app.db.models.academic import AttendanceRecord, Course, Enrollment, Exam, ExamStatus, TimetableSlot
+from app.db.models.exam import ExamTarget
 from app.db.models.identity import Student
+
+# Phase 4: a managed exam (``teaching_assignment_id`` set) is on a student's schedule only once it is scheduled and
+# the student is one of its snapshotted targets. Timetable-only exams (no class) are unchanged.
+_LIVE_EXAM_STATUSES = (ExamStatus.SCHEDULED, ExamStatus.IN_PROGRESS, ExamStatus.COMPLETED)
 
 
 def get_enrollment(session: Session, student_code: str, course_code: str) -> Optional[Enrollment]:
@@ -64,5 +69,10 @@ def get_exam_schedule(session: Session, student_code: str) -> list[Exam]:
         .join(Enrollment, Exam.course_id == Enrollment.course_id)
         .join(Student, Enrollment.student_id == Student.id)
         .where(Student.student_code == student_code)
+        .where(or_(
+            Exam.teaching_assignment_id.is_(None),
+            and_(Exam.status.in_(_LIVE_EXAM_STATUSES),
+                 exists(select(ExamTarget.id).where(ExamTarget.exam_id == Exam.id, ExamTarget.student_id == Student.id))),
+        ))
     )
     return list(session.execute(stmt).scalars().all())

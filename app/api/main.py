@@ -25,7 +25,7 @@ from app.agents.services.agent import ServicesAgent
 from app.agentos.brain import AgentBrain
 from app.agentos.bootstrap import build_agent_runtime
 from app.agentos.providers import build_agent_brain
-from app.api.routers import admin, admin_console, agentos, agents, assignments, approvals, auth, enterprise, faculty, health, hod, me, missions, requests, students
+from app.api.routers import admin, admin_console, agentos, agents, assignments, approvals, attendance, auth, enterprise, exams, faculty, health, hod, me, missions, requests, students
 from app.db.session import create_db_engine, upgrade_schema, verify_database_ready
 from app.db.tenant_session import TenantSessionFactory
 from app.llm.router import build_routed_provider, routed
@@ -140,6 +140,8 @@ def create_app(
     fastapi_app.include_router(agentos.router)
     fastapi_app.include_router(agentos.assistant_router)
     fastapi_app.include_router(assignments.router)
+    fastapi_app.include_router(exams.router)
+    fastapi_app.include_router(attendance.router)
     return fastapi_app
 
 

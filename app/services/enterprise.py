@@ -14,10 +14,10 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.db.models.academic import Exam
+from app.db.models.academic import Exam, ExamStatus
 from app.db.models.auth import AuthAccount
 from app.db.models.career import Application, Opportunity, OpportunityStatus
 from app.db.models.events import Event
@@ -244,7 +244,9 @@ def _findings(session: Session, knowledge: KnowledgeService, admin: AuthAccount,
         if key == "attendance_risk":
             return [MonitorFinding(title=f"{e.full_name} · {e.course_code}", severity="critical" if e.percentage < 65 else "warning",
                                    detail=f"{e.percentage:.0f}% attendance ({e.classes_attended}/{e.classes_conducted})") for e in low]
-        exams = session.execute(select(Exam).where(Exam.scheduled_start >= now, Exam.scheduled_start <= now + DEADLINE_WINDOW)).scalars().all()
+        exams = session.execute(select(Exam).where(Exam.scheduled_start >= now, Exam.scheduled_start <= now + DEADLINE_WINDOW,
+                                                   or_(Exam.status.is_(None), Exam.status.not_in([ExamStatus.DRAFT, ExamStatus.CANCELLED])))
+                                ).scalars().all()
         soon = {e.course.code: e for e in exams if e.course is not None}
         return [MonitorFinding(title=f"{e.full_name} · {e.course_code}", severity="critical",
                                detail=f"{e.percentage:.0f}% attendance, {soon[e.course_code].exam_type} on "

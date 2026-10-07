@@ -9,6 +9,8 @@ from app.db.models.academic import (
     CourseStatus,
     Enrollment,
     Exam,
+    ExamStatus,
+    ExamType,
     TimetableSlot,
 )
 from app.db.models.career import (
@@ -34,6 +36,8 @@ from app.db.models.assignment import (
     FollowupStatus,
     SubmissionStatus,
 )
+from app.db.models.attendance_intervention import AttendanceFollowup, AttendanceIntervention, InterventionStatus
+from app.db.models.exam import ExamAttendance, ExamAttendanceStatus, ExamFollowup, ExamTarget
 from app.db.models.agent_kernel import AgentMission, AgentMissionStatus, AgentStep, AgentStepStatus, DomainEvent
 from app.db.models.ai_usage import AIUsageEvent
 from app.db.models.auth import AuthAccount
@@ -97,6 +101,15 @@ __all__ = [
     "CourseStatus",
     "Enrollment",
     "Exam",
+    "ExamAttendance",
+    "ExamAttendanceStatus",
+    "ExamFollowup",
+    "ExamStatus",
+    "ExamTarget",
+    "ExamType",
+    "AttendanceFollowup",
+    "AttendanceIntervention",
+    "InterventionStatus",
     "TimetableSlot",
     "Application",
     "ApplicationStatus",

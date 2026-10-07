@@ -170,7 +170,8 @@ def test_a_valid_groq_decision_runs_through_the_kernel(app, client, session_fact
     assert schema["additionalProperties"] is False and set(schema["required"]) == set(schema["properties"])
     assert schema["properties"]["kind"]["enum"] == ["tool", "ask_human", "complete", "fail"]  # nothing delegable yet
     assert schema["properties"]["tool_name"]["enum"] == ["get_assignment_status", "get_my_active_missions",
-                                                         "get_my_assignments", "get_my_identity_context", None]
+                                                         "get_my_assignments", "get_my_attendance_summary",
+                                                         "get_my_exams", "get_my_identity_context", None]
     _, steps, _ = mission_rows(session_factory, body["mission_id"])
     assert steps[0].tool_name == "get_my_identity_context" and steps[1].input_summary["user_message"] == DONE["user_message"]
 

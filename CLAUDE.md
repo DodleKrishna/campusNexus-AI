@@ -575,6 +575,35 @@ the current demo:
 - Tests: `tests/test_agentos_assignment_guardian.py` (pinned clock, mock/scripted brain, no sleeping).
   `python scripts/demo_assignment_guardian.py` prints the offline end-to-end trace.
 
+## AgentOS V2 Phase 4: Exam Guardian & Attendance Guardian
+
+- Exams reuse the existing `exams` table, extended additively (nullable `teaching_assignment_id`, `status`, title,
+  duration, makeup deadline, `guardian_mission_id`, ...). A row without `teaching_assignment_id` is a timetable-only
+  exam and behaves as before; a managed exam reaches `get_exam_schedule` only when SCHEDULED/IN_PROGRESS/COMPLETED
+  and the student is a target. New tables: `exam_targets`, `exam_attendance`, `exam_followups`
+  (`app/db/models/exam.py`), `attendance_interventions`, `attendance_followups`
+  (`app/db/models/attendance_intervention.py`). Class attendance stays in `attendance_sessions` /
+  `session_attendance_marks`; never duplicate it.
+- `app/services/exams.py` (`/exams`) is the only exam write path; `app/rules/exam_rules.py` decides times, marking,
+  resolution (PRESENT/EXEMPT/MAKEUP_COMPLETED), success (finished AND all resolved) and follow-ups. Scheduling = one
+  transaction (conditional DRAFT->SCHEDULED, roster snapshot, one `exam_guardian` mission, EXAM_SCHEDULED, audit).
+- Attendance marks are written only by the faculty operations, which publish CLASS_STARTED / ATTENDANCE_MARKED /
+  ATTENDANCE_UPDATED (and ATTENDANCE_CORRECTED / ATTENDANCE_JUSTIFIED / LEAVE_APPROVED to an open intervention's
+  mission). A future biometric/ERP connector publishes the same types. `process_attendance_events`
+  (`scan_attendance`, run by `scripts/process_due_missions.py` before the due worker) consumes them after the grace
+  period and applies `app/rules/attendance_intervention.detect_absence`; only ABSENCE_CONFIRMED creates one
+  intervention + one `attendance_guardian` mission (owner: the class's faculty account). An unmarked student counts
+  only once the roll is being taken. Resolution comes from recorded facts only, never from the model.
+- `app/rules/followup_policy.py` holds the contact limits all three Guardians share (active request, attempts,
+  cooldown, quiet hours vs a hard stop). Domain checks stay in each rules module.
+- Both Guardians follow the Phase 3 pattern: `user_creatable=False`, `accepts_delegation=False`, `autonomous=True`, a
+  supervisor that ends missions deterministically (an unresolved terminal deadline / resolution window is FAILED,
+  never a success) and asks the brain only when policy could allow a follow-up. Tools are bound to the mission's
+  own exam/intervention; outputs carry ids/counts/codes only.
+- Worker: an owner without an active membership is parked (WAITING_HUMAN, `waiting_for=OWNER_INACTIVE`, no wake
+  time), audited OWNER_INACTIVE_MISSION_PARKED once, never impersonated; a later wake re-checks the owner.
+- Tests: `tests/test_agentos_exam_attendance_guardians.py`; demo: `python scripts/demo_exam_attendance_guardians.py`.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so

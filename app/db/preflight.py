@@ -33,12 +33,18 @@ from app.db.session import (
 CORE_TABLES = ("organizations", "organization_memberships", "auth_accounts")
 AGENTOS_TABLES = ("agent_missions", "agent_steps", "domain_events",
                   # Phase 3: the Assignment Guardian's domain
-                  "assignments", "assignment_targets", "assignment_submissions", "assignment_followups")
+                  "assignments", "assignment_targets", "assignment_submissions", "assignment_followups",
+                  # Phase 4: the Exam and Attendance Guardians' domains (``exams`` itself is a core academic table)
+                  "exam_targets", "exam_attendance", "exam_followups", "attendance_interventions",
+                  "attendance_followups")
 AGENTOS_INDEXES = (
     "ix_agent_missions_org_owner_agent", "ix_agent_missions_org_status_wake", "ix_domain_events_org_type_consumed",
     "ux_agent_steps_mission_step",
     "ix_assignments_org_status_deadline", "ix_assignment_followups_assignment_student_status",
     "ux_assignment_followups_active",
+    "ix_exam_targets_org_student", "ix_exam_attendance_exam_status",
+    "ix_exam_followups_exam_student_status", "ux_exam_followups_active", "ux_attendance_interventions_active",
+    "ix_attendance_interventions_org_status", "ux_attendance_followups_active",
 )
 TENANT_COLUMN = "organization_id"
 

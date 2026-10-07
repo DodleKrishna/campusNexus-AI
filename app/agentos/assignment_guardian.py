@@ -17,7 +17,7 @@ Division of labour (cost control):
   request tool: each requested student is decided by ``evaluate_followup`` (cooldown, max
   attempts, submitted, cancelled, deadline, quiet hours) and only an allowed one becomes an
   ``AssignmentFollowup`` + COMMUNICATION_REQUESTED event. Nothing is sent (Phase 5).
-* COMPLETE is executed only when ``verify_complete`` holds. A deadline with pending students
+* COMPLETE/FAIL are decided by the supervisor only (a brain COMPLETE/FAIL is re-checked, never trusted). A deadline with pending students
   ends the mission FAILED with outcome DEADLINE_REACHED_WITH_PENDING -- never as a success.
 
 Delegation is allowed to ``communication_agent`` only, which is not registered yet: the
@@ -317,10 +317,6 @@ class GuardianSupervisor:
             "assignment_id": assignment.id, "deadline_at": _iso(assignment.deadline_at), "now": _iso(now),
             "hours_to_deadline": round((assignment.deadline_at - now).total_seconds() / 3600, 2),
             "followup_window_open": now >= window_opens, "next_checkpoint": _iso(nxt), **counts})
-
-    def verify_complete(self, session: Session, mission: AgentMission, now: datetime) -> bool:
-        assignment = mission_assignment(session, mission)
-        return assignment is not None and service.compute_progress(session, assignment).all_submitted
 
     def plan_wait(self, session: Session, mission: AgentMission, requested_wake: Optional[datetime],
                   now: datetime) -> Tuple[DomainEventType, Optional[datetime]]:

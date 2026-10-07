@@ -56,6 +56,7 @@ from app.services.class_schedule import (
     planned_classes,
     roster,
 )
+from app.services import attendance_monitor
 from app.services.knowledge import KnowledgeService
 
 
@@ -283,6 +284,7 @@ def start_class(session: Session, faculty: FacultyProfile, account: AuthAccount,
     row.status = AttendanceSessionStatus.ACTIVE
     row.actual_started_at = now
     _audit(session, account, "class_started", row, f"{faculty.full_name} started {row.course.title}.", started_at=now.isoformat())
+    attendance_monitor.class_started(session, row, account.id, now)  # Phase 4: CLASS_STARTED domain event
     session.commit()
     return row
 
@@ -299,19 +301,23 @@ def mark_attendance(
         raise OperationRefused(f"Not on this class's roster: {', '.join(unknown)}.")
     existing = {m.student_id: m for m in _marks(session, row.id)}
     changed: List[dict] = []
+    events: List[tuple] = []
     for code, status in marks.items():
         value = AttendanceMarkStatus(status)
         student = students[code]
         mark = existing.get(student.id)
         if mark is None:
             session.add(SessionAttendanceMark(session_id=row.id, student_id=student.id, status=value, marked_at=now, marked_by_faculty_id=faculty.id))
+            events.append((student.id, None, value.value))
         elif mark.status != value:
+            events.append((student.id, mark.status.value, value.value))
             mark.status, mark.marked_at, mark.marked_by_faculty_id = value, now, faculty.id
         else:
             continue
         changed.append({"student_id": code, "status": value.value})
     if changed:
         _audit(session, account, "attendance_marked", row, f"{faculty.full_name} marked {len(changed)} student(s).", marks=changed)
+        attendance_monitor.marks_changed(session, row, events, account.id, now)  # Phase 4: normalized domain events
     session.commit()
     return row
 

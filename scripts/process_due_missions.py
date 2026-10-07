@@ -1,6 +1,8 @@
-"""Advance due autonomous AgentOS missions (AgentOS V2 Phase 3: the Assignment Guardian).
+"""Advance due autonomous AgentOS missions (Assignment, Exam and Attendance Guardians).
 
-Runs ``app.agentos.worker.process_due_missions`` against the configured database
+Each batch first runs the deterministic absence-detection pass (``scan_attendance``: due class-attendance
+events -> interventions + Attendance Guardian missions; no AI), then
+``app.agentos.worker.process_due_missions`` against the configured database
 (``CAMPUSNEXUS_DATABASE_URL`` / ``CAMPUSNEXUS_DB_PATH``, as every other script) with the
 configured brain (``CAMPUSNEXUS_AGENT_BRAIN``, default the offline mock). Bounded per run:
 ``--limit`` missions, ``--max-transitions`` each. Prints one JSON report per run (ids,
@@ -19,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.agentos.attendance_guardian import scan_attendance  # noqa: E402
 from app.agentos.bootstrap import build_agent_runtime  # noqa: E402
 from app.agentos.providers import build_agent_brain  # noqa: E402
 from app.agentos.worker import DEFAULT_LIMIT, DEFAULT_TRANSITIONS, MAX_BATCH, process_due_missions  # noqa: E402
@@ -47,9 +50,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     runtime = build_agent_runtime(brain)
     while True:
+        scan = scan_attendance(factory, runtime)
         report = process_due_missions(factory, runtime, limit=args.limit, max_transitions=args.max_transitions,
                                       recorder=recorder)
-        print(json.dumps(report.model_dump(mode="json"), separators=(",", ":")), flush=True)
+        print(json.dumps({"attendance_scan": scan.model_dump(mode="json"), **report.model_dump(mode="json")},
+                         separators=(",", ":")), flush=True)
         if args.once:
             return 0
         try:

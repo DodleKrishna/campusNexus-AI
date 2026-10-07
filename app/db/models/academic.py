@@ -111,16 +111,56 @@ class TimetableSlot(TenantMixin, Base):
     course = relationship("Course")
 
 
+class ExamStatus(str, enum.Enum):
+    """Lifecycle of a Guardian-managed exam (AgentOS V2 Phase 4). NULL on a timetable-only exam row."""
+
+    DRAFT = "draft"
+    SCHEDULED = "scheduled"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class ExamType(str, enum.Enum):
+    MID = "mid"
+    INTERNAL = "internal"
+    QUIZ = "quiz"
+    OTHER = "other"
+
+
 class Exam(TenantMixin, Base):
-    """A scheduled exam for a course."""
+    """A scheduled exam for a course.
+
+    Phase 4 (additive, nullable): a *managed* exam also has a class (``teaching_assignment_id``), a
+    creator, a title, a duration, a lifecycle ``status`` and its Exam Guardian mission. Rows without a
+    ``teaching_assignment_id`` are the original timetable-only exams and behave exactly as before.
+    ``scheduled_start`` is the exam's ``scheduled_at``; ``scheduled_end`` = start + duration.
+    """
 
     __tablename__ = "exams"
+    __table_args__ = (Index("ix_exams_org_status_scheduled", "organization_id", "status", "scheduled_start"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"))
-    exam_type: Mapped[str] = mapped_column(String(30))  # "midterm" | "final" | "quiz"
+    exam_type: Mapped[str] = mapped_column(String(30))  # "midterm" | "final" | "quiz"; managed: an ExamType value
     scheduled_start: Mapped[datetime] = mapped_column(UTCDateTime)
     scheduled_end: Mapped[datetime] = mapped_column(UTCDateTime)
     location: Mapped[str] = mapped_column(String(80))
+    # --- Phase 4: managed exams (all nullable so ``upgrade_schema`` can add them) ---
+    teaching_assignment_id: Mapped[Optional[int]] = mapped_column(ForeignKey("teaching_assignments.id"), index=True,
+                                                                  default=None)
+    created_by_account_id: Mapped[Optional[int]] = mapped_column(ForeignKey("auth_accounts.id"), default=None)
+    title: Mapped[Optional[str]] = mapped_column(String(200), default=None)
+    duration_minutes: Mapped[Optional[int]] = mapped_column(default=None)
+    status: Mapped[Optional[ExamStatus]] = mapped_column(portable_enum(ExamStatus), default=None)
+    makeup_deadline_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    # Set once, in the scheduling transaction: the one Exam Guardian mission for this exam.
+    guardian_mission_id: Mapped[Optional[int]] = mapped_column(ForeignKey("agent_missions.id"), default=None)
+    published_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)  # when it was scheduled (announced)
+    started_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    created_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
 
     course = relationship("Course")

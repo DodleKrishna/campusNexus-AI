@@ -34,10 +34,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agentos.events import SUBJECT_MISSION, EventService
+from app.agentos.events import SUBJECT_MISSION, EventService, wake_mission as events_wake_mission
 from app.agentos.schemas import CreateAgentMission, DomainEventType
 from app.db.models.academic import Course
-from app.db.models.agent_kernel import TERMINAL_MISSION_STATUSES, AgentMission
+from app.db.models.agent_kernel import AgentMission
 from app.db.models.assignment import (
     Assignment, AssignmentFollowup, AssignmentStatus, AssignmentSubmission, AssignmentTarget, FollowupStatus,
     SubmissionStatus,
@@ -157,20 +157,20 @@ class SubmissionView(BaseModel):
 # --- Access --------------------------------------------------------------------------------------------------------
 
 
-def _headed_department_id(session: Session, faculty_profile_id: Optional[int]) -> Optional[int]:
+def headed_department_id(session: Session, faculty_profile_id: Optional[int]) -> Optional[int]:
     if faculty_profile_id is None:
         return None
     return session.execute(select(Department.id).where(Department.hod_faculty_id == faculty_profile_id)).scalars().first()
 
 
-def _may_teach(session: Session, actor: Any, teaching: TeachingAssignment) -> bool:
+def may_teach(session: Session, actor: Any, teaching: TeachingAssignment) -> bool:
     if actor.role == UserRole.ADMIN:
         return True
     if actor.role not in (UserRole.FACULTY, UserRole.HOD) or actor.faculty_profile_id is None:
         return False
     if teaching.faculty_id == actor.faculty_profile_id:
         return True
-    return actor.role == UserRole.HOD and teaching.department_id == _headed_department_id(session, actor.faculty_profile_id)
+    return actor.role == UserRole.HOD and teaching.department_id == headed_department_id(session, actor.faculty_profile_id)
 
 
 def manageable(session: Session, actor: Any, assignment_id: int) -> Assignment:
@@ -182,7 +182,7 @@ def manageable(session: Session, actor: Any, assignment_id: int) -> Assignment:
         return assignment
     teaching = session.get(TeachingAssignment, assignment.teaching_assignment_id)
     if (actor.role == UserRole.HOD and teaching is not None
-            and teaching.department_id == _headed_department_id(session, actor.faculty_profile_id)):
+            and teaching.department_id == headed_department_id(session, actor.faculty_profile_id)):
         return assignment
     raise _not_found()
 
@@ -295,7 +295,7 @@ def create_assignment(session: Session, actor: Any, body: CreateAssignment, now:
     if actor.role not in STAFF_ROLES:
         raise AssignmentError("ROLE_NOT_ALLOWED", "Only faculty, a head of department or an admin can create assignments.", 403)
     teaching = session.get(TeachingAssignment, body.teaching_assignment_id)
-    if teaching is None or not _may_teach(session, actor, teaching):
+    if teaching is None or not may_teach(session, actor, teaching):
         raise AssignmentError("CLASS_NOT_FOUND", "Class not found among the classes you may assign work to.", 404)
     if not now < body.deadline_at <= now + MAX_DEADLINE_AHEAD:
         raise AssignmentError("INVALID_DEADLINE", "The deadline must be in the future (within a year).", 422)
@@ -447,12 +447,7 @@ def submit(session: Session, actor: Any, assignment_id: int, body: SubmitAssignm
 # --- Guardian support ----------------------------------------------------------------------------------------------
 
 
-def wake_mission(session: Session, mission_id: int, now: datetime) -> None:
-    """Bring a non-terminal mission's wake time forward to ``now`` (the due-mission worker picks it up)."""
-    mission = session.get(AgentMission, mission_id)
-    if mission is not None and mission.status not in TERMINAL_MISSION_STATUSES and (
-            mission.next_wake_at is None or mission.next_wake_at > now):
-        mission.next_wake_at = now
+wake_mission = events_wake_mission  # shared with the Exam and Attendance Guardians (``app.agentos.events``)
 
 
 def close_active_followups(session: Session, assignment_id: int, *, now: datetime, student_id: Optional[int] = None) -> int:

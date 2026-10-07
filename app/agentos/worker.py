@@ -1,15 +1,18 @@
 """Due-mission worker (AgentOS V2 Phase 3): advances autonomous missions whose wake time has come.
 
-``process_due_missions`` is reusable for every autonomous agent (Assignment Guardian now; Exam
-and Attendance agents later). One call:
+``process_due_missions`` is reusable for every autonomous agent (the Assignment, Exam and Attendance
+Guardians). One call:
 
 1. lists active organizations, and in each one's *tenant* session the due missions of
    autonomous agents (``AgentSpec.autonomous``): not terminal, ``next_wake_at <= now``, no live lease;
 2. claims each one with a single conditional UPDATE (lease owner + expiry). On SQLite and
    PostgreSQL alike only one worker's UPDATE matches (PostgreSQL re-checks the WHERE after the row
    lock), so two workers never process the same mission; a crashed worker's lease expires;
-3. rebuilds the mission owner's identity from their *active* membership (an inactive owner is
-   skipped, never impersonated) and runs ``run_until_blocked`` with a small transition cap;
+3. rebuilds the mission owner's identity from their *active* membership and runs ``run_until_blocked``
+   with a small transition cap. An owner without an active account/membership is never impersonated:
+   the mission is parked in WAITING_HUMAN (``waiting_for = OWNER_INACTIVE``, no wake time) and audited
+   OWNER_INACTIVE_MISSION_PARKED once -- no retry every few minutes. A later wake (a domain event) re-checks
+   the owner: still inactive re-parks silently; active again resumes normally;
 4. releases the lease, pushes the wake time forward when the mission is still RUNNING (cap reached)
    or the brain was unavailable (backoff, no retry storm), and audits MISSION_WORKER_RUN.
 
@@ -41,7 +44,8 @@ DEFAULT_LIMIT = 10
 DEFAULT_TRANSITIONS = 4
 LEASE = timedelta(minutes=5)
 RUNNING_RETRY = timedelta(minutes=5)  # still RUNNING after the cap: continue on a later run
-UNAVAILABLE_BACKOFF = timedelta(minutes=10)  # brain unavailable / owner inactive / worker error
+UNAVAILABLE_BACKOFF = timedelta(minutes=10)  # brain unavailable / worker error
+OWNER_INACTIVE = "OWNER_INACTIVE"  # ``waiting_for`` of a parked mission (never a published event type)
 ACTIVE_STATUSES = [s for s in AgentMissionStatus if s not in TERMINAL_MISSION_STATUSES]
 
 
@@ -136,7 +140,8 @@ def _process_one(factory: TenantSessionFactory, runtime: AgentRuntime, organizat
         actor = _owner_actor(session, organization_id, mission)
         backoff = False
         if actor is None:
-            run.outcome, run.error_code, backoff = "skipped", "OWNER_INACTIVE", True
+            run.outcome, run.error_code = "skipped", OWNER_INACTIVE
+            _park_owner_inactive(session, mission, agent_key, now)
         else:
             try:
                 with ai_context(organization_id, mission_id=f"agentos:{mission_id}", recorder=recorder, agent_key=agent_key):
@@ -168,3 +173,16 @@ def _process_one(factory: TenantSessionFactory, runtime: AgentRuntime, organizat
                       "transitions": run.transitions, "status": run.status, "error_code": run.error_code})
         session.commit()
     return run
+
+
+def _park_owner_inactive(session: Any, mission: AgentMission, agent_key: str, now: datetime) -> None:
+    """Park (never impersonate): WAITING_HUMAN on OWNER_INACTIVE with no wake time, audited only on the first park."""
+    already_parked = mission.status == AgentMissionStatus.WAITING_HUMAN and mission.waiting_for == OWNER_INACTIVE
+    mission.status, mission.waiting_for, mission.next_wake_at = AgentMissionStatus.WAITING_HUMAN, OWNER_INACTIVE, None
+    if not already_parked:
+        operations_audit.record(
+            session, event_type="OWNER_INACTIVE_MISSION_PARKED", actor_account_id=None, actor_role="worker",
+            subject_type=SUBJECT, subject_id=str(mission.id), at=now,
+            message=f"Mission {mission.id} parked: its owner has no active membership.",
+            metadata={"agent_key": agent_key, "status": mission.status.value, "waiting_for": OWNER_INACTIVE})
+    session.flush()  # the caller expires the session next; keep the parked state

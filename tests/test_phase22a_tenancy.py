@@ -261,6 +261,8 @@ def build_legacy_database(target: Engine, source: Engine,
             Column(c.name, c.type, *[ForeignKey(fk.target_fullname, use_alter=fk.use_alter) for fk in c.foreign_keys],
                    primary_key=c.primary_key, nullable=c.nullable, unique=bool(c.unique))
             for c in table.columns if c.name != "organization_id"
+            # A column referencing a table the older schema did not have was added later (e.g. exams.guardian_mission_id).
+            and not any(fk.column.table.name in exclude for fk in c.foreign_keys)
         ]
         Table(table.name, legacy, *columns)
     legacy.create_all(target)

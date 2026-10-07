@@ -14,9 +14,10 @@ Nothing a brain says is persisted except redacted, structured summaries of the
 observable decision and its result -- never reasoning.
 
 Phase 3: an agent's ``MissionSupervisor`` (``AgentSpec.supervisor``) reviews the mission
-before each brain call (a terminal or wait verdict needs no AI call), gates COMPLETE
-(``verify_complete``; an unverified COMPLETE is recorded REJECTED and the mission keeps
-monitoring) and schedules every WAIT (``plan_wait``). ``AgentSpec.allowed_decisions`` /
+before each brain call (a terminal or wait verdict needs no AI call), owns every terminal
+outcome (a brain COMPLETE/FAIL only asks the supervisor to look again: its own terminal verdict
+is applied, otherwise the step is recorded REJECTED as COMPLETION_NOT_VERIFIED /
+FAIL_NOT_VERIFIED and the mission keeps monitoring) and schedules every WAIT (``plan_wait``). ``AgentSpec.allowed_decisions`` /
 ``wait_events`` narrow what a brain may decide. Every write a tool makes is watched: a
 read-only tool may write nothing, an internal request tool only its ``request_models``.
 
@@ -254,8 +255,8 @@ class AgentRuntime:
             return self._reject(session, actor, mission, _Rejected("INVALID_DECISION", summary), now)
         except _ToolCrashed as crashed:
             return self._record_crash(session, actor, mission_id, decision, crashed, now)
-        except _NotVerified:
-            return self._reject_completion(session, actor, mission, spec, decision, now)
+        except _TerminalClaim:
+            return self._settle_terminal_claim(session, actor, mission, spec, decision, now)
 
         step = self._record_step(session, actor, mission, decision, outcome, now)
         return self._commit(session, mission, step, decision.kind, outcome.error_code)
@@ -297,9 +298,9 @@ class AgentRuntime:
             mission.current_plan = {"version": version, "steps": redact(decision.plan)}
             self._remember(mission, [AgentObservation(kind="plan_updated", source="runtime", at=now, data={"version": version})])
             return _Outcome(AgentStepStatus.EXECUTED, {"plan_version": version})
+        if spec.supervisor is not None:  # COMPLETE/FAIL: a supervised mission's terminal outcome is never the brain's
+            raise _TerminalClaim()
         if kind == DecisionKind.COMPLETE:
-            if spec.supervisor is not None and not spec.supervisor.verify_complete(session, mission, now):
-                raise _NotVerified()
             mission.context = {**mission.context, "outcome": redact(decision.outcome)}
             if decision.user_message:
                 mission.context = {**mission.context, "assistant_message": redact(decision.user_message)}
@@ -505,18 +506,23 @@ class AgentRuntime:
                      f"Mission {mission.id} {status.value} (verified: {verdict.code}).", metadata)
         return self._commit(session, mission, step, None, outcome.error_code)
 
-    def _reject_completion(self, session: Session, actor: MissionActor, mission: AgentMission, spec: AgentSpec,
-                           decision: AgentDecision, now: datetime) -> AgentResult:
-        """The brain said COMPLETE but the success condition does not hold: nothing is completed, the step is
-        recorded REJECTED, and the mission keeps monitoring until its next deterministic checkpoint."""
-        outcome = _Outcome(AgentStepStatus.REJECTED, {"error_code": "COMPLETION_NOT_VERIFIED"},
-                           error_code="COMPLETION_NOT_VERIFIED")
+    def _settle_terminal_claim(self, session: Session, actor: MissionActor, mission: AgentMission, spec: AgentSpec,
+                               decision: AgentDecision, now: datetime) -> AgentResult:
+        """The brain said COMPLETE or FAIL on a supervised mission. Only the supervisor's own terminal verdict (which
+        also closes the domain record) may end it; otherwise nothing is closed, the step is recorded REJECTED, and the
+        mission keeps monitoring until its next deterministic checkpoint."""
+        verdict = spec.supervisor.review(session, mission, now, "running")
+        if verdict.action in ("complete", "cancel", "fail"):
+            return self._apply_verdict(session, actor, mission, verdict, now)
+        code = "COMPLETION_NOT_VERIFIED" if decision.kind == DecisionKind.COMPLETE else "FAIL_NOT_VERIFIED"
+        outcome = _Outcome(AgentStepStatus.REJECTED, {"error_code": code}, error_code=code)
         step = self._record_step(session, actor, mission, decision, outcome, now)
         event, wake = spec.supervisor.plan_wait(session, mission, None, now)
         mission.status, mission.waiting_for, mission.next_wake_at = AgentMissionStatus.WAITING_EVENT, event.value, wake
-        self._audit(session, actor, mission, "MISSION_WAITING", f"Mission {mission.id} is waiting (completion not verified).",
-                    {"waiting_for": mission.waiting_for, "status": mission.status.value, "source": "supervisor"}, now)
-        return self._commit(session, mission, step, decision.kind, "COMPLETION_NOT_VERIFIED")
+        self._audit(session, actor, mission, "MISSION_WAITING", f"Mission {mission.id} is waiting ({code}).",
+                    {"waiting_for": mission.waiting_for, "status": mission.status.value, "source": "supervisor",
+                     "code": code}, now)
+        return self._commit(session, mission, step, decision.kind, code)
 
     def _record_crash(self, session: Session, actor: MissionActor, mission_id: int, decision: AgentDecision,
                       crashed: "_ToolCrashed", now: datetime) -> AgentResult:
@@ -541,8 +547,8 @@ class AgentRuntime:
                            decision_kind=kind, step_status=step.status, error_code=error_code)
 
 
-class _NotVerified(Exception):
-    """A COMPLETE decision whose success condition the agent's supervisor could not verify."""
+class _TerminalClaim(Exception):
+    """A COMPLETE/FAIL decision on a supervised mission: settled by the supervisor, never by the brain."""
 
 
 class _WriteWatch:

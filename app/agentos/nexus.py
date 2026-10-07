@@ -17,7 +17,9 @@ unavailable. Registering e.g. ``exam_guardian`` later makes it delegable with no
 change here -- unless the agent refuses delegation (``accepts_delegation=False``), as the
 Phase 3 ``assignment_guardian`` does: its missions are created only by publishing an
 assignment. Nexus reads assignments through ``get_my_assignments`` / ``get_assignment_status``
-(caller-scoped, read-only); creating one stays the faculty API's controlled write.
+(caller-scoped, read-only); creating one stays the faculty API's controlled write. Phase 4 adds the same for
+exams (``get_my_exams``) and class attendance (``get_my_attendance_summary``); the Exam and Attendance
+Guardians also refuse delegation (created only by exam scheduling / absence detection).
 """
 from __future__ import annotations
 
@@ -34,15 +36,18 @@ from app.agentos.registry import (
 from app.agentos.runtime import SUBJECT, AgentOSError, AgentRuntime, MissionActor
 from app.agentos.schemas import CreateAgentMission
 from app.db.models.agent_kernel import TERMINAL_MISSION_STATUSES, AgentMission, AgentMissionStatus
+from app.db.models.academic import AttendanceRecord, Course, Enrollment, Exam
 from app.db.models.assignment import Assignment
+from app.db.models.attendance_intervention import AttendanceIntervention, InterventionStatus
 from app.db.models.auth import AuthAccount
-from app.db.models.faculty import FacultyProfile
+from app.db.models.faculty import AttendanceSession, AttendanceSessionStatus, FacultyProfile, TeachingAssignment
 from app.db.models.identity import Department, Student
 from app.db.models.organization import Organization
 from app.db.repositories import operations_audit
 from app.llm.router import ai_context
 from app.schemas.enums import UserRole
 from app.services import assignments as assignment_service
+from app.services import exams as exam_service
 
 NEXUS_AGENT_KEY = "nexus_orchestrator"
 NEXUS_ROLES: FrozenSet[UserRole] = frozenset({UserRole.STUDENT, UserRole.FACULTY, UserRole.HOD, UserRole.ADMIN})
@@ -192,7 +197,98 @@ class GetAssignmentStatus(AgentTool):
             "pending_count": len(progress.pending_ids), "guardian_mission_id": assignment.guardian_mission_id})
 
 
-NEXUS_TOOLS = (GetMyIdentityContext, GetMyActiveMissions, GetMyAssignments, GetAssignmentStatus)
+def _managed_exams_query(session: Session, context: ToolContext):
+    """Managed exams the caller may manage (admin: all; faculty/HOD: created by them or for their class; HOD: also
+    their department's classes) -- the same scope as ``exams.manageable``."""
+    query = (select(Exam).join(TeachingAssignment, TeachingAssignment.id == Exam.teaching_assignment_id)
+             .order_by(Exam.scheduled_start.desc(), Exam.id.desc()).limit(10))
+    if context.role == UserRole.ADMIN:
+        return query
+    scope = Exam.created_by_account_id == context.account_id
+    if context.faculty_profile_id is not None:
+        scope = scope | (TeachingAssignment.faculty_id == context.faculty_profile_id)
+        department = (assignment_service.headed_department_id(session, context.faculty_profile_id)
+                      if context.role == UserRole.HOD else None)
+        if department is not None:
+            scope = scope | (TeachingAssignment.department_id == department)
+    return query.where(scope)
+
+
+class GetMyExams(AgentTool):
+    name: ClassVar[str] = "get_my_exams"
+    description: ClassVar[str] = ("Student: my scheduled exams with time and my attendance status. Faculty/HOD/admin: "
+                                  "exams I manage with attendance counts. Takes no input.")
+    input_model = NoInput
+    required_roles = NEXUS_ROLES
+
+    def execute(self, context: ToolContext, args: BaseModel) -> ToolResult:
+        session = context.session
+        if context.role == UserRole.STUDENT:
+            try:
+                rows = exam_service.my_exams(session, context)
+            except exam_service.ExamError as exc:
+                raise ToolExecutionError(exc.code) from None
+            return ToolResult(ok=True, data={"exams": [
+                {"exam_id": r.id, "title": (r.title or "")[:120], "course": r.course_code, "type": r.exam_type,
+                 "status": r.status.value if r.status else None, "starts_at": r.scheduled_at.isoformat(),
+                 "my_attendance": r.my_attendance.value if r.my_attendance else None} for r in rows[:10]]})
+        out = []
+        for exam in session.execute(_managed_exams_query(session, context)).scalars():
+            progress = exam_service.compute_progress(session, exam)
+            out.append({"exam_id": exam.id, "title": (exam.title or "")[:120],
+                        "status": exam.status.value if exam.status else None,
+                        "starts_at": exam.scheduled_start.isoformat(), **progress.counts()})
+        return ToolResult(ok=True, data={"exams": out})
+
+
+class GetMyAttendanceSummary(AgentTool):
+    name: ClassVar[str] = "get_my_attendance_summary"
+    description: ClassVar[str] = ("Student: my raw attendance counters per course (attended / conducted) and open absence "
+                                  "follow-ups. Faculty/HOD: my classes with sessions held and open absence cases. Admin: "
+                                  "absence cases by status. Takes no input.")
+    input_model = NoInput
+    required_roles = NEXUS_ROLES
+
+    def execute(self, context: ToolContext, args: BaseModel) -> ToolResult:
+        session = context.session
+        if context.role == UserRole.STUDENT:
+            student = (session.execute(select(Student).where(Student.student_code == context.student_code)).scalars().first()
+                       if context.student_code else None)
+            if student is None:
+                raise ToolExecutionError("NOT_A_STUDENT")
+            rows = session.execute(
+                select(Course.code, AttendanceRecord.classes_attended, AttendanceRecord.classes_conducted)
+                .join(Enrollment, Enrollment.id == AttendanceRecord.enrollment_id)
+                .join(Course, Course.id == Enrollment.course_id).where(Enrollment.student_id == student.id)
+                .order_by(Course.code).limit(20)).all()
+            open_cases = len(session.execute(select(AttendanceIntervention.id).where(
+                AttendanceIntervention.student_id == student.id,
+                AttendanceIntervention.status == InterventionStatus.OPEN)).all())
+            return ToolResult(ok=True, data={"courses": [
+                {"course": code, "classes_attended": attended, "classes_conducted": conducted}
+                for code, attended, conducted in rows], "open_absence_cases": open_cases})
+        if context.role == UserRole.ADMIN:
+            statuses = list(session.execute(select(AttendanceIntervention.status)).scalars())
+            return ToolResult(ok=True, data={"absence_cases": {s.value: statuses.count(s) for s in InterventionStatus}})
+        if context.faculty_profile_id is None:
+            raise ToolExecutionError("NOT_A_FACULTY_MEMBER")
+        classes = []
+        for teaching in session.execute(select(TeachingAssignment).where(
+                TeachingAssignment.faculty_id == context.faculty_profile_id).order_by(TeachingAssignment.id).limit(20)).scalars():
+            held = len(session.execute(select(AttendanceSession.id).where(
+                AttendanceSession.teaching_assignment_id == teaching.id,
+                AttendanceSession.status == AttendanceSessionStatus.CLOSED)).all())
+            open_cases = len(session.execute(select(AttendanceIntervention.id).where(
+                AttendanceIntervention.teaching_assignment_id == teaching.id,
+                AttendanceIntervention.status == InterventionStatus.OPEN)).all())
+            course = session.get(Course, teaching.course_id)
+            classes.append({"teaching_assignment_id": teaching.id, "course": course.code if course else None,
+                            "section": teaching.section, "sessions_held": held, "open_absence_cases": open_cases})
+        return ToolResult(ok=True, data={"classes": classes})
+
+
+NEXUS_TOOLS = (GetMyIdentityContext, GetMyActiveMissions, GetMyAssignments, GetAssignmentStatus, GetMyExams,
+               GetMyAttendanceSummary)
 
 
 def nexus_spec() -> AgentSpec:

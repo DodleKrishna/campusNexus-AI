@@ -657,8 +657,16 @@ def decide_as_admin(
         subject_type="workflow_request", subject_id=request.request_code, message=body,
         metadata={"comment": request.decision_reason, "reviewer": "admin"}, at=now,
     )
+    _wake_attendance_interventions(session, request, account.id, now)
     session.commit()
     return request
+
+
+def _wake_attendance_interventions(session: Session, request: WorkflowRequest, account_id: int, now: datetime) -> None:
+    """Phase 4: an approved student leave/OD/attendance permission wakes the open attendance interventions it covers."""
+    from app.services import attendance_monitor
+
+    attendance_monitor.leave_approved(session, request, account_id, now)
 
 
 def list_for_admin(session: Session) -> List[WorkflowRequest]:
@@ -705,6 +713,7 @@ def decide(
         subject_type="workflow_request", subject_id=request.request_code, message=body,
         metadata={"comment": request.decision_reason}, at=now,
     )
+    _wake_attendance_interventions(session, request, account.id, now)
     session.commit()
     return request
 

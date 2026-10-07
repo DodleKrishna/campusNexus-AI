@@ -312,6 +312,10 @@ class MockAgentBrain(_MeteredBrain):
     def _decide(context: AgentContext) -> AgentDecision:
         if context.agent_key == "assignment_guardian":
             return _mock_guardian(context)
+        if context.agent_key == "exam_guardian":
+            return _mock_exam_guardian(context)
+        if context.agent_key == "attendance_guardian":
+            return _mock_attendance_guardian(context)
         tools = {t.name for t in context.allowed_tools}
         results = [o for o in context.observations if o.kind in ("tool_result", "tool_error")]
         identity = next((o for o in reversed(results) if o.source == "get_my_identity_context"), None)
@@ -346,6 +350,47 @@ def _mock_guardian(context: AgentContext) -> AgentDecision:
         return AgentDecision(kind=DecisionKind.TOOL, tool_name="request_student_followup",
                              tool_input={"student_ids": targets[:50], "purpose": purpose})
     return AgentDecision(kind=DecisionKind.WAIT, wait_for=DomainEventType.ASSIGNMENT_SUBMITTED)
+
+
+def _since_wake(context: AgentContext) -> List[Any]:
+    observations = list(context.observations)
+    start = max((i for i, o in enumerate(observations) if o.kind in ("event", "wake", "mission_started")), default=-1)
+    return [o for o in observations[start + 1:] if o.kind in ("tool_result", "tool_error")]
+
+
+def _mock_exam_guardian(context: AgentContext) -> AgentDecision:
+    """Offline Exam Guardian policy: when the deterministic facts say a follow-up could be allowed, request reminders
+    (before the exam) or look at the confirmed absentees and request absence follow-ups (after the start grace),
+    once per wake; then wait. Every request is still decided by the exam follow-up policy in code."""
+    facts = (context.state or {}).get("supervisor") or {}
+    since = _since_wake(context)
+    purpose, allowed = facts.get("followup_purpose"), facts.get("followups_allowed_now") or 0
+    if not purpose or not allowed or any(o.source == "request_exam_followup" for o in since):
+        return AgentDecision(kind=DecisionKind.WAIT, wait_for=DomainEventType.EXAM_ATTENDANCE_MARKED)
+    if purpose == "exam_reminder":
+        return AgentDecision(kind=DecisionKind.TOOL, tool_name="request_exam_followup", tool_input={"purpose": purpose})
+    absentees = next((o for o in reversed(since) if o.source == "get_exam_absentees"), None)
+    if absentees is None:
+        return AgentDecision(kind=DecisionKind.TOOL, tool_name="get_exam_absentees")
+    rows = ((absentees.data or {}).get("data") or {}).get("absent") or []
+    ids = [r["student_id"] for r in rows if isinstance(r, dict) and not r.get("active_followup")
+           and isinstance(r.get("student_id"), int)]
+    if not ids:
+        return AgentDecision(kind=DecisionKind.WAIT, wait_for=DomainEventType.EXAM_ATTENDANCE_MARKED)
+    return AgentDecision(kind=DecisionKind.TOOL, tool_name="request_exam_followup",
+                         tool_input={"purpose": purpose, "student_ids": ids[:50]})
+
+
+def _mock_attendance_guardian(context: AgentContext) -> AgentDecision:
+    """Offline Attendance Guardian policy: inspect the case once per wake, request a follow-up when the facts say policy
+    allows one, then wait for a resolving event. Never resolves anything itself (the supervisor verifies facts)."""
+    facts = (context.state or {}).get("supervisor") or {}
+    since = _since_wake(context)
+    if not any(o.source == "get_attendance_case" for o in since):
+        return AgentDecision(kind=DecisionKind.TOOL, tool_name="get_attendance_case")
+    if facts.get("followup_allowed_now") and not any(o.source == "request_attendance_followup" for o in since):
+        return AgentDecision(kind=DecisionKind.TOOL, tool_name="request_attendance_followup")
+    return AgentDecision(kind=DecisionKind.WAIT, wait_for=DomainEventType.ATTENDANCE_CORRECTED)
 
 
 class UnavailableBrain:

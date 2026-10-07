@@ -6,9 +6,10 @@ ends the mission without any AI call; a ``wait`` verdict re-arms the timer witho
 (e.g. an early wake by an event that does not change what the brain should decide). Only
 ``continue`` reaches the brain, together with the supervisor's compact ``state``.
 
-The supervisor also gates the brain's own decisions: a COMPLETE is executed only when
-``verify_complete`` confirms it, and every WAIT is scheduled by ``plan_wait`` (deterministic
-checkpoints), so a model can never declare success early or sleep past a deadline.
+The supervisor also gates the brain's own decisions: a COMPLETE or FAIL is never executed as
+such -- the runtime asks ``review`` again and applies only its own terminal verdict (which closes
+the domain record too) -- and every WAIT is scheduled by ``plan_wait`` (deterministic
+checkpoints), so a model can never declare success or failure, or sleep past a deadline.
 """
 from __future__ import annotations
 
@@ -37,9 +38,6 @@ class SupervisorVerdict:
 class MissionSupervisor(Protocol):
     def review(self, session: Session, mission: AgentMission, now: datetime, trigger: Trigger) -> SupervisorVerdict:
         """Deterministic checks before the brain is asked. May stage writes in the caller's transaction."""
-
-    def verify_complete(self, session: Session, mission: AgentMission, now: datetime) -> bool:
-        """True only when the mission's success condition holds right now."""
 
     def plan_wait(self, session: Session, mission: AgentMission, requested_wake: Optional[datetime],
                   now: datetime) -> Tuple[DomainEventType, Optional[datetime]]:
