@@ -48,6 +48,19 @@ from app.db.models.communication import (
     NotificationStatus,
     StaffNotification,
 )
+from app.db.models.communication_delivery import (
+    AttemptStatus,
+    CommunicationAttempt,
+    CommunicationAuthorization,
+    CommunicationChannel,
+    CommunicationJob,
+    CommunicationJobStatus,
+    CommunicationPreference,
+    ContactKind,
+    ContactPoint,
+    VoiceSession,
+    VoiceSessionStatus,
+)
 from app.db.models.events import Club, Event, EventRegistration, EventStatus, RegistrationStatus
 from app.db.models.faculty import (
     AttendanceMarkStatus,
@@ -80,6 +93,17 @@ from app.db.models.workflow import (
 
 __all__ = [
     "AgentDeployment",
+    "AttemptStatus",
+    "CommunicationAttempt",
+    "CommunicationAuthorization",
+    "CommunicationChannel",
+    "CommunicationJob",
+    "CommunicationJobStatus",
+    "CommunicationPreference",
+    "ContactKind",
+    "ContactPoint",
+    "VoiceSession",
+    "VoiceSessionStatus",
     "Assignment",
     "AssignmentFollowup",
     "AssignmentStatus",

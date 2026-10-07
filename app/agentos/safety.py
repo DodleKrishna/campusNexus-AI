@@ -2,8 +2,8 @@
 
 Applied to mission context, step summaries, observations, domain-event payloads
 and audit metadata. Key-based: any field whose name suggests a secret,
-credential or phone number is replaced, and phone-number-shaped strings are
-masked wherever they appear. Output is plain JSON (dict/list/str/int/float/bool/None).
+credential, phone number or e-mail address is replaced, and phone-number- and
+e-mail-shaped strings are masked wherever they appear (Phase 5). Output is plain JSON (dict/list/str/int/float/bool/None).
 """
 from __future__ import annotations
 
@@ -14,10 +14,11 @@ from typing import Any
 REDACTED = "[redacted]"
 _SENSITIVE_KEY = re.compile(
     r"pass(word|wd)?|secret|token|api[_-]?key|credential|authori[sz]ation|cookie|session[_-]?id|private[_-]?key"
-    r"|(^|_)(otp|pin)($|_)|phone|mobile|msisdn|reasoning|thought|scratchpad",
+    r"|(^|_)(otp|pin)($|_)|phone|mobile|msisdn|e_?mail|reasoning|thought|scratchpad|transcript",
     re.IGNORECASE,
 )
 _PHONE = re.compile(r"(?<![\w:.+-])\+?\d[\d\s().-]{8,}\d(?![\w:])")
+_EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]{1,63}(?:\.[\w-]{1,63})+")
 MAX_DEPTH, MAX_ITEMS, MAX_STRING = 6, 50, 1000
 MAX_SUMMARY_CHARS = 8000
 
@@ -38,7 +39,7 @@ def redact(value: Any, _depth: int = 0) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        text = _PHONE.sub(_mask_phone, value)
+        text = _EMAIL.sub(REDACTED, _PHONE.sub(_mask_phone, value))
         return text if len(text) <= MAX_STRING else text[:MAX_STRING] + "...[truncated]"
     if isinstance(value, dict):
         out = {}

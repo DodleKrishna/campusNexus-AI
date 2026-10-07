@@ -1,7 +1,9 @@
-"""Advance due autonomous AgentOS missions (Assignment, Exam and Attendance Guardians).
+"""Advance due autonomous AgentOS missions (the Guardians and the Communication Agent).
 
 Each batch first runs the deterministic absence-detection pass (``scan_attendance``: due class-attendance
-events -> interventions + Attendance Guardian missions; no AI), then
+events -> interventions + Attendance Guardian missions; no AI), then the communication worker
+(``process_communication_jobs``: follow-up requests -> jobs + Communication Agent missions, and delivery of due
+jobs through their connectors; no AI), then
 ``app.agentos.worker.process_due_missions`` against the configured database
 (``CAMPUSNEXUS_DATABASE_URL`` / ``CAMPUSNEXUS_DB_PATH``, as every other script) with the
 configured brain (``CAMPUSNEXUS_AGENT_BRAIN``, default the offline mock). Bounded per run:
@@ -24,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.agentos.attendance_guardian import scan_attendance  # noqa: E402
 from app.agentos.bootstrap import build_agent_runtime  # noqa: E402
 from app.agentos.providers import build_agent_brain  # noqa: E402
+from app.communication.worker import process_communication_jobs  # noqa: E402
 from app.agentos.worker import DEFAULT_LIMIT, DEFAULT_TRANSITIONS, MAX_BATCH, process_due_missions  # noqa: E402
 from app.db.session import open_database  # noqa: E402
 from app.db.tenant_session import TenantSessionFactory  # noqa: E402
@@ -51,9 +54,11 @@ def main(argv: list[str] | None = None) -> int:
     runtime = build_agent_runtime(brain)
     while True:
         scan = scan_attendance(factory, runtime)
+        communication = process_communication_jobs(factory, runtime)
         report = process_due_missions(factory, runtime, limit=args.limit, max_transitions=args.max_transitions,
                                       recorder=recorder)
-        print(json.dumps({"attendance_scan": scan.model_dump(mode="json"), **report.model_dump(mode="json")},
+        print(json.dumps({"attendance_scan": scan.model_dump(mode="json"),
+                          "communication": communication.model_dump(mode="json"), **report.model_dump(mode="json")},
                          separators=(",", ":")), flush=True)
         if args.once:
             return 0

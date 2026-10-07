@@ -316,6 +316,8 @@ class MockAgentBrain(_MeteredBrain):
             return _mock_exam_guardian(context)
         if context.agent_key == "attendance_guardian":
             return _mock_attendance_guardian(context)
+        if context.agent_key == "communication_agent":
+            return _mock_communication_agent(context)
         tools = {t.name for t in context.allowed_tools}
         results = [o for o in context.observations if o.kind in ("tool_result", "tool_error")]
         identity = next((o for o in reversed(results) if o.source == "get_my_identity_context"), None)
@@ -350,6 +352,22 @@ def _mock_guardian(context: AgentContext) -> AgentDecision:
         return AgentDecision(kind=DecisionKind.TOOL, tool_name="request_student_followup",
                              tool_input={"student_ids": targets[:50], "purpose": purpose})
     return AgentDecision(kind=DecisionKind.WAIT, wait_for=DomainEventType.ASSIGNMENT_SUBMITTED)
+
+
+def _mock_communication_agent(context: AgentContext) -> AgentDecision:
+    """Offline Communication Agent policy: look at the permitted channels once per wake, request delivery on the
+    Guardian's requested channel when it is permitted (else the first permitted one), then wait. The channel is
+    re-checked in code; completion and failure are the supervisor's."""
+    since = _since_wake(context)
+    channels = next((o for o in reversed(since) if o.source == "get_allowed_channels"), None)
+    if channels is None:
+        return AgentDecision(kind=DecisionKind.TOOL, tool_name="get_allowed_channels")
+    data = ((channels.data or {}).get("data") or {}) if channels.kind == "tool_result" else {}
+    permitted = [c for c in data.get("permitted") or [] if isinstance(c, str)]
+    if permitted and not any(o.source == "request_delivery" for o in since):
+        channel = data.get("requested_channel") if data.get("requested_channel") in permitted else permitted[0]
+        return AgentDecision(kind=DecisionKind.TOOL, tool_name="request_delivery", tool_input={"channel": channel})
+    return AgentDecision(kind=DecisionKind.WAIT, wait_for=DomainEventType.COMMUNICATION_DELIVERED)
 
 
 def _since_wake(context: AgentContext) -> List[Any]:

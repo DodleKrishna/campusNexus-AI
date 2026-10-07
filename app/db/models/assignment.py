@@ -32,8 +32,11 @@ class SubmissionStatus(str, enum.Enum):
 
 
 class FollowupStatus(str, enum.Enum):
-    REQUESTED = "requested"  # active: waiting for the communication agent (Phase 5)
+    REQUESTED = "requested"  # active: waiting for the Communication Agent (Phase 5)
     CANCELLED = "cancelled"  # closed without contact (student submitted, assignment cancelled)
+    # Phase 5: closed by the communication system once its job ended. Only DELIVERED is a successful contact.
+    DELIVERED = "delivered"
+    FAILED = "failed"  # every attempt failed; never counted as contact
 
 
 class Assignment(TenantMixin, Base):
@@ -115,5 +118,9 @@ class AssignmentFollowup(TenantMixin, Base):
     attempt_number: Mapped[int] = mapped_column(Integer)
     reason: Mapped[str] = mapped_column(String(64))
     not_before_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)  # quiet hours
+    # Phase 5 (nullable, additive): the communication job that handled this request and its structured result.
+    communication_job_id: Mapped[Optional[int]] = mapped_column(ForeignKey("communication_jobs.id"), default=None)
+    outcome_code: Mapped[Optional[str]] = mapped_column(String(32), default=None)
+    delivered_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)

@@ -101,6 +101,20 @@ class FollowupDecision:
     urgency: Optional[str] = None
 
 
+def open_followup_refusal(*, now: datetime, assignment_status: AssignmentStatus, deadline_at: datetime,
+                          has_submitted: bool) -> Optional[FollowupRefusal]:
+    """Is contact about this assignment still needed? The domain checks of ``evaluate_followup``, shared with the
+    Phase 5 communication system (which re-checks an already-requested follow-up right before delivery): None while
+    it is, else the refusal. Exactly at the deadline it still is (``deadline_passed`` is ``now > deadline``)."""
+    if assignment_status != AssignmentStatus.PUBLISHED:
+        return FollowupRefusal.ASSIGNMENT_NOT_ACTIVE
+    if has_submitted:
+        return FollowupRefusal.ALREADY_SUBMITTED
+    if deadline_passed(deadline_at, now):
+        return FollowupRefusal.DEADLINE_PASSED
+    return None
+
+
 def evaluate_followup(
     *, now: datetime, assignment_status: AssignmentStatus, published_at: datetime, deadline_at: datetime,
     is_target: bool, has_submitted: bool, active_followup: bool, attempts_so_far: int,
@@ -114,10 +128,10 @@ def evaluate_followup(
         return refuse(FollowupRefusal.ASSIGNMENT_NOT_ACTIVE)
     if not is_target:
         return refuse(FollowupRefusal.NOT_A_TARGET)
-    if has_submitted:
-        return refuse(FollowupRefusal.ALREADY_SUBMITTED)
-    if deadline_passed(deadline_at, now):
-        return refuse(FollowupRefusal.DEADLINE_PASSED)
+    still_needed = open_followup_refusal(now=now, assignment_status=assignment_status, deadline_at=deadline_at,
+                                         has_submitted=has_submitted)
+    if still_needed is not None:
+        return refuse(still_needed)
     if now < reminder_window_opens(published_at, deadline_at, policy.checkpoint_hours):
         return refuse(FollowupRefusal.REMINDER_WINDOW_NOT_OPEN)
     limits = check_contact_limits(now=now, active_followup=active_followup, attempts_so_far=attempts_so_far,

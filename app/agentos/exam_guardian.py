@@ -15,7 +15,7 @@ Division of labour (cost control), as in the Assignment Guardian:
 * The AgentBrain is asked only when a follow-up could be allowed: what to inspect, whether to request a permitted
   reminder / absence follow-up, whether to replan. ``request_exam_followup`` is an internal request tool: every
   requested student is decided by ``evaluate_exam_followup`` and only an allowed one becomes an ``ExamFollowup`` +
-  COMMUNICATION_REQUESTED event. Nothing is sent (Phase 5).
+  COMMUNICATION_REQUESTED event. Nothing is sent here (``app.communication``).
 * COMPLETE/FAIL are decided by the supervisor only (a brain COMPLETE/FAIL is re-checked, never trusted).
 """
 from __future__ import annotations

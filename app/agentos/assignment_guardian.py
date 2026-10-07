@@ -16,12 +16,12 @@ Division of labour (cost control):
   whether to request follow-ups, whether to replan. ``request_student_followup`` is an internal
   request tool: each requested student is decided by ``evaluate_followup`` (cooldown, max
   attempts, submitted, cancelled, deadline, quiet hours) and only an allowed one becomes an
-  ``AssignmentFollowup`` + COMMUNICATION_REQUESTED event. Nothing is sent (Phase 5).
+  ``AssignmentFollowup`` + COMMUNICATION_REQUESTED event. Nothing is sent here (``app.communication``).
 * COMPLETE/FAIL are decided by the supervisor only (a brain COMPLETE/FAIL is re-checked, never trusted). A deadline with pending students
   ends the mission FAILED with outcome DEADLINE_REACHED_WITH_PENDING -- never as a success.
 
-Delegation is allowed to ``communication_agent`` only, which is not registered yet: the
-brain is not offered it, and the follow-up requests stay persisted for Phase 5.
+Delegation is allowed to ``communication_agent`` only, which refuses delegation (Phase 5 creates one
+Communication Agent mission per persisted follow-up request instead), so the brain is never offered it.
 """
 from __future__ import annotations
 
@@ -47,7 +47,7 @@ from app.services.class_schedule import CAMPUS_TZ
 
 GUARDIAN_AGENT_KEY = service.GUARDIAN_AGENT_KEY
 GUARDIAN_ROLES = frozenset({UserRole.FACULTY, UserRole.HOD, UserRole.ADMIN})
-COMMUNICATION_AGENT_KEY = "communication_agent"  # Phase 5; deliberately not registered here
+COMMUNICATION_AGENT_KEY = "communication_agent"  # Phase 5: accepts_delegation=False (created by request intake)
 MIN_WAKE = timedelta(minutes=15)  # the earliest re-check a brain may ask for
 CHECKPOINT_KEY = "guardian_checkpoint"
 

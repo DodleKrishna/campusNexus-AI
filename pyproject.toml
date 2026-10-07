@@ -58,6 +58,9 @@ app = [
     # Phase 15: real login for the React app -- bcrypt password hashes + JWT bearer tokens.
     "bcrypt>=4.1,<6",
     "pyjwt>=2.8,<3",
+    # Phase 5: Exotel's form-encoded status callbacks and the voice WebSocket stream.
+    "python-multipart>=0.0.9",
+    "websockets>=12",
 ]
 
 [build-system]

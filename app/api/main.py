@@ -25,7 +25,7 @@ from app.agents.services.agent import ServicesAgent
 from app.agentos.brain import AgentBrain
 from app.agentos.bootstrap import build_agent_runtime
 from app.agentos.providers import build_agent_brain
-from app.api.routers import admin, admin_console, agentos, agents, assignments, approvals, attendance, auth, enterprise, exams, faculty, health, hod, me, missions, requests, students
+from app.api.routers import admin, admin_console, agentos, agents, assignments, approvals, attendance, auth, enterprise, exams, faculty, health, hod, me, missions, requests, students, voice
 from app.db.session import create_db_engine, upgrade_schema, verify_database_ready
 from app.db.tenant_session import TenantSessionFactory
 from app.llm.router import build_routed_provider, routed
@@ -119,6 +119,9 @@ def create_app(
     # mock); an unusable configured provider refuses explicitly.
     brain = agent_brain if agent_brain is not None else build_agent_brain(recorder=llm_provider.recorder)
     fastapi_app.state.agent_runtime = build_agent_runtime(brain, clock=lambda: fastapi_app.state.clock())
+    # Phase 5: the voice conversation pipeline (speech-to-text, text-to-speech, turn brain). None = voice streams are
+    # refused; a deployment wires a real one here, tests inject fakes.
+    fastapi_app.state.voice_pipeline = None
 
     fastapi_app.include_router(health.router)
     fastapi_app.include_router(students.router)
@@ -142,6 +145,7 @@ def create_app(
     fastapi_app.include_router(assignments.router)
     fastapi_app.include_router(exams.router)
     fastapi_app.include_router(attendance.router)
+    fastapi_app.include_router(voice.router)  # Phase 5: provider callbacks + voice stream
     return fastapi_app
 
 

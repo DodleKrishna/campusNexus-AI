@@ -174,6 +174,32 @@ class ExamFollowupDecision:
     urgency: Optional[str] = None
 
 
+def open_followup_refusal(*, now: datetime, purpose: str, exam_status: Optional[ExamStatus], start: datetime,
+                          terminal: datetime, attendance: Optional[ExamAttendanceStatus]) -> Optional[ExamFollowupRefusal]:
+    """Is contact about this exam still needed? The domain checks of ``evaluate_exam_followup`` that can change after
+    a request, shared with the Phase 5 communication system: None while it is, else the refusal. A reminder is moot
+    from the start (``now >= start``); an absence follow-up once resolved, or from the terminal deadline on."""
+    if exam_status not in (ExamStatus.SCHEDULED, ExamStatus.IN_PROGRESS, ExamStatus.COMPLETED):
+        return ExamFollowupRefusal.EXAM_NOT_ACTIVE
+    if attendance == ExamAttendanceStatus.EXEMPT:
+        return ExamFollowupRefusal.STUDENT_EXEMPT
+    if purpose == PURPOSE_REMINDER:
+        if exam_status != ExamStatus.SCHEDULED or now >= start:
+            return ExamFollowupRefusal.EXAM_ALREADY_STARTED
+        return None
+    if purpose == PURPOSE_ABSENCE:
+        if attendance == ExamAttendanceStatus.PRESENT:
+            return ExamFollowupRefusal.STUDENT_PRESENT
+        if attendance == ExamAttendanceStatus.MAKEUP_COMPLETED:
+            return ExamFollowupRefusal.MAKEUP_COMPLETED
+        if attendance != ExamAttendanceStatus.ABSENT:
+            return ExamFollowupRefusal.ABSENCE_NOT_CONFIRMED
+        if now >= terminal:
+            return ExamFollowupRefusal.TERMINAL_DEADLINE_PASSED
+        return None
+    return ExamFollowupRefusal.UNKNOWN_PURPOSE
+
+
 def evaluate_exam_followup(
     *, now: datetime, purpose: str, exam_status: Optional[ExamStatus], start: datetime, terminal: datetime,
     is_target: bool, attendance: Optional[ExamAttendanceStatus], active_followup: bool, attempts_so_far: int,
@@ -187,28 +213,18 @@ def evaluate_exam_followup(
         return refuse(ExamFollowupRefusal.EXAM_NOT_ACTIVE)
     if not is_target:
         return refuse(ExamFollowupRefusal.NOT_A_TARGET)
-    if attendance == ExamAttendanceStatus.EXEMPT:
-        return refuse(ExamFollowupRefusal.STUDENT_EXEMPT)
+    still_needed = open_followup_refusal(now=now, purpose=purpose, exam_status=exam_status, start=start,
+                                         terminal=terminal, attendance=attendance)
+    if still_needed is not None:
+        return refuse(still_needed)
     if purpose == PURPOSE_REMINDER:
-        if exam_status != ExamStatus.SCHEDULED or now >= start:
-            return refuse(ExamFollowupRefusal.EXAM_ALREADY_STARTED)
         if now < reminder_window_opens(start, policy):
             return refuse(ExamFollowupRefusal.REMINDER_WINDOW_NOT_OPEN)
         limits, hard_stop, urgency = policy.reminder, start, ("high" if start - now <= timedelta(hours=2) else "normal")
-    elif purpose == PURPOSE_ABSENCE:
-        if attendance == ExamAttendanceStatus.PRESENT:
-            return refuse(ExamFollowupRefusal.STUDENT_PRESENT)
-        if attendance == ExamAttendanceStatus.MAKEUP_COMPLETED:
-            return refuse(ExamFollowupRefusal.MAKEUP_COMPLETED)
-        if attendance != ExamAttendanceStatus.ABSENT:
-            return refuse(ExamFollowupRefusal.ABSENCE_NOT_CONFIRMED)
+    else:  # PURPOSE_ABSENCE (anything else was refused above)
         if now < grace_ends(start, policy):
             return refuse(ExamFollowupRefusal.GRACE_PERIOD_NOT_OVER)
-        if now >= terminal:
-            return refuse(ExamFollowupRefusal.TERMINAL_DEADLINE_PASSED)
         limits, hard_stop, urgency = policy.absence, terminal, "high"
-    else:
-        return refuse(ExamFollowupRefusal.UNKNOWN_PURPOSE)
     decision = check_contact_limits(now=now, active_followup=active_followup, attempts_so_far=attempts_so_far,
                                     last_requested_at=last_requested_at, policy=limits, hard_stop=hard_stop)
     if not decision.allowed:

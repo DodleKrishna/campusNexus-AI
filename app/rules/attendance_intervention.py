@@ -131,15 +131,26 @@ class AttendanceFollowupDecision:
     urgency: Optional[str] = None
 
 
+def open_followup_refusal(*, now: datetime, intervention_open: bool, resolved_by: Optional[str],
+                          deadline: datetime) -> Optional[AttendanceFollowupRefusal]:
+    """Is contact about this absence still needed? The domain checks of ``evaluate_attendance_followup``, shared with
+    the Phase 5 communication system: None while it is, else the refusal (closed from the deadline on)."""
+    if not intervention_open:
+        return AttendanceFollowupRefusal.INTERVENTION_NOT_OPEN
+    if resolved_by is not None:
+        return AttendanceFollowupRefusal.ABSENCE_RESOLVED
+    if now >= deadline:
+        return AttendanceFollowupRefusal.RESOLUTION_WINDOW_CLOSED
+    return None
+
+
 def evaluate_attendance_followup(*, now: datetime, intervention_open: bool, resolved_by: Optional[str],
                                  deadline: datetime, active_followup: bool, attempts_so_far: int,
                                  last_requested_at: Optional[datetime], policy: AttendancePolicy) -> AttendanceFollowupDecision:
-    if not intervention_open:
-        return AttendanceFollowupDecision(False, AttendanceFollowupRefusal.INTERVENTION_NOT_OPEN.value)
-    if resolved_by is not None:
-        return AttendanceFollowupDecision(False, AttendanceFollowupRefusal.ABSENCE_RESOLVED.value)
-    if now >= deadline:
-        return AttendanceFollowupDecision(False, AttendanceFollowupRefusal.RESOLUTION_WINDOW_CLOSED.value)
+    still_needed = open_followup_refusal(now=now, intervention_open=intervention_open, resolved_by=resolved_by,
+                                         deadline=deadline)
+    if still_needed is not None:
+        return AttendanceFollowupDecision(False, still_needed.value)
     decision = check_contact_limits(now=now, active_followup=active_followup, attempts_so_far=attempts_so_far,
                                     last_requested_at=last_requested_at, policy=policy.contact, hard_stop=deadline)
     if not decision.allowed:

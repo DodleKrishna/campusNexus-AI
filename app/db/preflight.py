@@ -36,7 +36,10 @@ AGENTOS_TABLES = ("agent_missions", "agent_steps", "domain_events",
                   "assignments", "assignment_targets", "assignment_submissions", "assignment_followups",
                   # Phase 4: the Exam and Attendance Guardians' domains (``exams`` itself is a core academic table)
                   "exam_targets", "exam_attendance", "exam_followups", "attendance_interventions",
-                  "attendance_followups")
+                  "attendance_followups",
+                  # Phase 5: communication delivery
+                  "communication_preferences", "contact_points", "communication_jobs", "communication_attempts",
+                  "voice_sessions")
 AGENTOS_INDEXES = (
     "ix_agent_missions_org_owner_agent", "ix_agent_missions_org_status_wake", "ix_domain_events_org_type_consumed",
     "ux_agent_steps_mission_step",
@@ -45,6 +48,9 @@ AGENTOS_INDEXES = (
     "ix_exam_targets_org_student", "ix_exam_attendance_exam_status",
     "ix_exam_followups_exam_student_status", "ux_exam_followups_active", "ux_attendance_interventions_active",
     "ix_attendance_interventions_org_status", "ux_attendance_followups_active",
+    "ux_communication_preferences_org_student", "ux_contact_points_org_student_kind", "ux_communication_jobs_source",
+    "ix_communication_jobs_org_status_next", "ix_communication_attempts_provider_ref",
+    "ix_communication_attempts_org_status", "ux_voice_sessions_attempt",
 )
 TENANT_COLUMN = "organization_id"
 
