@@ -8,6 +8,14 @@ shell command, SQL statement or unregistered tool.
 Phase 1 registers read-only tools only: a side-effecting tool is refused, so
 writes keep going through the Verifier -> Approval Gate -> Action Agent path
 until a later phase wires that path into the kernel.
+
+Phase 3 adds *internal request* tools (``request_models``): code that may only stage
+rows of the declared models in the caller's tenant session (e.g. a follow-up request
+plus its domain event and audit row) after a deterministic policy allowed it. Nothing
+leaves the system; the runtime verifies every write the tool made against that list.
+It also lets an ``AgentSpec`` narrow the decisions and wait events its brain may use,
+refuse delegation and user-created missions, opt in to the due-mission worker, and
+carry a deterministic ``MissionSupervisor`` (``app.agentos.supervisor``).
 """
 from __future__ import annotations
 
@@ -20,7 +28,8 @@ from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, Type
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.agentos.schemas import IDENTIFIER, TOOL_NAME, ToolDescriptor
+from app.agentos.schemas import IDENTIFIER, TOOL_NAME, DecisionKind, DomainEventType, ToolDescriptor
+from app.db.base import Base
 from app.schemas.enums import UserRole
 
 
@@ -35,6 +44,12 @@ class AgentSpec:
     allowed_tools: FrozenSet[str] = frozenset()
     allowed_delegate_agents: FrozenSet[str] = frozenset()
     supported_roles: FrozenSet[UserRole] = frozenset()
+    allowed_decisions: FrozenSet[DecisionKind] = frozenset()  # empty: every decision kind
+    wait_events: FrozenSet[DomainEventType] = frozenset()  # empty: any allowlisted event
+    accepts_delegation: bool = True  # False: no other agent may delegate to this one
+    user_creatable: bool = True  # False: missions are created only by an application service
+    autonomous: bool = False  # True: advanced by the due-mission worker (``app.agentos.worker``)
+    supervisor: Optional[Any] = None  # a ``MissionSupervisor``: deterministic checks around the brain
 
 
 @dataclass(frozen=True)
@@ -75,6 +90,8 @@ class AgentTool(ABC):
     input_model: ClassVar[Type[BaseModel]]
     required_roles: ClassVar[FrozenSet[UserRole]]
     side_effecting: ClassVar[bool] = False
+    # Internal request tools only: the models this tool may insert/update. Empty = strictly read-only.
+    request_models: ClassVar[FrozenSet[type]] = frozenset()
 
     @abstractmethod
     def execute(self, context: ToolContext, args: BaseModel) -> ToolResult:
@@ -116,6 +133,8 @@ class ToolRegistry:
             raise RegistryError(f"tool {tool.name!r} needs a Pydantic input model")
         if tool.input_model.model_config.get("extra") != "forbid":
             raise RegistryError(f"tool {tool.name!r} input model must forbid extra fields")
+        if any(not (isinstance(m, type) and issubclass(m, Base)) for m in tool.request_models):
+            raise RegistryError(f"tool {tool.name!r} request_models must be mapped models")
         if not tool.required_roles:
             raise RegistryError(f"tool {tool.name!r} must declare the roles allowed to use it")
         self._tools[tool.name] = tool

@@ -31,10 +31,14 @@ from app.db.session import (
 )
 
 CORE_TABLES = ("organizations", "organization_memberships", "auth_accounts")
-AGENTOS_TABLES = ("agent_missions", "agent_steps", "domain_events")
+AGENTOS_TABLES = ("agent_missions", "agent_steps", "domain_events",
+                  # Phase 3: the Assignment Guardian's domain
+                  "assignments", "assignment_targets", "assignment_submissions", "assignment_followups")
 AGENTOS_INDEXES = (
     "ix_agent_missions_org_owner_agent", "ix_agent_missions_org_status_wake", "ix_domain_events_org_type_consumed",
     "ux_agent_steps_mission_step",
+    "ix_assignments_org_status_deadline", "ix_assignment_followups_assignment_student_status",
+    "ux_assignment_followups_active",
 )
 TENANT_COLUMN = "organization_id"
 

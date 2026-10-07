@@ -25,6 +25,15 @@ from app.db.models.career import (
     StudentSkill,
 )
 from app.db.models.agent_deployment import AgentDeployment
+from app.db.models.assignment import (
+    Assignment,
+    AssignmentFollowup,
+    AssignmentStatus,
+    AssignmentSubmission,
+    AssignmentTarget,
+    FollowupStatus,
+    SubmissionStatus,
+)
 from app.db.models.agent_kernel import AgentMission, AgentMissionStatus, AgentStep, AgentStepStatus, DomainEvent
 from app.db.models.ai_usage import AIUsageEvent
 from app.db.models.auth import AuthAccount
@@ -67,6 +76,13 @@ from app.db.models.workflow import (
 
 __all__ = [
     "AgentDeployment",
+    "Assignment",
+    "AssignmentFollowup",
+    "AssignmentStatus",
+    "AssignmentSubmission",
+    "AssignmentTarget",
+    "FollowupStatus",
+    "SubmissionStatus",
     "AgentMission",
     "AgentMissionStatus",
     "AgentStep",

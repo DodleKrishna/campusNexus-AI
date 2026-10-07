@@ -71,6 +71,10 @@ class AgentMission(TenantMixin, Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utc_now, onupdate=utc_now)
     completed_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
+    # Phase 3: a due-mission worker's claim (``app.agentos.worker``). Taken by one conditional UPDATE, so two
+    # workers can never process the same mission at once; an expired lease may be taken over.
+    lease_owner: Mapped[Optional[str]] = mapped_column(String(64), default=None)
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(UTCDateTime, default=None)
 
 
 class AgentStep(TenantMixin, Base):

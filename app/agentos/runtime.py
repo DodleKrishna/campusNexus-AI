@@ -13,6 +13,13 @@ executed: the step is recorded REJECTED and the mission FAILS explicitly.
 Nothing a brain says is persisted except redacted, structured summaries of the
 observable decision and its result -- never reasoning.
 
+Phase 3: an agent's ``MissionSupervisor`` (``AgentSpec.supervisor``) reviews the mission
+before each brain call (a terminal or wait verdict needs no AI call), gates COMPLETE
+(``verify_complete``; an unverified COMPLETE is recorded REJECTED and the mission keeps
+monitoring) and schedules every WAIT (``plan_wait``). ``AgentSpec.allowed_decisions`` /
+``wait_events`` narrow what a brain may decide. Every write a tool makes is watched: a
+read-only tool may write nothing, an internal request tool only its ``request_models``.
+
 Audit events (``operation_audit_events``, subject ``agent_mission``): MISSION_CREATED,
 MISSION_STARTED, AGENT_STEP_EXECUTED, TOOL_EXECUTED, AGENT_DELEGATED,
 MISSION_WAITING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED, and (for brains with
@@ -26,7 +33,7 @@ from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import event as orm_event, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -37,6 +44,7 @@ from app.agentos.safety import bounded, redact
 from app.agentos.schemas import (
     AgentContext, AgentDecision, AgentObservation, AgentResult, CreateAgentMission, DecisionKind, DomainEventType,
 )
+from app.agentos.supervisor import SupervisorVerdict
 from app.db.base import utc_now
 from app.db.models.agent_kernel import (
     TERMINAL_MISSION_STATUSES, WAITING_MISSION_STATUSES, AgentMission, AgentMissionStatus, AgentStep, AgentStepStatus,
@@ -118,16 +126,24 @@ class AgentRuntime:
 
     # --- Public operations ---------------------------------------------------------------------------------------
 
-    def create_mission(self, session: Session, actor: MissionActor, body: CreateAgentMission) -> AgentMission:
+    def create_mission(self, session: Session, actor: MissionActor, body: CreateAgentMission, *, internal: bool = False,
+                       commit: bool = True, next_wake_at: Optional[datetime] = None) -> AgentMission:
+        """``internal``: called by an application service (e.g. assignment publishing), which may create missions
+        of agents that are not ``user_creatable`` and stage them in its own transaction (``commit=False``)."""
         self._check_session(session, actor)
-        self._agent(body.agent_key, actor.role)
+        spec = self._agent(body.agent_key, actor.role)
+        if not internal and not spec.user_creatable:
+            raise AgentOSError("AGENT_NOT_USER_CREATABLE", f"Agent '{body.agent_key}' missions are created by the "
+                               "application, not directly.", 403)
         inputs = bounded(body.context)
         if inputs.get("_truncated"):
             raise AgentOSError("CONTEXT_TOO_LARGE", "Mission context is too large.", 400)
         mission = self._new_mission(session, actor, agent_key=body.agent_key, goal=body.goal,
                                     success_criteria=body.success_criteria, priority=body.priority,
                                     max_steps=body.max_steps, context={"inputs": inputs, "observations": []})
-        session.commit()
+        mission.next_wake_at = next_wake_at
+        if commit:
+            session.commit()
         return mission
 
     def get_mission(self, session: Session, actor: MissionActor, mission_id: int) -> AgentMission:
@@ -194,6 +210,15 @@ class AgentRuntime:
             observations.append(AgentObservation(kind="mission_started", source="runtime", at=now))
         self._remember(mission, observations)
 
+        # Supervise (deterministic; no AI call unless the verdict is "continue")
+        if spec.supervisor is not None:
+            trigger = {"event": "event", "wake": "wake", "mission_started": "started"}.get(
+                observations[0].kind if observations else "", "running")
+            verdict = spec.supervisor.review(session, mission, now, trigger)
+            if verdict.action != "continue":
+                return self._apply_verdict(session, actor, mission, verdict, now)
+            mission.context = {**(mission.context or {}), "supervisor": bounded(verdict.state)}
+
         # Decide (provider-backed brains opt in to AI_BRAIN_* audit events via ``audit_calls``)
         audited = bool(getattr(self.brain, "audit_calls", False))
         started = time.perf_counter()
@@ -229,6 +254,8 @@ class AgentRuntime:
             return self._reject(session, actor, mission, _Rejected("INVALID_DECISION", summary), now)
         except _ToolCrashed as crashed:
             return self._record_crash(session, actor, mission_id, decision, crashed, now)
+        except _NotVerified:
+            return self._reject_completion(session, actor, mission, spec, decision, now)
 
         step = self._record_step(session, actor, mission, decision, outcome, now)
         return self._commit(session, mission, step, decision.kind, outcome.error_code)
@@ -238,16 +265,23 @@ class AgentRuntime:
     def _act(self, session: Session, actor: MissionActor, mission: AgentMission, spec: AgentSpec,
              decision: AgentDecision, now: datetime) -> _Outcome:
         kind = decision.kind
+        if spec.allowed_decisions and kind not in spec.allowed_decisions:
+            raise _Rejected("DECISION_NOT_ALLOWED", {"kind": kind.value})
         if kind == DecisionKind.TOOL:
             return self._run_tool(session, actor, mission, spec, decision, now)
         if kind == DecisionKind.DELEGATE:
             return self._delegate(session, actor, mission, spec, decision, now)
         if kind == DecisionKind.WAIT:
             event = decision.wait_for
+            if spec.wait_events and event not in spec.wait_events:
+                raise _Rejected("WAIT_EVENT_NOT_ALLOWED", {"kind": "wait", "wait_for": event.value})
+            wake = now + timedelta(seconds=decision.wake_after_seconds) if decision.wake_after_seconds else None
+            if spec.supervisor is not None:  # deterministic checkpoints decide; the brain's request is advisory
+                event, wake = spec.supervisor.plan_wait(session, mission, wake, now)
             mission.status = (AgentMissionStatus.WAITING_CONNECTIVITY if event == DomainEventType.NETWORK_RESTORED
                               else AgentMissionStatus.WAITING_EVENT)
             mission.waiting_for = event.value
-            mission.next_wake_at = now + timedelta(seconds=decision.wake_after_seconds) if decision.wake_after_seconds else None
+            mission.next_wake_at = wake
             self._audit(session, actor, mission, "MISSION_WAITING", f"Mission {mission.id} is waiting for {event.value}.",
                         {"waiting_for": event.value, "status": mission.status.value}, now)
             return _Outcome(AgentStepStatus.EXECUTED, {"waiting_for": event.value, "status": mission.status.value})
@@ -264,6 +298,8 @@ class AgentRuntime:
             self._remember(mission, [AgentObservation(kind="plan_updated", source="runtime", at=now, data={"version": version})])
             return _Outcome(AgentStepStatus.EXECUTED, {"plan_version": version})
         if kind == DecisionKind.COMPLETE:
+            if spec.supervisor is not None and not spec.supervisor.verify_complete(session, mission, now):
+                raise _NotVerified()
             mission.context = {**mission.context, "outcome": redact(decision.outcome)}
             if decision.user_message:
                 mission.context = {**mission.context, "assistant_message": redact(decision.user_message)}
@@ -291,14 +327,14 @@ class AgentRuntime:
                               faculty_profile_id=actor.faculty_profile_id)
         # Flush the kernel's own pending rows first: a tool's SELECT would autoflush them and look like a write.
         session.flush()
-        pending_before = set(session.new) | set(session.deleted)
         started = time.perf_counter()
         try:
-            result = tool.execute(context, args)
+            with _WriteWatch(session) as writes:
+                result = tool.execute(context, args)
             if not isinstance(result, ToolResult):
                 raise TypeError("tool returned an unstructured result")
-            if (set(session.new) | set(session.deleted)) != pending_before:
-                raise PermissionError("read-only tool changed data")
+            if writes.deleted or not (writes.inserted | writes.updated) <= set(tool.request_models):
+                raise PermissionError("tool wrote outside its declared request models")
         except ToolExecutionError as exc:
             result = ToolResult(ok=False, error_code=exc.code[:64])
         except Exception as exc:  # noqa: BLE001
@@ -317,7 +353,7 @@ class AgentRuntime:
                   decision: AgentDecision, now: datetime) -> _Outcome:
         target = decision.delegate_agent
         child_spec = self.agents.get(target) if target in spec.allowed_delegate_agents else None
-        if child_spec is None or actor.role not in child_spec.supported_roles:
+        if child_spec is None or not child_spec.accepts_delegation or actor.role not in child_spec.supported_roles:
             raise _Rejected("UNAUTHORIZED_DELEGATION", {"delegate_agent": target})
         depth = int(mission.context.get("delegation_depth", 0)) + 1
         if depth > MAX_DELEGATION_DEPTH:
@@ -359,8 +395,11 @@ class AgentRuntime:
             max_steps=mission.max_steps, plan=mission.current_plan, state=redact(state),
             observations=[AgentObservation.model_validate(o) for o in mission.context.get("observations", [])],
             allowed_tools=self.tools.describe(spec.allowed_tools, actor.role),
-            allowed_delegate_agents=sorted(a for a in spec.allowed_delegate_agents if self.agents.get(a)),
+            allowed_delegate_agents=sorted(a for a in spec.allowed_delegate_agents
+                                           if (child := self.agents.get(a)) is not None and child.accepts_delegation),
             caller_role=actor.role.value,
+            allowed_decisions=sorted(k.value for k in spec.allowed_decisions),
+            wait_events=sorted(e.value for e in spec.wait_events),
         )
 
     @staticmethod
@@ -439,6 +478,46 @@ class AgentRuntime:
                      f"Mission {mission.id} failed: decision rejected ({rejected.code}).", {"code": rejected.code})
         return self._commit(session, mission, step, None, rejected.code)
 
+    def _apply_verdict(self, session: Session, actor: MissionActor, mission: AgentMission, verdict: SupervisorVerdict,
+                       now: datetime) -> AgentResult:
+        """A supervisor verdict other than ``continue``: no brain call. ``wait`` re-arms the timer without a step;
+        a terminal verdict is recorded as one step (``verified_*``) with its structured outcome."""
+        if verdict.action == "wait":
+            mission.status = AgentMissionStatus.WAITING_EVENT
+            mission.waiting_for = verdict.waiting_for.value if verdict.waiting_for else None
+            mission.next_wake_at = verdict.wake_at
+            self._audit(session, actor, mission, "MISSION_WAITING", f"Mission {mission.id} is waiting (supervisor).",
+                        {"waiting_for": mission.waiting_for, "status": mission.status.value, "source": "supervisor"}, now)
+            session.commit()
+            return AgentResult(mission_id=mission.id, transitioned=True, status=mission.status, detail="supervisor_wait")
+        status, event_type = {
+            "complete": (AgentMissionStatus.COMPLETED, "MISSION_COMPLETED"),
+            "cancel": (AgentMissionStatus.CANCELLED, "MISSION_CANCELLED"),
+            "fail": (AgentMissionStatus.FAILED, "MISSION_FAILED"),
+        }[verdict.action]
+        mission.context = {**(mission.context or {}), "outcome": bounded(verdict.outcome)}
+        outcome = _Outcome(AgentStepStatus.EXECUTED, {"status": status.value, "outcome": verdict.outcome},
+                           error_code=verdict.code if verdict.action == "fail" else None)
+        step = self._record_step(session, actor, mission, None, outcome, now, rejected_summary={
+            "kind": f"verified_{verdict.action}", "source": "supervisor", "code": verdict.code})
+        metadata = {"code": verdict.code} if verdict.action == "fail" else {"result": verdict.code}
+        self._finish(session, actor, mission, status, now, event_type,
+                     f"Mission {mission.id} {status.value} (verified: {verdict.code}).", metadata)
+        return self._commit(session, mission, step, None, outcome.error_code)
+
+    def _reject_completion(self, session: Session, actor: MissionActor, mission: AgentMission, spec: AgentSpec,
+                           decision: AgentDecision, now: datetime) -> AgentResult:
+        """The brain said COMPLETE but the success condition does not hold: nothing is completed, the step is
+        recorded REJECTED, and the mission keeps monitoring until its next deterministic checkpoint."""
+        outcome = _Outcome(AgentStepStatus.REJECTED, {"error_code": "COMPLETION_NOT_VERIFIED"},
+                           error_code="COMPLETION_NOT_VERIFIED")
+        step = self._record_step(session, actor, mission, decision, outcome, now)
+        event, wake = spec.supervisor.plan_wait(session, mission, None, now)
+        mission.status, mission.waiting_for, mission.next_wake_at = AgentMissionStatus.WAITING_EVENT, event.value, wake
+        self._audit(session, actor, mission, "MISSION_WAITING", f"Mission {mission.id} is waiting (completion not verified).",
+                    {"waiting_for": mission.waiting_for, "status": mission.status.value, "source": "supervisor"}, now)
+        return self._commit(session, mission, step, decision.kind, "COMPLETION_NOT_VERIFIED")
+
     def _record_crash(self, session: Session, actor: MissionActor, mission_id: int, decision: AgentDecision,
                       crashed: "_ToolCrashed", now: datetime) -> AgentResult:
         session.rollback()  # discard anything the crashed tool may have staged
@@ -460,6 +539,34 @@ class AgentRuntime:
             raise AgentOSError("CONCURRENT_STEP", "Another run of this mission step was recorded first.", 409) from None
         return AgentResult(mission_id=mission.id, transitioned=True, status=mission.status, step_number=step.step_number,
                            decision_kind=kind, step_status=step.status, error_code=error_code)
+
+
+class _NotVerified(Exception):
+    """A COMPLETE decision whose success condition the agent's supervisor could not verify."""
+
+
+class _WriteWatch:
+    """Records the model types a tool inserts, updates or deletes -- including rows it flushes itself."""
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self.inserted: set = set()
+        self.updated: set = set()
+        self.deleted: set = set()
+
+    def _collect(self, *_: Any) -> None:
+        session = self.session
+        self.inserted |= {type(o) for o in session.new}
+        self.updated |= {type(o) for o in session.dirty if session.is_modified(o)}
+        self.deleted |= {type(o) for o in session.deleted}
+
+    def __enter__(self) -> "_WriteWatch":
+        orm_event.listen(self.session, "before_flush", self._collect)
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        self._collect()
+        orm_event.remove(self.session, "before_flush", self._collect)
 
 
 class _ToolCrashed(Exception):

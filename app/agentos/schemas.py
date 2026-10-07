@@ -40,6 +40,10 @@ class DomainEventType(str, enum.Enum):
     NETWORK_RESTORED = "NETWORK_RESTORED"
     HUMAN_RESPONDED = "HUMAN_RESPONDED"
     DELEGATION_FINISHED = "DELEGATION_FINISHED"
+    # Phase 3: the assignment domain.
+    ASSIGNMENT_PUBLISHED = "ASSIGNMENT_PUBLISHED"
+    ASSIGNMENT_CANCELLED = "ASSIGNMENT_CANCELLED"
+    COMMUNICATION_REQUESTED = "COMMUNICATION_REQUESTED"
 
 
 # Which fields each decision kind may (and must) carry.
@@ -122,6 +126,9 @@ class AgentContext(BaseModel):
     allowed_tools: List[ToolDescriptor] = Field(default_factory=list)
     allowed_delegate_agents: List[str] = Field(default_factory=list)
     caller_role: Optional[str] = None  # the server-resolved role of the human the mission acts for
+    # Phase 3: the decision kinds / wait events this agent may use (empty: unrestricted, the Phase 1-2 default).
+    allowed_decisions: List[str] = Field(default_factory=list)
+    wait_events: List[str] = Field(default_factory=list)
 
 
 class AgentResult(BaseModel):

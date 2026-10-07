@@ -521,8 +521,8 @@ the current demo:
 
 ## AgentOS V2 Current State & Production Data Foundation (Phase 2.5)
 
-- Done: the durable Agent Kernel (Phase 1) and the Nexus assistant with its Groq brain (Phase 2). Assignment
-  Guardian is next.
+- Done: the durable Agent Kernel (Phase 1), the Nexus assistant with its Groq brain (Phase 2) and the Assignment
+  Guardian with the due-mission worker (Phase 3, below).
 - Production/online DB = Supabase PostgreSQL; local/offline edge and tests = SQLite. One SQLAlchemy model/service
   layer for both; no Supabase-specific ORM or API. AgentRuntime uses only SQLAlchemy sessions, so a later
   edge->cloud sync (outbox, deferred) can sit beside it.
@@ -543,6 +543,37 @@ the current demo:
   application table has RLS on with no policies and no privileges for those roles (`restrict_data_api_access`).
 - Health/preflight expose only `connected|unavailable`, `sqlite|postgresql`, and a host kind; never a URL,
   host, user, password or project ref.
+
+## AgentOS V2 Phase 3: Assignment Guardian & Due-Mission Worker
+
+- Models: `app/db/models/assignment.py` (`assignments`, `assignment_targets`, `assignment_submissions`,
+  `assignment_followups`, tenant-owned). Publishing snapshots the roster once; one active follow-up per
+  (assignment, student) is a partial unique index. Follow-ups and `COMMUNICATION_REQUESTED` payloads never hold a
+  phone number or e-mail; submission text never reaches events, audit, tool results or a brain.
+- `app/services/assignments.py` is the only write path (`/assignments` API). Identity comes from the token only;
+  faculty/HOD act on their own classes (HOD: also their department), admins on any; anything else is a 404.
+  Publish = one transaction (conditional DRAFT->PUBLISHED UPDATE, targets, the one Guardian mission,
+  `ASSIGNMENT_PUBLISHED`, audit). A submission emits `ASSIGNMENT_SUBMITTED` to the mission and wakes it; it never
+  completes the mission.
+- Deterministic rules live in `app/rules/assignment_rules.py` (on time iff `submitted_at <= deadline`; deadline
+  passed iff `now > deadline`; checkpoints; `evaluate_followup`: cooldown, max attempts, submitted, cancelled,
+  deadline, reminder window, quiet hours). The LLM may only *request* a follow-up; code decides. Never move these
+  checks into a prompt.
+- `assignment_guardian` (`app/agentos/assignment_guardian.py`): `user_creatable=False` (created only by publishing),
+  `accepts_delegation=False`, `autonomous=True`. Its `GuardianSupervisor` decides success (all targets submitted),
+  cancellation and the deadline (FAILED with outcome `DEADLINE_REACHED_WITH_PENDING`, never a success) before any
+  brain call, gates COMPLETE (`COMPLETION_NOT_VERIFIED` is recorded REJECTED and monitoring continues) and schedules
+  every WAIT from checkpoints. Early event wakes between checkpoints use no AI call.
+- Kernel additions (`AgentSpec.allowed_decisions/wait_events/accepts_delegation/user_creatable/autonomous/supervisor`,
+  `AgentTool.request_models`): an internal request tool may only stage rows of its declared models (verified by the
+  runtime's write watch, including rows it flushes itself); a read-only tool may write nothing. `side_effecting`
+  tools are still refused. Do not register `communication_agent` as a placeholder.
+- `app/agentos/worker.py::process_due_missions` (`scripts/process_due_missions.py --once`): tenant session per
+  organization, lease claim by one conditional UPDATE (portable; no `FOR UPDATE`), owner identity rebuilt from the
+  active membership, bounded `limit` x `max_transitions`, backoff on brain unavailable, lease released, audited
+  `MISSION_WORKER_RUN`. There is no in-process scheduler; run the script (cron/loop) instead.
+- Tests: `tests/test_agentos_assignment_guardian.py` (pinned clock, mock/scripted brain, no sleeping).
+  `python scripts/demo_assignment_guardian.py` prints the offline end-to-end trace.
 
 ## Idempotency Requirement
 
