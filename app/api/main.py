@@ -25,6 +25,7 @@ from app.agents.services.agent import ServicesAgent
 from app.agentos.brain import AgentBrain
 from app.agentos.bootstrap import build_agent_runtime
 from app.agentos.providers import build_agent_brain
+from app.communication.voice.conversation import voice_pipeline_from_env
 from app.api.routers import admin, admin_console, agentos, agents, assignments, approvals, attendance, auth, enterprise, exams, faculty, health, hod, me, missions, requests, students, voice
 from app.db.session import create_db_engine, upgrade_schema, verify_database_ready
 from app.db.tenant_session import TenantSessionFactory
@@ -119,9 +120,9 @@ def create_app(
     # mock); an unusable configured provider refuses explicitly.
     brain = agent_brain if agent_brain is not None else build_agent_brain(recorder=llm_provider.recorder)
     fastapi_app.state.agent_runtime = build_agent_runtime(brain, clock=lambda: fastapi_app.state.clock())
-    # Phase 5: the voice conversation pipeline (speech-to-text, text-to-speech, turn brain). None = voice streams are
-    # refused; a deployment wires a real one here, tests inject fakes.
-    fastapi_app.state.voice_pipeline = None
+    # Phase 5.1: the live voice pipeline (Groq Whisper STT -> restricted voice brain -> Groq Orpheus TTS), from the env.
+    # Unavailable (no GROQ_API_KEY / TTS voice) = voice streams are refused with the reason; never fake speech.
+    fastapi_app.state.voice_pipeline, fastapi_app.state.voice_pipeline_unavailable = voice_pipeline_from_env()
 
     fastapi_app.include_router(health.router)
     fastapi_app.include_router(students.router)

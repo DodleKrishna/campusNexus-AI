@@ -64,7 +64,8 @@ DELIVERED_EMAIL = "DELIVERED_EMAIL"
 
 # Attempt errors that may be retried (after backoff, same channel); every other error fails the job.
 RETRYABLE_ERRORS = frozenset({"NO_ANSWER", "BUSY", "PROVIDER_TIMEOUT", "PROVIDER_UNAVAILABLE",
-                              "PROVIDER_RATE_LIMITED", "CALL_FAILED", "CALLBACK_TIMEOUT"})
+                              "PROVIDER_RATE_LIMITED", "CALL_FAILED", "CALLBACK_TIMEOUT",
+                              "VOICE_PIPELINE_FAILED"})  # Phase 5.1: TTS failed mid-call (bounded by max_attempts)
 
 
 @dataclass(frozen=True)

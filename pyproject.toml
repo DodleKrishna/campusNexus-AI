@@ -61,6 +61,8 @@ app = [
     # Phase 5: Exotel's form-encoded status callbacks and the voice WebSocket stream.
     "python-multipart>=0.0.9",
     "websockets>=12",
+    # Phase 5.1: WebRTC voice-activity detection for live calls (prebuilt wheels; pinned).
+    "webrtcvad-wheels==2.0.14.post1",
 ]
 
 [build-system]

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.communication.base import DeliveryConnector, DeliveryRequest, DeliveryResult
 from app.communication.contacts import ContactResolver
 from app.communication.voice import tokens
+from app.communication.voice.audio import SAMPLE_RATE
 from app.db.models.communication_delivery import (
     AttemptStatus, CommunicationAttempt, ContactKind, VoiceSession, VoiceSessionStatus,
 )
@@ -34,6 +35,7 @@ from app.rules.communication_policy import VOICE, CommunicationPolicy
 PROVIDER = "exotel"
 STATUS_PATH = "/communication/exotel/status"
 STREAM_PATH = "/communication/voice/stream"
+STREAM_URL_PATH = "/communication/exotel/stream-url"
 CALLBACK_VALIDITY = timedelta(hours=2)
 # A safe, fixed description of each purpose (stored on the VoiceSession; never personal data).
 GOALS = {
@@ -70,6 +72,12 @@ class ExotelConfig:
     def flow_url(self) -> str:
         return f"http://my.exotel.com/{self.account_sid}/exoml/start_voice/{self.flow_app_id}"
 
+    def stream_url(self, stream_token: str) -> str:
+        """The bidirectional stream URL for one call: wss, linear16 at 16 kHz (``sample-rate=16000``), with the call's
+        signed stream token. Served to the flow's Voicebot applet by ``GET /communication/exotel/stream-url``."""
+        host = self.public_base_url.split("://", 1)[-1]
+        return f"wss://{host}{STREAM_PATH}?sample-rate={SAMPLE_RATE}&token={quote(stream_token)}"
+
 
 @dataclass(frozen=True)
 class ProviderCall:
@@ -104,7 +112,7 @@ class HttpExotelClient:
         url = f"https://{self.config.subdomain}/v1/Accounts/{self.config.account_sid}/Calls/connect.json"
         data = {"From": to, "CallerId": caller_id, "Url": flow_url, "StatusCallback": status_callback,
                 "StatusCallbackEvents[0]": "terminal", "StatusCallbackEvents[1]": "answered",
-                "CustomField": custom_field, "TimeLimit": str(time_limit_seconds)}
+                "CustomField": custom_field, "TimeLimit": str(time_limit_seconds), "Record": "false"}
         try:
             response = httpx.post(url, data=data, auth=(self.config.api_key, self.config.api_token), timeout=self.timeout)
         except httpx.TimeoutException:
