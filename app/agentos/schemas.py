@@ -16,6 +16,7 @@ from app.db.models.agent_kernel import AgentMissionStatus, AgentStepStatus
 
 IDENTIFIER = r"^[a-z][a-z0-9_]{0,39}$"
 TOOL_NAME = r"^[a-z][a-z0-9_]{0,63}$"
+USER_MESSAGE_MAX = 800
 
 
 class DecisionKind(str, enum.Enum):
@@ -46,9 +47,9 @@ _KIND_FIELDS: Dict[DecisionKind, tuple[set[str], set[str]]] = {
     DecisionKind.TOOL: ({"tool_name"}, {"tool_name", "tool_input"}),
     DecisionKind.DELEGATE: ({"delegate_agent", "delegate_goal"}, {"delegate_agent", "delegate_goal"}),
     DecisionKind.WAIT: ({"wait_for"}, {"wait_for", "wake_after_seconds"}),
-    DecisionKind.ASK_HUMAN: ({"question"}, {"question"}),
+    DecisionKind.ASK_HUMAN: ({"question"}, {"question", "user_message"}),
     DecisionKind.REPLAN: ({"plan"}, {"plan"}),
-    DecisionKind.COMPLETE: ({"outcome"}, {"outcome"}),
+    DecisionKind.COMPLETE: ({"outcome"}, {"outcome", "user_message"}),
     DecisionKind.FAIL: ({"reason"}, {"reason"}),
 }
 _PAYLOAD_FIELDS = {f for _, allowed in _KIND_FIELDS.values() for f in allowed}
@@ -70,6 +71,8 @@ class AgentDecision(BaseModel):
     plan: Optional[List[str]] = Field(default=None, min_length=1, max_length=20)
     outcome: Optional[str] = Field(default=None, min_length=1, max_length=1000)
     reason: Optional[str] = Field(default=None, min_length=1, max_length=300)
+    # Phase 2: the short, user-visible reply of a COMPLETE / ASK_HUMAN decision. Not reasoning.
+    user_message: Optional[str] = Field(default=None, min_length=1, max_length=USER_MESSAGE_MAX)
 
     @model_validator(mode="after")
     def _fields_match_kind(self) -> "AgentDecision":
@@ -118,6 +121,7 @@ class AgentContext(BaseModel):
     observations: List[AgentObservation] = Field(default_factory=list)
     allowed_tools: List[ToolDescriptor] = Field(default_factory=list)
     allowed_delegate_agents: List[str] = Field(default_factory=list)
+    caller_role: Optional[str] = None  # the server-resolved role of the human the mission acts for
 
 
 class AgentResult(BaseModel):

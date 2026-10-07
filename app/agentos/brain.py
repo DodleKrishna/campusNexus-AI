@@ -1,7 +1,7 @@
 """The AgentBrain interface: given a safe AgentContext, return one typed AgentDecision.
 
-Provider-backed brains (Groq/Anthropic/...) arrive in Phase 2 and must return the
-same ``AgentDecision`` through structured output. The runtime re-validates
+Provider-backed brains (``app.agentos.providers``, Phase 2) return the same
+``AgentDecision`` through structured output. The runtime re-validates
 whatever a brain returns, so a brain can never bypass the allowlists.
 """
 from __future__ import annotations
@@ -12,7 +12,24 @@ from app.agentos.schemas import AgentContext, AgentDecision
 
 
 class BrainUnavailableError(RuntimeError):
-    """The brain could not answer right now (infrastructure). The mission is left unchanged."""
+    """The brain could not answer right now (infrastructure). The mission is left unchanged.
+
+    ``code`` (e.g. PROVIDER_TIMEOUT, PROVIDER_RATE_LIMITED, AI_BUDGET_EXCEEDED) is what the caller
+    sees; the message is never persisted.
+    """
+
+    def __init__(self, message: str = "brain unavailable", *, code: str = "BRAIN_UNAVAILABLE") -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class BrainOutputError(RuntimeError):
+    """The brain answered with something that is not a usable decision (malformed JSON, extra fields,
+    an offered-kind violation). The runtime rejects it like any invalid decision: nothing is executed."""
+
+    def __init__(self, code: str = "MALFORMED_OUTPUT") -> None:
+        super().__init__(code)
+        self.code = code
 
 
 @runtime_checkable

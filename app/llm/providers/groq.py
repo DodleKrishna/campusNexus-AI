@@ -43,7 +43,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, ValidationError
 
-from app.llm.base import LLMProvider, LLMProviderError, LLMRateLimitError, LLMTransientError
+from app.llm.base import LLMMalformedOutputError, LLMProvider, LLMProviderError, LLMRateLimitError, LLMTransientError
 from app.llm.providers.anthropic_provider import (
     AGENT_CAPABILITIES,
     _PLAN_TOOL_NAME,
@@ -408,12 +408,14 @@ class GroqLLMProvider(LLMProvider):
                 f"Groq model {self._model!r} is not available to this account (HTTP {status}, {code or 'not found'}): "
                 f"{detail} Set CAMPUSNEXUS_LLM_MODEL to a model listed at https://console.groq.com/docs/models."
             )
-        if code == "tool_use_failed":
-            raise self._fail(f"Groq model produced malformed structured output (tool_use_failed): {detail}")
+        if code in ("tool_use_failed", "json_validate_failed"):
+            # The error body may echo the failed generation: keep it out of the message.
+            raise LLMMalformedOutputError(f"Groq model produced malformed structured output ({code}).")
         raise self._fail(f"Groq API call failed (HTTP {status}{', ' + code if code else ''}): {detail}")
 
     def _create(
-        self, *, max_tokens: int, system: str, content: str, tool: Optional[Dict[str, Any]] = None, operation: str = "response"
+        self, *, max_tokens: int, system: str, content: str, tool: Optional[Dict[str, Any]] = None, operation: str = "response",
+        response_format: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         body: Dict[str, Any] = {
             "model": self._model,
@@ -424,9 +426,13 @@ class GroqLLMProvider(LLMProvider):
         if tool is not None:
             body["tools"] = [{"type": "function", "function": tool}]
             body["tool_choice"] = {"type": "function", "function": {"name": tool["name"]}}
+        if response_format is not None:
+            body["response_format"] = response_format
         if self._model.startswith("openai/gpt-oss"):
             # Reasoning tokens share max_completion_tokens; keep them small.
             body["reasoning_effort"] = "low"
+            if response_format is not None:
+                body["include_reasoning"] = False  # AgentOS: the reasoning is never returned to us
 
         response, retries = self._post(body)
         self._raise_for_status(response, retries)
@@ -437,7 +443,7 @@ class GroqLLMProvider(LLMProvider):
             raise self._fail("Groq returned a response without any choices.") from exc
         self._record_usage(operation, payload.get("usage"))
         if choice.get("finish_reason") == "length":
-            raise self._fail(f"Groq response was truncated at max_completion_tokens={max_tokens}; output discarded.")
+            raise LLMMalformedOutputError(f"Groq response was truncated at max_completion_tokens={max_tokens}; output discarded.")
         return choice.get("message") or {}
 
     def _record_usage(self, operation: str, usage: Any) -> None:
@@ -478,6 +484,29 @@ class GroqLLMProvider(LLMProvider):
             except ValidationError as exc:
                 raise self._fail(f"Groq '{tool_name}' output failed schema validation: {exc}") from exc
         raise self._fail(f"Groq response did not include the expected '{tool_name}' function call.")
+
+    def complete_json_schema(
+        self, *, system: str, content: str, schema_name: str, schema: Dict[str, Any], max_tokens: int, operation: str,
+    ) -> Dict[str, Any]:
+        """One strict JSON-schema completion (no tools, reasoning not returned) parsed into a JSON object.
+
+        Used by the AgentOS brain: the model only *describes* a decision; nothing here executes it.
+        Unusable output raises ``LLMMalformedOutputError``; transport failures keep the usual
+        bounded-retry / ``LLMTransientError`` handling of every other call.
+        """
+        message = self._create(
+            max_tokens=max_tokens, system=system, content=content, operation=operation,
+            response_format={"type": "json_schema", "json_schema": {"name": schema_name, "strict": True, "schema": schema}},
+        )
+        if message.get("tool_calls"):
+            raise LLMMalformedOutputError("Groq returned a tool call where a JSON object was required.")
+        try:
+            parsed = json.loads(message.get("content") or "")
+        except (TypeError, ValueError):
+            raise LLMMalformedOutputError("Groq output was not valid JSON.") from None
+        if not isinstance(parsed, dict):
+            raise LLMMalformedOutputError("Groq output was not a JSON object.")
+        return parsed
 
     def _text(self, *, system: str, context: BaseModel) -> str:
         message = self._create(

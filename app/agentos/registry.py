@@ -47,6 +47,8 @@ class ToolContext:
     role: UserRole
     mission_id: int
     now: datetime
+    student_code: Optional[str] = None  # the caller's own profile (from the membership), never from the model
+    faculty_profile_id: Optional[int] = None
 
 
 class ToolResult(BaseModel):

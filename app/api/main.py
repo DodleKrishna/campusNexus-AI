@@ -22,7 +22,9 @@ from app.agents.action.agent import ActionAgent
 from app.agents.career.agent import CareerAgent
 from app.agents.events.agent import EventsAgent
 from app.agents.services.agent import ServicesAgent
-from app.agentos.brain import UnconfiguredBrain
+from app.agentos.brain import AgentBrain
+from app.agentos.nexus import register_nexus
+from app.agentos.providers import build_agent_brain
 from app.agentos.registry import AgentRegistry as KernelAgentRegistry, ToolRegistry as KernelToolRegistry
 from app.agentos.runtime import AgentRuntime
 from app.api.routers import admin, admin_console, agentos, agents, approvals, auth, enterprise, faculty, health, hod, me, missions, requests, students
@@ -70,6 +72,7 @@ def create_app(
     tool_gateway: ToolGateway | None = None,
     lifespan: Callable[[FastAPI], AsyncContextManager[None]] | None = None,
     clock: Callable[[], datetime] | None = None,
+    agent_brain: AgentBrain | None = None,
 ) -> FastAPI:
     """Build a fully-wired FastAPI app.
 
@@ -113,9 +116,12 @@ def create_app(
     fastapi_app.state.llm_provider = llm_provider
     fastapi_app.state.specialist_gateway = SpecialistGateway(registry=registry, session_factory=session_factory)
     fastapi_app.state.clock = clock or (lambda: datetime.now(timezone.utc))
-    # AgentOS V2 kernel (Phase 1): no agents, tools or brain are registered yet -- the API refuses explicitly.
-    fastapi_app.state.agent_runtime = AgentRuntime(KernelAgentRegistry(), KernelToolRegistry(), UnconfiguredBrain(),
-                                                   clock=lambda: fastapi_app.state.clock())
+    # AgentOS V2 kernel: Phase 2 registers the Nexus orchestrator (read-only tools). The brain comes from
+    # CAMPUSNEXUS_AGENT_BRAIN (default: offline mock); an unusable configured provider refuses explicitly.
+    kernel_agents, kernel_tools = KernelAgentRegistry(), KernelToolRegistry()
+    register_nexus(kernel_agents, kernel_tools)
+    brain = agent_brain if agent_brain is not None else build_agent_brain(recorder=llm_provider.recorder)
+    fastapi_app.state.agent_runtime = AgentRuntime(kernel_agents, kernel_tools, brain, clock=lambda: fastapi_app.state.clock())
 
     fastapi_app.include_router(health.router)
     fastapi_app.include_router(students.router)
@@ -135,6 +141,7 @@ def create_app(
     fastapi_app.include_router(admin_console.router)
     fastapi_app.include_router(enterprise.router)
     fastapi_app.include_router(agentos.router)
+    fastapi_app.include_router(agentos.assistant_router)
     return fastapi_app
 
 

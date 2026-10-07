@@ -49,6 +49,11 @@ class LLMProviderError(RuntimeError):
     """
 
 
+class LLMMalformedOutputError(LLMProviderError):
+    """The provider answered, but its output is unusable: truncated, not JSON, or rejected by the
+    provider's own schema check. Discarded, never repaired (AgentOS V2: the decision is rejected)."""
+
+
 class LLMTransientError(LLMProviderError):
     """An infrastructure failure that persisted through the provider's own
     bounded retries: rate limit, timeout, network error or 5xx (Phase 12C).

@@ -59,6 +59,7 @@ OPERATION_LEVELS: Dict[str, tuple] = {
     "generate_career_response": (IntelligenceLevel.LIGHT, "explaining a deterministic result"),
     "generate_events_response": (IntelligenceLevel.LIGHT, "explaining a deterministic result"),
     "generate_services_response": (IntelligenceLevel.LIGHT, "explaining a deterministic result"),
+    "agent_brain_decide": (IntelligenceLevel.LIGHT, "AgentOS: one typed decision per kernel transition"),
 }
 
 

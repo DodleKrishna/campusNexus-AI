@@ -15,7 +15,8 @@ observable decision and its result -- never reasoning.
 
 Audit events (``operation_audit_events``, subject ``agent_mission``): MISSION_CREATED,
 MISSION_STARTED, AGENT_STEP_EXECUTED, TOOL_EXECUTED, AGENT_DELEGATED,
-MISSION_WAITING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED.
+MISSION_WAITING, MISSION_COMPLETED, MISSION_FAILED, MISSION_CANCELLED, and (for brains with
+``audit_calls``) AI_BRAIN_CALLED / AI_BRAIN_SUCCEEDED / AI_BRAIN_FAILED.
 """
 from __future__ import annotations
 
@@ -29,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.agentos.brain import AgentBrain, BrainUnavailableError
+from app.agentos.brain import AgentBrain, BrainOutputError, BrainUnavailableError
 from app.agentos.events import SUBJECT_MISSION, EventService
 from app.agentos.registry import AgentRegistry, AgentSpec, ToolContext, ToolExecutionError, ToolRegistry, ToolResult
 from app.agentos.safety import bounded, redact
@@ -46,7 +47,7 @@ from app.schemas.enums import UserRole
 
 HARD_TRANSITION_CAP = 25
 MAX_DELEGATION_DEPTH = 3
-RECENT_OBSERVATIONS = 5
+RECENT_OBSERVATIONS = 8  # bounded working memory shown to the brain
 SUBJECT = "agent_mission"
 
 
@@ -57,6 +58,8 @@ class MissionActor:
     organization_id: int
     account_id: int
     role: UserRole
+    student_code: Optional[str] = None  # the membership's own profile links (server-side identity only)
+    faculty_profile_id: Optional[int] = None
 
 
 class AgentOSError(Exception):
@@ -191,16 +194,28 @@ class AgentRuntime:
             observations.append(AgentObservation(kind="mission_started", source="runtime", at=now))
         self._remember(mission, observations)
 
-        # Decide
+        # Decide (provider-backed brains opt in to AI_BRAIN_* audit events via ``audit_calls``)
+        audited = bool(getattr(self.brain, "audit_calls", False))
+        started = time.perf_counter()
         try:
             raw = self.brain.decide(self._context(mission, spec, actor))
-        except BrainUnavailableError:
+        except BrainUnavailableError as exc:
             session.rollback()  # nothing happened: the mission, events and observations are unchanged
             mission = self._load(session, actor, mission_id, owner_only=True)
-            return AgentResult(mission_id=mission.id, transitioned=False, status=mission.status,
-                               error_code="BRAIN_UNAVAILABLE")
+            if audited:
+                self._audit_brain(session, actor, mission, now, started, exc.code)
+                session.commit()  # only the AI_BRAIN_* audit rows
+            return AgentResult(mission_id=mission.id, transitioned=False, status=mission.status, error_code=exc.code)
+        except BrainOutputError as exc:  # unusable output: rejected like any invalid decision, nothing executed
+            if audited:
+                self._audit_brain(session, actor, mission, now, started, exc.code)
+            return self._reject(session, actor, mission, _Rejected("INVALID_DECISION", {"kind": "invalid", "cause": exc.code}), now)
         except Exception as exc:  # noqa: BLE001 -- a broken brain fails the mission visibly, never silently
+            if audited:
+                self._audit_brain(session, actor, mission, now, started, "BRAIN_ERROR")
             return self._reject(session, actor, mission, _Rejected("BRAIN_ERROR", {"error": type(exc).__name__}), now)
+        if audited:
+            self._audit_brain(session, actor, mission, now, started, None)
 
         # Validate, then act (at most one bounded action)
         try:
@@ -238,7 +253,8 @@ class AgentRuntime:
             return _Outcome(AgentStepStatus.EXECUTED, {"waiting_for": event.value, "status": mission.status.value})
         if kind == DecisionKind.ASK_HUMAN:
             mission.status, mission.waiting_for = AgentMissionStatus.WAITING_HUMAN, DomainEventType.HUMAN_RESPONDED.value
-            mission.context = {**mission.context, "pending_question": redact(decision.question)}
+            mission.context = {**mission.context, "pending_question": redact(decision.question),
+                               "assistant_message": redact(decision.user_message or decision.question)}
             self._audit(session, actor, mission, "MISSION_WAITING", f"Mission {mission.id} is waiting for a person.",
                         {"waiting_for": mission.waiting_for, "status": mission.status.value}, now)
             return _Outcome(AgentStepStatus.EXECUTED, {"waiting_for": mission.waiting_for})
@@ -249,6 +265,8 @@ class AgentRuntime:
             return _Outcome(AgentStepStatus.EXECUTED, {"plan_version": version})
         if kind == DecisionKind.COMPLETE:
             mission.context = {**mission.context, "outcome": redact(decision.outcome)}
+            if decision.user_message:
+                mission.context = {**mission.context, "assistant_message": redact(decision.user_message)}
             self._finish(session, actor, mission, AgentMissionStatus.COMPLETED, now, "MISSION_COMPLETED",
                          f"Mission {mission.id} completed.", {})
             return _Outcome(AgentStepStatus.EXECUTED, {"status": "completed"})
@@ -269,7 +287,10 @@ class AgentRuntime:
             fields = sorted({str(e["loc"][0]) for e in exc.errors() if e.get("loc")})[:10]
             raise _Rejected("INVALID_TOOL_INPUT", {"tool_name": name, "invalid_fields": fields}) from None
         context = ToolContext(session=session, organization_id=actor.organization_id, account_id=actor.account_id,
-                              role=actor.role, mission_id=mission.id, now=now)
+                              role=actor.role, mission_id=mission.id, now=now, student_code=actor.student_code,
+                              faculty_profile_id=actor.faculty_profile_id)
+        # Flush the kernel's own pending rows first: a tool's SELECT would autoflush them and look like a write.
+        session.flush()
         pending_before = set(session.new) | set(session.deleted)
         started = time.perf_counter()
         try:
@@ -339,6 +360,7 @@ class AgentRuntime:
             observations=[AgentObservation.model_validate(o) for o in mission.context.get("observations", [])],
             allowed_tools=self.tools.describe(spec.allowed_tools, actor.role),
             allowed_delegate_agents=sorted(a for a in spec.allowed_delegate_agents if self.agents.get(a)),
+            caller_role=actor.role.value,
         )
 
     @staticmethod
@@ -360,6 +382,20 @@ class AgentRuntime:
             subject_type=SUBJECT, subject_id=str(mission.id), message=message, at=now,
             metadata=bounded({"agent_key": mission.agent_key, **metadata}),
         )
+
+    def _audit_brain(self, session: Session, actor: MissionActor, mission: AgentMission, now: datetime, started: float,
+                     error_code: Optional[str]) -> None:
+        """AI_BRAIN_CALLED + AI_BRAIN_SUCCEEDED/FAILED: provider, model, latency and an error code -- never the
+        prompt, the raw output, reasoning or an error message (which could echo either)."""
+        meta = {"provider": getattr(self.brain, "provider_name", None), "model": getattr(self.brain, "model_name", None),
+                "latency_ms": int((time.perf_counter() - started) * 1000)}
+        self._audit(session, actor, mission, "AI_BRAIN_CALLED", f"Mission {mission.id}: brain called.", meta, now)
+        if error_code is None:
+            self._audit(session, actor, mission, "AI_BRAIN_SUCCEEDED", f"Mission {mission.id}: brain returned a decision.",
+                        meta, now)
+        else:
+            self._audit(session, actor, mission, "AI_BRAIN_FAILED", f"Mission {mission.id}: brain call failed ({error_code}).",
+                        {**meta, "error_code": error_code}, now)
 
     def _finish(self, session: Session, actor: MissionActor, mission: AgentMission, status: AgentMissionStatus,
                 now: datetime, event_type: str, message: str, metadata: Dict[str, Any]) -> None:
@@ -442,11 +478,11 @@ def _decision_summary(decision: AgentDecision) -> Dict[str, Any]:
     elif decision.kind == DecisionKind.WAIT:
         summary.update(wait_for=decision.wait_for.value, wake_after_seconds=decision.wake_after_seconds)
     elif decision.kind == DecisionKind.ASK_HUMAN:
-        summary.update(question=decision.question)
+        summary.update(question=decision.question, user_message=decision.user_message)
     elif decision.kind == DecisionKind.REPLAN:
         summary.update(plan=decision.plan)
     elif decision.kind == DecisionKind.COMPLETE:
-        summary.update(outcome=decision.outcome)
+        summary.update(outcome=decision.outcome, user_message=decision.user_message)
     else:
         summary.update(reason=decision.reason)
     return summary
