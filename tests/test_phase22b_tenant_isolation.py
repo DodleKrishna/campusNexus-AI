@@ -365,7 +365,7 @@ def test_health_works_without_an_organization(client) -> None:
 # --- Guards against bypassing the tenant session ------------------------------------------------------------------
 
 RUNTIME_PACKAGES = ("app/api", "app/services", "app/agents", "app/tools", "app/graph", "app/rag", "app/rules", "app/llm",
-                    "app/auth", "app/schemas")
+                    "app/auth", "app/schemas", "app/agentos")
 ALLOWED_TEXT_SQL = {"SELECT 1"}
 
 

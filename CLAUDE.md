@@ -491,6 +491,34 @@ the current demo:
 - a connector framework
 - a comprehensive regression run (the full suite was last run to 74% on 22B)
 
+## AgentOS V2 (Phase 1: Agent Kernel)
+
+- Direction: personal assistant -> orchestrator -> autonomous agents -> controlled tools. The kernel lives in
+  `app/agentos/` (runtime, registries, brain, events, safety); models in `app/db/models/agent_kernel.py`
+  (`agent_missions`, `agent_steps`, `domain_events`, tenant-owned; created by the additive `upgrade_schema`).
+  It is separate from the Phase 4+ LangGraph `missions` tables; do not merge them.
+- Loop: `AgentRuntime.run_step` = ONE transition (reload -> scope/owner check -> refuse terminal -> observe ->
+  `AgentBrain.decide` -> validate -> one bounded action -> persist `AgentStep` -> update mission -> audit ->
+  commit). Never add an unbounded loop; `run_until_blocked` is capped at `HARD_TRANSITION_CAP`, every mission
+  at `max_steps`, delegation at `MAX_DELEGATION_DEPTH`.
+- Decisions are `AgentDecision` only (TOOL/DELEGATE/WAIT/ASK_HUMAN/REPLAN/COMPLETE/FAIL, `extra="forbid"`).
+  Tools/agents are named by identifier and must be in the agent's `allowed_tools`/`allowed_delegate_agents`
+  and the caller's role; tool input is validated by the tool's `extra="forbid"` Pydantic model. Any invalid
+  decision is recorded REJECTED and fails the mission -- never executed, never silently skipped.
+- Never store chain-of-thought: steps/context/events/audit hold only redacted structured summaries
+  (`app/agentos/safety.py` masks secrets, credentials, phone numbers). The brain gets an `AgentContext`, never a
+  DB handle, phone number or credential.
+- `ToolRegistry` refuses side-effecting tools in Phase 1. Writes keep going through Verifier -> Approval Gate
+  -> Action Agent; wiring that path into the kernel is a later phase. No SQL/shell/eval/HTTP tools, ever.
+- Waiting missions resume only on an allowlisted `DomainEventType` addressed to the mission or its owner
+  (consumed once), or a `next_wake_at` timer. A `BrainUnavailableError` leaves the mission unchanged.
+- Audit: `operation_audit_events`, subject `agent_mission` (MISSION_CREATED/STARTED/WAITING/COMPLETED/FAILED/
+  CANCELLED, AGENT_STEP_EXECUTED, TOOL_EXECUTED, AGENT_DELEGATED).
+- API (inspection only, JWT): `/agentos/missions` (+ `/{id}`, `/{id}/steps`, `/{id}/run-step`, `/{id}/cancel`).
+  Owner runs; owner or same-org admin reads/cancels; anything else is 404. The default runtime has no agents
+  and an `UnconfiguredBrain` until Phase 2 wires a provider. UI is deferred.
+- During AgentOS phases run focused tests only (`tests/test_agentos_kernel.py` + directly affected suites).
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so
