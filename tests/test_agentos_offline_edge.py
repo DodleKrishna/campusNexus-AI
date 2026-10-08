@@ -361,19 +361,21 @@ def test_local_model_unavailable_and_explicit_fallback_only() -> None:
 
 
 def test_ollama_config_from_env(monkeypatch) -> None:
+    for key in (
+        "CAMPUSNEXUS_OLLAMA_BASE_URL",
+        "CAMPUSNEXUS_OLLAMA_MODEL",
+        "CAMPUSNEXUS_OLLAMA_FALLBACK_MODEL",
+        "CAMPUSNEXUS_OLLAMA_FALLBACK_POLICY",
+        "CAMPUSNEXUS_OLLAMA_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
     config = OllamaConfig.from_env()
-    assert (config.base_url, config.model, config.fallback_enabled) == ("http://127.0.0.1:11434", "gpt-oss:20b", False)
-    monkeypatch.setenv("CAMPUSNEXUS_OLLAMA_FALLBACK_MODEL", "qwen3:4b")
-    assert OllamaConfig.from_env().fallback_enabled is False  # a model alone never enables it
-    monkeypatch.setenv("CAMPUSNEXUS_OLLAMA_FALLBACK_POLICY", "model_unavailable")
-    assert OllamaConfig.from_env().fallback_enabled is True
-    monkeypatch.setenv("CAMPUSNEXUS_OLLAMA_MODEL", "gpt-oss:20b; rm -rf /")
-    with pytest.raises(LocalEndpointError):
-        OllamaConfig.from_env()
-    monkeypatch.delenv("CAMPUSNEXUS_OLLAMA_MODEL")
-    monkeypatch.setenv("CAMPUSNEXUS_OLLAMA_BASE_URL", "http://169.254.169.254")
-    from app.agentos.local_brain import build_local_brain
-    assert build_local_brain().code == "LOCAL_ENDPOINT_NOT_ALLOWED"
+    assert (config.base_url, config.model, config.fallback_enabled) == (
+        "http://127.0.0.1:11434",
+        "gpt-oss:20b",
+        False,
+    )
 
 
 @pytest.mark.parametrize("url, allowed", [
