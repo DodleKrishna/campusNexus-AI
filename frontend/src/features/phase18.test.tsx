@@ -51,7 +51,9 @@ describe("Admin console", () => {
     signIn(HOD_USER);
     mockApi((url) => (url.endsWith("/auth/me") ? { body: HOD_USER } : url.endsWith("/health") ? { body: HEALTH } : { body: [] }));
     renderApp("/admin");
-    expect(await screen.findByRole("link", { name: "My Requests" })).toBeInTheDocument();
+    // A HOD sent to /admin lands on their own home (Nexus), never in the admin console.
+    expect(await screen.findAllByRole("link", { name: "Missions" })).not.toHaveLength(0);
+    expect(screen.getByRole("link", { name: "Classic workspace" })).toHaveAttribute("href", "/hod");
     expect(screen.queryByRole("link", { name: "AI Operations" })).not.toBeInTheDocument();
   });
 

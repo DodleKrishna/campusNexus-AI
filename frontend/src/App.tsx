@@ -3,6 +3,7 @@ import { useState } from "react";
 import { BrowserRouter } from "react-router-dom";
 import { ApiError } from "@/api/client";
 import { AuthProvider } from "@/auth/AuthProvider";
+import { BootSplash } from "@/nexus/components/BootSplash";
 import { AppRoutes } from "@/routes/AppRoutes";
 
 function makeQueryClient() {
@@ -24,6 +25,7 @@ export function App() {
       <BrowserRouter>
         <AuthProvider>
           <AppRoutes />
+          <BootSplash />
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

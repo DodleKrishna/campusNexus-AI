@@ -820,3 +820,68 @@ export interface SystemStatus {
   components: { name: string; status: "ready" | "degraded" | "unavailable"; detail: string }[];
   settings: Record<string, unknown>;
 }
+
+// ---------------------------------------------------------------------------
+// AgentOS: the Nexus personal assistant (/agentos/assistant, /agentos/missions)
+// ---------------------------------------------------------------------------
+
+export type AgentMissionStatus =
+  | "pending"
+  | "running"
+  | "waiting_event"
+  | "waiting_human"
+  | "waiting_connectivity"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type AgentStepStatus = "executed" | "rejected" | "failed";
+
+export interface BrainInfo {
+  provider: string | null;
+  model: string | null;
+  live: boolean;
+}
+
+export interface AssistantReply {
+  mission_id: number;
+  status: AgentMissionStatus;
+  assistant_message: string | null;
+  waiting_for: string | null;
+  steps_performed: number;
+  error_code: string | null;
+  brain: BrainInfo;
+}
+
+export interface VoiceAssistantReply extends AssistantReply {
+  speech: { stt_provider: string | null; tts_provider: string | null };
+  /** The spoken reply as a 16 kHz mono WAV, when text-to-speech succeeded. */
+  audio_wav_base64: string | null;
+  audio_error_code: string | null;
+}
+
+export interface AssistantMissionSummary {
+  mission_id: number;
+  status: AgentMissionStatus;
+  goal: string;
+  assistant_message: string | null;
+  waiting_for: string | null;
+  step_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One persisted kernel transition. Summaries are redacted structured data, never reasoning. */
+export interface AgentStepView {
+  id: number;
+  step_number: number;
+  agent_key: string;
+  action_type: string;
+  tool_name: string | null;
+  delegated_agent: string | null;
+  input_summary: Record<string, unknown>;
+  output_summary: Record<string, unknown>;
+  status: AgentStepStatus;
+  latency_ms: number | null;
+  created_at: string;
+}

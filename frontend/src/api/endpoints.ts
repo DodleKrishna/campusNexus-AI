@@ -1,6 +1,10 @@
 /** Typed backend endpoints. Identity always comes from the bearer token. */
 import { apiRequest } from "@/api/client";
 import type {
+  AgentStepView,
+  AssistantMissionSummary,
+  AssistantReply,
+  VoiceAssistantReply,
   AdminAttendance,
   AdminComplaint,
   AdminDashboard,
@@ -155,6 +159,16 @@ export const api = {
   adminAudit: (filters: { source?: string; action?: string }) => apiRequest<AuditEntry[]>(`/admin/audit${qs(filters)}`),
   adminSystem: () => apiRequest<SystemStatus>("/admin/system"),
   adminNotifications: () => apiRequest<NotificationItem[]>("/admin/notifications"),
+
+  // Nexus personal assistant (AgentOS). Identity, role and organization come from the token only.
+  assistantMessage: (message: string, signal?: AbortSignal) =>
+    apiRequest<AssistantReply>("/agentos/assistant/message", { method: "POST", body: { message }, signal }),
+  assistantVoice: (wav: Blob, replyAudio = true, signal?: AbortSignal) =>
+    apiRequest<VoiceAssistantReply>(`/agentos/assistant/voice${qs({ reply_audio: replyAudio ? "true" : "false" })}`, {
+      method: "POST", raw: { data: wav, contentType: "audio/wav" }, signal,
+    }),
+  assistantMissions: (limit = 20) => apiRequest<AssistantMissionSummary[]>(`/agentos/assistant/missions?limit=${limit}`),
+  missionSteps: (missionId: number) => apiRequest<AgentStepView[]>(`/agentos/missions/${missionId}/steps`),
 };
 
 export const queryKeys = {
@@ -179,4 +193,6 @@ export const queryKeys = {
   facultyToday: ["faculty", "classes", "today"] as const,
   facultyAttendance: ["faculty", "attendance"] as const,
   facultyClass: (sessionId: number) => ["faculty", "class", sessionId] as const,
+  assistantMissions: ["agentos", "assistant", "missions"] as const,
+  missionSteps: (missionId: number) => ["agentos", "missions", missionId, "steps"] as const,
 };

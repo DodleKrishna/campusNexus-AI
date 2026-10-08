@@ -51,14 +51,17 @@ function messageFrom(status: number, body: unknown): string {
 export interface RequestOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
+  /** A binary body sent as-is (e.g. a WAV recording); ``body`` is ignored when set. */
+  raw?: { data: Blob; contentType: string };
   auth?: boolean;
   signal?: AbortSignal;
 }
 
 export async function apiRequest<T>(path: string, options: RequestOptions = {}): Promise<T> {
-  const { method = "GET", body, auth = true, signal } = options;
+  const { method = "GET", body, raw, auth = true, signal } = options;
   const headers: Record<string, string> = { Accept: "application/json" };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (raw) headers["Content-Type"] = raw.contentType;
+  else if (body !== undefined) headers["Content-Type"] = "application/json";
   if (auth) {
     const session = tokenStore.get();
     if (session) headers.Authorization = `Bearer ${session.token}`;
@@ -67,7 +70,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
   let response: Response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
-      method, headers, signal, body: body === undefined ? undefined : JSON.stringify(body),
+      method, headers, signal, body: raw ? raw.data : body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (error) {
     if ((error as Error).name === "AbortError") throw error;

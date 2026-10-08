@@ -1,7 +1,7 @@
-import { lazy, type ComponentType } from "react";
+import { lazy, Suspense, type ComponentType } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { RequireAuth } from "@/auth/RequireAuth";
-import { homeRouteFor } from "@/auth/roles";
+import { NEXUS_ROLES, homeRouteFor } from "@/auth/roles";
 import { useAuth } from "@/auth/useAuth";
 import { AppShell } from "@/components/layout/AppShell";
 import { AppLoader } from "@/components/ui/full-page-loader";
@@ -14,6 +14,13 @@ import { UnsupportedRolePage } from "@/pages/UnsupportedRolePage";
 function lazyPage<M extends Record<string, unknown>>(loader: () => Promise<M>, name: keyof M & string) {
   return lazy(() => loader().then((module) => ({ default: module[name] as ComponentType })));
 }
+
+const nexus = () => import("@/nexus/NexusPages");
+const NexusShell = lazyPage(nexus, "NexusShell");
+const NexusAssistantPage = lazyPage(nexus, "NexusAssistantPage");
+const NexusMissionsPage = lazyPage(nexus, "NexusMissionsPage");
+const NexusAgentsPage = lazyPage(nexus, "NexusAgentsPage");
+const NexusNotificationsPage = lazyPage(nexus, "NexusNotificationsPage");
 
 const student = () => import("@/pages/student/StudentPages");
 const StudentDashboardPage = lazyPage(student, "StudentDashboardPage");
@@ -87,6 +94,23 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<RootRedirect />} />
       <Route path="/login" element={<LoginPage />} />
+
+      {/* CAMPUS AI: the Nexus assistant is every workspace role's home. */}
+      <Route
+        path="/nexus"
+        element={
+          <RequireAuth roles={NEXUS_ROLES}>
+            <Suspense fallback={<AppLoader stage="Waking Nexus" />}>
+              <NexusShell />
+            </Suspense>
+          </RequireAuth>
+        }
+      >
+        <Route index element={<NexusAssistantPage />} />
+        <Route path="missions" element={<NexusMissionsPage />} />
+        <Route path="agents" element={<NexusAgentsPage />} />
+        <Route path="notifications" element={<NexusNotificationsPage />} />
+      </Route>
       <Route
         path="/unsupported-role"
         element={
