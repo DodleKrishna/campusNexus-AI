@@ -629,6 +629,22 @@ the current demo:
   transcript reaches the brain only from memory (`AgentRuntime.transient_goal`) and is never persisted or logged.
 - Tests: `tests/test_agentos_offline_edge.py` (fake Ollama/speech, no network). Smoke: `scripts/offline_agentos_smoke.py`.
 
+## CAMPUS AI Integration (Phase 6.4)
+
+- Nexus reaches the four read-only legacy specialists (academic, placements, events, complaints) only through
+  `consult_domain_specialist` (`app/agentos/nexus.py`) -> the existing `SpecialistGateway`, with the deployment gate,
+  the student from the token and a tenant-bound session. Student role only; the Action Agent stays unreachable. A
+  register/book/submit request only consults and says the approval workflow is needed (writes are not wired into the
+  kernel yet). Brains see a tool's description (<= 200 chars) but not its fields' descriptions, so the route lives
+  in the description.
+- `GET /agentos/autonomous-missions` (`app/services/mission_visibility.py`) lists Guardian/Communication missions from
+  `agent_missions` (no new table), keyset-paginated (`limit` <= 50, `before_id`). Scope: admin = organization; HOD =
+  own + taught + headed department; faculty = own + taught classes; student = only missions that concern them, with
+  only their own status (no class counts, no step activity). Never return goal/context text, step inputs/outputs,
+  contacts, transcripts or audio.
+- `/auth` `home_route` is `/nexus` for student/faculty/HOD/admin (STAFF stays `/unsupported-role`); the legacy
+  workspace is `classic_route`. Permissions are unchanged.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so

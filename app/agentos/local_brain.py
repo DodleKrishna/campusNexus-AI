@@ -203,7 +203,21 @@ def decision_from_reply(body: Dict[str, Any], schema: Dict[str, Any]) -> Tuple[A
     except (TypeError, ValueError):
         raise BrainOutputError("MALFORMED_OUTPUT") from None
     usage = tuple(v if isinstance(v, int) else None for v in (body.get("prompt_eval_count"), body.get("eval_count")))
-    return parse_decision(raw, schema), usage  # type: ignore[return-value]
+    return parse_decision(normalize_local_output(raw), schema), usage  # type: ignore[return-value]
+
+
+# Only these kinds may carry a user-visible reply (``AgentDecision``'s contract). Local models fill the schema's
+# ``user_message`` slot for every kind; that stray text is dropped here, never moved elsewhere and never invented.
+_USER_MESSAGE_KINDS = frozenset({"complete", "ask_human"})
+
+
+def normalize_local_output(raw: Any) -> Any:
+    """Schema-compatibility shim for local models, applied before the shared ``parse_decision``: a ``user_message``
+    on any kind other than complete / ask_human is removed. Nothing else changes, so every other defect (missing
+    required fields, unknown keys or kinds, bad tool input) is still refused by the unchanged validation."""
+    if not isinstance(raw, dict) or raw.get("kind") in _USER_MESSAGE_KINDS or "user_message" not in raw:
+        return raw
+    return {key: value for key, value in raw.items() if key != "user_message"}
 
 
 class OllamaAgentBrain(_MeteredBrain):

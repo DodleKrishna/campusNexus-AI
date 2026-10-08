@@ -3,6 +3,7 @@ import { apiRequest } from "@/api/client";
 import type {
   AgentStepView,
   AssistantMissionSummary,
+  AutonomousMissionPage,
   AssistantReply,
   VoiceAssistantReply,
   AdminAttendance,
@@ -169,6 +170,7 @@ export const api = {
     }),
   assistantMissions: (limit = 20) => apiRequest<AssistantMissionSummary[]>(`/agentos/assistant/missions?limit=${limit}`),
   missionSteps: (missionId: number) => apiRequest<AgentStepView[]>(`/agentos/missions/${missionId}/steps`),
+  autonomousMissions: (limit = 30) => apiRequest<AutonomousMissionPage>(`/agentos/autonomous-missions?limit=${limit}`),
 };
 
 export const queryKeys = {
@@ -195,4 +197,5 @@ export const queryKeys = {
   facultyClass: (sessionId: number) => ["faculty", "class", sessionId] as const,
   assistantMissions: ["agentos", "assistant", "missions"] as const,
   missionSteps: (missionId: number) => ["agentos", "missions", missionId, "steps"] as const,
+  autonomousMissions: ["agentos", "autonomous-missions"] as const,
 };

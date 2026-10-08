@@ -37,7 +37,7 @@ from pydantic import ValidationError
 
 from app.agentos.brain import BrainOutputError, BrainUnavailableError
 from app.agentos.safety import redact
-from app.agentos.schemas import AgentContext, AgentDecision, DecisionKind, DomainEventType
+from app.agentos.schemas import USER_MESSAGE_MAX, AgentContext, AgentDecision, DecisionKind, DomainEventType
 from app.llm.base import LLMMalformedOutputError, LLMProviderError, LLMRateLimitError, LLMTransientError
 from app.llm.router import AIBudgetExceededError, UsageRecord, current_ai_context, estimate_cost
 from app.schemas.enums import IntelligenceLevel
@@ -324,6 +324,9 @@ class MockAgentBrain(_MeteredBrain):
             return _mock_communication_agent(context)
         tools = {t.name for t in context.allowed_tools}
         results = [o for o in context.observations if o.kind in ("tool_result", "tool_error")]
+        specialist = mock_specialist_route(context.goal) if "consult_domain_specialist" in tools else None
+        if specialist is not None:
+            return _mock_consult(context, specialist, results)
         identity = next((o for o in reversed(results) if o.source == "get_my_identity_context"), None)
         if identity is None and "get_my_identity_context" in tools:
             return AgentDecision(kind=DecisionKind.TOOL, tool_name="get_my_identity_context")
@@ -333,6 +336,36 @@ class MockAgentBrain(_MeteredBrain):
                    "your assistant requests. Other capabilities are not available yet.")
         return AgentDecision(kind=DecisionKind.COMPLETE, outcome="Answered from the identity context (mock brain).",
                              user_message=message)
+
+
+# Offline mock only (labelled not live): first matching group wins. A live brain routes from the tool's schema.
+_MOCK_SPECIALIST_KEYWORDS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("complaints", ("hostel", "complaint", "grievance", "fee", "facilit", "mess", "wifi", "maintenance")),
+    ("placements", ("placement", "internship", "job", "career", "resume", "recruit")),
+    ("events", ("event", "workshop", "club", "competition", "hackathon", "fest")),
+    ("academic", ("timetable", "schedule", "attendance", "exam", "grade", "gpa", "course", "class")),
+)
+
+
+def mock_specialist_route(goal: str) -> Optional[str]:
+    text = (goal or "").lower()
+    return next((key for key, words in _MOCK_SPECIALIST_KEYWORDS if any(w in text for w in words)), None)
+
+
+def _mock_consult(context: AgentContext, specialist: str, results: List[Any]) -> AgentDecision:
+    """Ask the routed specialist once, then reply with its answer (or say it is unavailable)."""
+    consulted = next((o for o in reversed(results) if o.source == "consult_domain_specialist"), None)
+    if consulted is None:
+        return AgentDecision(kind=DecisionKind.TOOL, tool_name="consult_domain_specialist",
+                             tool_input={"specialist": specialist, "question": context.goal[:1000]})
+    payload = consulted.data or {}
+    if consulted.kind != "tool_result":
+        return AgentDecision(kind=DecisionKind.COMPLETE, outcome=f"Specialist {specialist} unavailable (mock brain).",
+                             user_message=f"[Offline mock assistant] That specialist is not available right now "
+                                          f"({payload.get('error_code') or 'UNAVAILABLE'}).")
+    answer = str((payload.get("data") or {}).get("answer") or "The specialist had no answer.")
+    return AgentDecision(kind=DecisionKind.COMPLETE, outcome=f"Answered by the {specialist} specialist (mock brain).",
+                         user_message=f"[Offline mock assistant] {answer}"[:USER_MESSAGE_MAX])
 
 
 def _mock_guardian(context: AgentContext) -> AgentDecision:

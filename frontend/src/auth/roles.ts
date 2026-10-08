@@ -3,7 +3,7 @@ import type { Role } from "@/types/api";
 /**
  * Where each role lands after signing in. Every workspace role opens into the
  * Nexus assistant (CAMPUS AI); the role's classic workspace stays reachable
- * while it is replaced progressively.
+ * while it is replaced progressively. Mirrors the API's `home_route`.
  */
 export const HOME_ROUTES: Record<Role, string> = {
   student: "/nexus",
@@ -14,7 +14,7 @@ export const HOME_ROUTES: Record<Role, string> = {
   staff: "/unsupported-role",
 };
 
-/** The pre-Nexus workspace for each role (mirrors the API's home_route). */
+/** The pre-Nexus workspace for each role (mirrors the API's `classic_route`). */
 export const CLASSIC_ROUTES: Record<Role, string | null> = {
   student: "/student",
   faculty: "/faculty",

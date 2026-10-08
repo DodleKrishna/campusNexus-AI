@@ -7,7 +7,7 @@
  * inputs and outputs (the user's question, the brain's message, tool data) are
  * never shown, and there is no reasoning to show — the kernel stores none.
  */
-import type { AgentMissionStatus, AgentStepView } from "@/types/api";
+import type { AgentMissionStatus, AgentStepView, AutonomousMission } from "@/types/api";
 
 export type TrailTone = "cyan" | "violet" | "signal" | "amber" | "rose";
 export type TrailIcon = "nexus" | "agent" | "data" | "guardian" | "wait" | "human" | "done" | "blocked";
@@ -130,3 +130,115 @@ export const MISSION_STATUS_LABELS: Record<AgentMissionStatus, string> = {
   failed: "Failed",
   cancelled: "Cancelled",
 };
+
+// --- Autonomous Guardian / Communication missions --------------------------------------------------------------
+
+/** Request → work → result (a Nexus request answered by specialist agents). */
+export const SPECIALIST_LIFECYCLE = ["Request", "Work", "Result"] as const;
+/** Monitor → wait → wake → act → verify (an autonomous Guardian or the Communication Agent). */
+export const GUARDIAN_LIFECYCLE = ["Monitor", "Wait", "Wake", "Act", "Verify"] as const;
+
+export function specialistStage(status: AgentMissionStatus): number {
+  return missionPhase(status) === "done" || missionPhase(status) === "failed" ? 2 : 1;
+}
+
+export function guardianStage(mission: Pick<AutonomousMission, "status" | "step_count">): number {
+  const phase = missionPhase(mission.status);
+  if (phase === "done" || phase === "failed") return 4;
+  if (phase === "waiting") return 1;
+  if (mission.status === "running") return 3;
+  return mission.step_count === 0 ? 0 : 2; // pending: created (monitoring starts) or due to wake
+}
+
+const GUARDIAN_TOOLS: Record<string, { label: string; icon: TrailIcon }> = {
+  get_assignment_state: { label: "Checked the assignment", icon: "guardian" },
+  get_assignment_progress: { label: "Checked submissions", icon: "guardian" },
+  get_pending_students: { label: "Listed pending submissions", icon: "guardian" },
+  get_recent_assignment_events: { label: "Read new events", icon: "data" },
+  get_student_followup_state: { label: "Checked follow-up policy", icon: "data" },
+  request_student_followup: { label: "Requested a follow-up", icon: "agent" },
+  get_exam_state: { label: "Checked the exam", icon: "guardian" },
+  get_exam_progress: { label: "Checked exam attendance", icon: "guardian" },
+  get_exam_absentees: { label: "Listed unresolved students", icon: "guardian" },
+  get_exam_followup_state: { label: "Checked follow-up policy", icon: "data" },
+  get_recent_exam_events: { label: "Read new events", icon: "data" },
+  request_exam_followup: { label: "Requested a follow-up", icon: "agent" },
+  get_attendance_case: { label: "Checked the absence", icon: "guardian" },
+  get_student_attendance_summary: { label: "Checked attendance standing", icon: "guardian" },
+  get_recent_attendance_events: { label: "Read new events", icon: "data" },
+  get_attendance_followup_state: { label: "Checked follow-up policy", icon: "data" },
+  request_attendance_followup: { label: "Requested a follow-up", icon: "agent" },
+  get_communication_job: { label: "Checked the delivery job", icon: "data" },
+  get_allowed_channels: { label: "Checked permitted channels", icon: "data" },
+  request_delivery: { label: "Requested delivery", icon: "agent" },
+};
+
+/** Trail items from a Guardian's step identities (kind, tool, status) — the API sends nothing else. */
+export function autonomousTrail(mission: AutonomousMission): TrailItem[] {
+  const actor = mission.agent_label;
+  return mission.activity.map((step) => {
+    const key = `auto-${mission.mission_id}-${step.step_number}`;
+    if (step.status === "rejected") return { key, actor: "Safety checks", label: "Blocked a disallowed action", tone: "rose", icon: "blocked" };
+    const failed = step.status === "failed";
+    switch (step.action_type) {
+      case "tool": {
+        const known = GUARDIAN_TOOLS[step.tool_name ?? ""] ?? { label: `Used ${humanize(step.tool_name || "a tool")}`, icon: "data" as const };
+        return { key, actor, ...known, label: failed ? `${known.label} — unavailable` : known.label, tone: failed ? "amber" : "cyan" };
+      }
+      case "wait":
+        return { key, actor, label: "Waiting for the next checkpoint", tone: "amber", icon: "wait" };
+      case "complete":
+        return { key, actor, label: "Verified and completed", tone: "signal", icon: "done" };
+      case "fail":
+        return { key, actor, label: "Stopped", tone: "rose", icon: "blocked" };
+      default:
+        return { key, actor, label: humanize(step.action_type), tone: "cyan", icon: "guardian" };
+    }
+  });
+}
+
+const OWN_STATUS_LABELS: Record<string, string> = {
+  submitted: "Submitted on time",
+  late: "Submitted late",
+  pending: "Pending",
+  cancelled: "Cancelled",
+  present: "Present",
+  absent: "Absent",
+  exempt: "Exempt",
+  makeup_completed: "Makeup completed",
+  open: "Open",
+  resolved: "Resolved",
+  unresolved: "Unresolved",
+  ready: "Ready to deliver",
+  in_progress: "Delivering",
+  delivered: "Delivered",
+  acknowledged: "Acknowledged",
+  failed: "Not delivered",
+  deferred: "Deferred",
+};
+
+const PENDING_NOUN: Record<AutonomousMission["subject"]["type"], string> = {
+  assignment: "submission",
+  exam: "student",
+  attendance: "resolution",
+  communication: "delivery",
+};
+
+/** One structured progress line ("Waiting for 2 submissions", "Your status: Submitted on time"). */
+export function progressLabel(mission: AutonomousMission): string | null {
+  const p = mission.progress;
+  if (!p) return null;
+  if (p.scope === "self" || mission.subject.type === "communication") {
+    const status = p.own_status ? (OWN_STATUS_LABELS[p.own_status] ?? humanize(p.own_status)) : null;
+    if (!status) return null;
+    return mission.subject.type === "communication" ? `Follow-up ${status.toLowerCase()}` : `Your status: ${status}`;
+  }
+  if (p.total == null) return null;
+  const noun = PENDING_NOUN[mission.subject.type];
+  if (p.pending) return `Waiting for ${p.pending} ${noun}${p.pending === 1 ? "" : "s"} · ${p.resolved ?? 0} of ${p.total} resolved`;
+  return `All ${p.total} resolved`;
+}
+
+export function resultLabel(code: string | null): string | null {
+  return code ? humanize(code.toLowerCase()) : null;
+}

@@ -79,12 +79,13 @@ def test_login_returns_a_token_and_the_role_home(client) -> None:
     assert body["user"] == {
         "id": body["user"]["id"], "email": STUDENT_EMAIL, "role": "student", "display_name": "Aditi Rao",
         "student_id": "STU-DEMO-001", "department_code": "CSE", "department_name": body["user"]["department_name"],
-        "home_route": "/student",
+        "home_route": "/nexus", "classic_route": "/student",
         "organization": {"id": body["user"]["organization"]["id"], "slug": "campusnexus-demo", "name": "CampusNexus Demo Institution"},
     }
     assert "password" not in str(body).lower()
-    for spec, home in zip(DEV_ACCOUNTS, ("/student", "/faculty", "/hod", "/admin")):
-        assert _login(client, spec.email).json()["user"]["home_route"] == home
+    for spec, classic in zip(DEV_ACCOUNTS, ("/student", "/faculty", "/hod", "/admin")):
+        user = _login(client, spec.email).json()["user"]
+        assert (user["home_route"], user["classic_route"]) == ("/nexus", classic)
 
 
 def test_wrong_password_and_unknown_email_are_rejected_the_same_way(client) -> None:

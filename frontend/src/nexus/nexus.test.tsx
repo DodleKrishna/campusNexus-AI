@@ -8,7 +8,7 @@ import { missionTrail, stepToTrail } from "@/nexus/lib/activity";
 import { friendlyName } from "@/nexus/lib/names";
 import { resetPreferenceCache } from "@/nexus/state/preferences";
 import { FACULTY, STUDENT, mockApi, renderApp, signIn } from "@/test/utils";
-import type { AgentStepView, AssistantMissionSummary } from "@/types/api";
+import type { AgentStepView, AssistantMissionSummary, AutonomousMission } from "@/types/api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -210,5 +210,48 @@ describe("Nexus assistant", () => {
     expect(await screen.findByText(MISSION.assistant_message!)).toBeInTheDocument();
     const trails = await screen.findAllByRole("list", { name: "Agent activity" });
     expect(await within(trails[trails.length - 1]).findByText("Academic Agent")).toBeInTheDocument();
+  });
+
+  it("shows autonomous guardians beside specialist requests with their own lifecycle", async () => {
+    signIn(FACULTY);
+    const guardian: AutonomousMission = {
+      mission_id: 77, agent_key: "assignment_guardian", agent_label: "Assignment Guardian", kind: "guardian", status: "waiting_event",
+      waiting_for: "ASSIGNMENT_SUBMITTED", next_wake_at: "2026-10-09T10:00:00Z", step_count: 3,
+      created_at: "2026-10-08T09:00:00Z", updated_at: "2026-10-08T11:00:00Z", completed_at: null, result_code: null,
+      subject: { type: "assignment", title: "Lab 3", course_code: "CS301", due_at: "2026-10-10T18:00:00Z" },
+      progress: { scope: "class", total: 5, resolved: 2, pending: 3, own_status: null },
+      activity: [
+        { step_number: 1, action_type: "tool", tool_name: "get_assignment_progress", status: "executed", created_at: "2026-10-08T09:00:01Z" },
+        { step_number: 2, action_type: "tool", tool_name: "request_student_followup", status: "executed", created_at: "2026-10-08T09:00:02Z" },
+        { step_number: 3, action_type: "wait", tool_name: null, status: "executed", created_at: "2026-10-08T09:00:03Z" },
+      ],
+    };
+    const calls = mockApi((url) => {
+      if (url.endsWith("/auth/me")) return { body: FACULTY };
+      if (url.endsWith("/health")) return { body: HEALTH };
+      if (url.includes("/agentos/assistant/missions")) return { body: [MISSION] };
+      if (url.includes("/agentos/autonomous-missions")) return { body: { items: [guardian], next_before_id: null } };
+      return { body: [] };
+    });
+    renderApp("/nexus/missions");
+    const row = await screen.findByRole("button", { name: /Assignment Guardian · Lab 3/ });
+    expect(within(row).getByText("Autonomous guardian")).toBeInTheDocument();
+    expect(within(row).getByText(/Waiting for 3 submissions · 2 of 5 resolved/)).toBeInTheDocument();
+    const lifecycle = within(row).getByRole("list", { name: "Mission lifecycle" });
+    expect(within(lifecycle).getByText("Wait").closest("li")).toHaveAttribute("aria-current", "step");
+    const request = screen.getByRole("button", { name: /Am I eligible to write my OS exam?/ });
+    expect(within(request).getByText("Specialist agents")).toBeInTheDocument();
+    expect(within(within(request).getByRole("list", { name: "Mission lifecycle" })).getByText("Result").closest("li")).toHaveAttribute("aria-current", "step");
+
+    await userEvent.click(row);
+    const trails = await screen.findAllByRole("list", { name: "Agent activity" });
+    const trail = trails[trails.length - 1];
+    expect(within(trail).getByText(/Requested a follow-up/)).toBeInTheDocument();
+    expect(within(trail).getByText(/Waiting for the next checkpoint/)).toBeInTheDocument();
+    // Guardian rows never fetch raw steps (structured activity comes with the listing).
+    expect(calls.some((c) => c.url.includes("/agentos/missions/77/steps"))).toBe(false);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Your requests" }));
+    expect(screen.queryByRole("button", { name: /Assignment Guardian/ })).not.toBeInTheDocument();
   });
 });

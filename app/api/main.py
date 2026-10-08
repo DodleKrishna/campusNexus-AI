@@ -129,7 +129,8 @@ def create_app(
                                                                                connectivity=connectivity)
     fastapi_app.state.connectivity = connectivity
     fastapi_app.state.agent_runtime = build_agent_runtime(brain, clock=lambda: fastapi_app.state.clock(),
-                                                          connectivity=connectivity)
+                                                          connectivity=connectivity,
+                                                          specialists=fastapi_app.state.specialist_gateway)
     # Phase 6: in-app Nexus voice (POST /agentos/assistant/voice). CAMPUSNEXUS_SPEECH_MODE / CAMPUSNEXUS_TTS_MODE.
     fastapi_app.state.speech_router, fastapi_app.state.speech_router_unavailable = speech_router, None
     if speech_router is None:
@@ -160,6 +161,7 @@ def create_app(
     fastapi_app.include_router(enterprise.router)
     fastapi_app.include_router(agentos.router)
     fastapi_app.include_router(agentos.assistant_router)
+    fastapi_app.include_router(agentos.autonomous_router)
     fastapi_app.include_router(assignments.router)
     fastapi_app.include_router(exams.router)
     fastapi_app.include_router(attendance.router)

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import datetime
-from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, cast
+from typing import Any, ClassVar, Dict, FrozenSet, List, Literal, Optional, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -294,18 +294,90 @@ NEXUS_TOOLS = (GetMyIdentityContext, GetMyActiveMissions, GetMyAssignments, GetA
                GetMyAttendanceSummary)
 
 
-def nexus_spec() -> AgentSpec:
+# --- Phase 6.4: the legacy read-only domain specialists, reached through the existing SpecialistGateway ------------
+
+CONSULT_SPECIALIST_TOOL = "consult_domain_specialist"
+MAX_SPECIALIST_ANSWER_CHARS = 1200
+
+
+class ConsultSpecialistInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Intent definitions live in the schema (both real brains send it). The keys are the student chat keys.
+    specialist: Literal["academic", "placements", "events", "complaints"] = Field(description=(
+        "academic: timetable, class schedule, attendance and its policy, exams and exam eligibility, courses, grades. "
+        "placements: internships, jobs, placement opportunities, skill gaps, applications. "
+        "events: campus events, workshops, clubs, competitions and whether they clash with my classes. "
+        "complaints: hostel, fees, facilities, IT and other campus services, grievance cases and their policies. "
+        "Requests to register, book, submit or file something: consult the matching specialist for the candidates "
+        "and their checks only. Nothing is registered or submitted from this assistant; say that the action needs "
+        "the approval workflow."))
+    question: str = Field(min_length=1, max_length=1000, description="The student's question, in their own words.")
+
+
+class ConsultDomainSpecialist(AgentTool):
+    """Read-only bridge to the registered legacy specialists (Academic, Career, Events, Campus Services). It reuses
+    ``SpecialistGateway`` exactly as student agent chat does -- the same deployment gate, the student from the caller's
+    membership, a session bound to the caller's organization -- so the Action Agent stays unreachable and nothing here
+    can write. Policy answers come from the specialists' own RAG evidence."""
+
+    name: ClassVar[str] = CONSULT_SPECIALIST_TOOL
+    # The brain sees this text (clipped to 200 chars) but not the input fields' descriptions, so it carries the route.
+    description: ClassVar[str] = ("Read-only, cited answers. academic: my timetable, attendance, exams, courses, policy. "
+                                  "placements: jobs, internships. events: campus events. complaints: hostel, fees, "
+                                  "facilities. Never guess these.")
+    input_model = ConsultSpecialistInput
+    required_roles = frozenset({UserRole.STUDENT})  # the gateway is student-scoped; staff have their own scoped chats
+
+    def __init__(self, gateway: Any) -> None:
+        self._gateway = gateway
+
+    def execute(self, context: ToolContext, args: BaseModel) -> ToolResult:
+        from app.llm.base import LLMProviderError, LLMTransientError
+        from app.llm.router import AIBudgetExceededError
+        from app.services.agent_deployments import DeploymentError, require_active
+
+        request = cast(ConsultSpecialistInput, args)
+        if not context.student_code:
+            raise ToolExecutionError("NOT_A_STUDENT")
+        try:
+            require_active(context.session, request.specialist, context.role.value)
+        except DeploymentError as exc:
+            raise ToolExecutionError(exc.code) from None
+        try:
+            answer = self._gateway.consult(request.specialist, request.question, student_id=context.student_code,
+                                           organization_id=context.organization_id)
+        except AIBudgetExceededError:
+            raise ToolExecutionError("AI_BUDGET_EXCEEDED") from None
+        except LLMTransientError:
+            raise ToolExecutionError("PROVIDER_UNAVAILABLE") from None
+        except LLMProviderError:
+            raise ToolExecutionError("PROVIDER_ERROR") from None
+        return ToolResult(ok=True, data={
+            "specialist": request.specialist, "agent": answer.agent, "verification_status": answer.verification_status,
+            "answer": answer.answer[:MAX_SPECIALIST_ANSWER_CHARS],
+            "sources": [{"document_id": e.document_id, "title": e.title, "source": e.source} for e in answer.evidence[:5]],
+            "issues": [issue[:200] for issue in answer.issues[:5]]})
+
+
+def nexus_spec(extra_tools: FrozenSet[str] = frozenset()) -> AgentSpec:
     return AgentSpec(
         NEXUS_AGENT_KEY, "Personal assistant and orchestrator for the signed-in user.",
-        allowed_tools=frozenset(t.name for t in NEXUS_TOOLS),
+        allowed_tools=frozenset(t.name for t in NEXUS_TOOLS) | extra_tools,
         allowed_delegate_agents=FUTURE_DELEGATES, supported_roles=NEXUS_ROLES,
     )
 
 
-def register_nexus(agents: AgentRegistry, tools: ToolRegistry) -> None:
+def register_nexus(agents: AgentRegistry, tools: ToolRegistry, specialists: Any = None) -> None:
+    """``specialists``: the app's ``SpecialistGateway``. Without one (e.g. the worker script) Nexus has no specialist
+    tool and says the capability is unavailable -- never a placeholder."""
     for tool_class in NEXUS_TOOLS:
         tools.register(tool_class())
-    agents.register(nexus_spec())
+    extra: FrozenSet[str] = frozenset()
+    if specialists is not None:
+        tools.register(ConsultDomainSpecialist(specialists))
+        extra = frozenset({CONSULT_SPECIALIST_TOOL})
+    agents.register(nexus_spec(extra))
 
 
 # --- The PersonalAssistant service ---------------------------------------------------------------------------------

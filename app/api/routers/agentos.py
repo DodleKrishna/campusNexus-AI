@@ -10,10 +10,13 @@ anything else is a 404.
 Phase 6: ``POST /agentos/assistant/voice`` -- one bounded WAV utterance (``Content-Type: audio/wav`` body, at most
 ``MAX_UPLOAD_BYTES``) through the configured speech providers and the same Nexus assistant. The transcript is never
 stored or returned; the reply text and (when TTS works) a WAV reply are.
+
+CAMPUS AI: ``GET /agentos/autonomous-missions`` -- the Guardian and Communication missions the caller may see
+(``app.services.mission_visibility``), as structured status/progress only.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,9 +29,11 @@ from app.agentos.voice_assistant import MAX_UPLOAD_BYTES, WAV_CONTENT_TYPES, Voi
 from app.api.auth_deps import AuthenticatedUser, require_authenticated_user
 from app.api.deps import get_session
 from app.llm.router import ai_context
+from app.services.mission_visibility import MAX_LIMIT, AutonomousMissionPage, list_autonomous_missions
 
 router = APIRouter(prefix="/agentos/missions", tags=["agentos"])
 assistant_router = APIRouter(prefix="/agentos/assistant", tags=["agentos"])
+autonomous_router = APIRouter(prefix="/agentos/autonomous-missions", tags=["agentos"])
 
 
 def get_agent_runtime(request: Request) -> AgentRuntime:
@@ -167,3 +172,18 @@ def assistant_missions(limit: int = Query(default=20, ge=1, le=50), actor: Missi
         return PersonalAssistant(runtime).list_missions(session, actor, limit=limit)
     except AgentOSError as exc:
         raise _http(exc) from None
+
+
+# --- CAMPUS AI: autonomous (Guardian / Communication) mission visibility -------------------------------------------
+
+
+@autonomous_router.get("", response_model=AutonomousMissionPage)
+def autonomous_missions(limit: int = Query(default=20, ge=1, le=MAX_LIMIT), before_id: Optional[int] = Query(default=None, ge=1),
+                        actor: MissionActor = Depends(_actor), session: Session = Depends(get_session),
+                        runtime: AgentRuntime = Depends(get_agent_runtime)) -> AutonomousMissionPage:
+    """Tenant, role and subject scoped; newest first, keyset-paginated with ``before_id``."""
+    try:
+        runtime._check_session(session, actor)
+    except AgentOSError as exc:
+        raise _http(exc) from None
+    return list_autonomous_missions(session, actor, limit=limit, before_id=before_id)

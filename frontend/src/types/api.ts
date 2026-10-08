@@ -11,6 +11,8 @@ export interface AuthUser {
   department_code: string | null;
   department_name: string | null;
   home_route: string;
+  /** The pre-Nexus role workspace (compatibility link). */
+  classic_route?: string | null;
   organization?: { id: number; slug: string; name: string };
 }
 
@@ -869,6 +871,35 @@ export interface AssistantMissionSummary {
   step_count: number;
   created_at: string;
   updated_at: string;
+}
+
+/** An autonomous Guardian / Communication mission the caller may see (GET /agentos/autonomous-missions). */
+export type AutonomousAgentKey = "assignment_guardian" | "exam_guardian" | "attendance_guardian" | "communication_agent";
+
+export interface AutonomousMission {
+  mission_id: number;
+  agent_key: AutonomousAgentKey;
+  agent_label: string;
+  kind: "guardian" | "communication";
+  status: AgentMissionStatus;
+  waiting_for: string | null;
+  next_wake_at: string | null;
+  step_count: number;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  /** The supervisor's terminal machine code (staff only). */
+  result_code: string | null;
+  subject: { type: "assignment" | "exam" | "attendance" | "communication"; title: string; course_code: string | null; due_at: string | null };
+  /** "class": counts over the targets (staff). "self": only the student's own state. */
+  progress: { scope: "class" | "self"; total: number | null; resolved: number | null; pending: number | null; own_status: string | null } | null;
+  /** Step identities only (staff): never inputs, outputs or messages. */
+  activity: { step_number: number; action_type: string; tool_name: string | null; status: AgentStepStatus; created_at: string }[];
+}
+
+export interface AutonomousMissionPage {
+  items: AutonomousMission[];
+  next_before_id: number | null;
 }
 
 /** One persisted kernel transition. Summaries are redacted structured data, never reasoning. */

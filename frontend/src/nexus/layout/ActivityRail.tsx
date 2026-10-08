@@ -58,20 +58,21 @@ function ActiveMissions() {
   const { active, isLoading, isError } = useActiveMissions();
   if (isLoading) return <Loading />;
   if (isError) return <QuietEmpty title="Missions are unavailable right now." />;
-  if (active.length === 0) return <QuietEmpty icon={<Target />} title="No active missions" hint="Missions you start with Nexus show up here." />;
+  if (active.length === 0) return <QuietEmpty icon={<Target />} title="No active missions" hint="Missions you start with Nexus, and guardians watching for you, show up here." />;
   return (
     <ul className="space-y-2">
       {active.slice(0, 4).map((m) => (
-        <li key={m.mission_id}>
-          <Link to={`/nexus/missions?focus=${m.mission_id}`} className="block rounded-xl border border-line bg-white/[0.02] px-3 py-2.5 transition-colors hover:border-line-strong hover:bg-white/[0.04]">
+        <li key={m.id}>
+          <Link to={`/nexus/missions?focus=${m.id}`} className="block rounded-xl border border-line bg-white/[0.02] px-3 py-2.5 transition-colors hover:border-line-strong hover:bg-white/[0.04]">
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[11px] text-haze">Mission #{m.mission_id}</span>
+              <span className={cn("text-[11px]", m.agent ? "text-violet" : "text-haze")}>{m.agent ?? `Mission #${m.id}`}</span>
               <Pill tone={missionPhase(m.status) === "waiting" ? "amber" : "cyan"}>
                 <StatusDot tone={missionPhase(m.status) === "waiting" ? "amber" : "cyan"} live />
                 {MISSION_STATUS_LABELS[m.status]}
               </Pill>
             </div>
-            <p className="mt-1.5 line-clamp-2 text-[13px] text-mist">{m.goal}</p>
+            <p className="mt-1.5 line-clamp-2 text-[13px] text-mist">{m.title}</p>
+            {m.detail && <p className="mt-1 text-[11px] text-haze">{m.detail}</p>}
           </Link>
         </li>
       ))}

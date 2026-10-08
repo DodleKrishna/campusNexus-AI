@@ -22,10 +22,13 @@ from app.db.models.organization import Organization
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-# Where each role lands after signing in (the React router mirrors this).
-HOME_ROUTES = {"student": "/student", "faculty": "/faculty", "hod": "/hod", "admin": "/admin",
+# Where each role lands after signing in (the React router mirrors this): the CAMPUS AI Nexus experience. Role
+# permissions are unchanged -- every Nexus tool and API still authorizes by the token's membership role.
+HOME_ROUTES = {"student": "/nexus", "faculty": "/nexus", "hod": "/nexus", "admin": "/nexus",
                # STAFF has no workspace; it is never routed into the admin console.
                "staff": "/unsupported-role"}
+# The pre-Nexus role workspaces stay reachable (compatibility link) until they are retired.
+CLASSIC_ROUTES = {"student": "/student", "faculty": "/faculty", "hod": "/hod", "admin": "/admin"}
 
 
 class LoginRequest(BaseModel):
@@ -48,6 +51,7 @@ class AuthUserView(BaseModel):
     department_code: Optional[str] = None
     department_name: Optional[str] = None
     home_route: str
+    classic_route: Optional[str] = None
     organization: OrganizationView
 
 
@@ -65,6 +69,7 @@ def _user_view(session: Session, user: AuthenticatedUser) -> AuthUserView:
         id=user.account_id, email=user.email, role=user.role.value, display_name=user.display_name,
         student_id=user.student_id, department_code=department.code if department else None,
         department_name=department.name if department else None, home_route=HOME_ROUTES.get(user.role.value, "/"),
+        classic_route=CLASSIC_ROUTES.get(user.role.value),
         organization=OrganizationView(id=organization.id, slug=organization.slug, name=organization.name),
     )
 
