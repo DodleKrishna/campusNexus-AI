@@ -1,7 +1,7 @@
 """Speech provider routing and speech telemetry (AgentOS V2 Phase 6).
 
 ``CAMPUSNEXUS_SPEECH_MODE`` (STT) and ``CAMPUSNEXUS_TTS_MODE`` (TTS; defaults to the speech mode) choose between the
-cloud providers (Groq Whisper / Groq Orpheus, Phase 5.1) and the local ones (whisper.cpp / Piper):
+cloud providers (Groq Whisper / Groq Orpheus, Phase 5.1) and the local ones (whisper.cpp / Kokoro or Piper):
 
 * ``cloud`` -- cloud only; refused in the offline mode, never a local substitute.
 * ``local`` -- local only; zero cloud speech calls.
@@ -23,7 +23,8 @@ from typing import Any, Dict, Optional, Tuple
 from app.agentos.connectivity import ConnectivityService, ConnectivityState, cloud_allowed
 from app.communication.voice.audio import BYTES_PER_SECOND
 from app.communication.voice.local_speech import (
-    LocalWhisperSTTProvider, PiperConfig, PiperTTSProvider, WhisperConfig,
+    LOCAL_TTS_PROVIDER_ENV, KokoroConfig, KokoroTTSProvider, LocalWhisperSTTProvider, PiperConfig, PiperTTSProvider,
+    WhisperConfig,
 )
 from app.communication.voice.speech import (
     GroqHTTP, GroqSpeechToText, GroqTextToSpeech, SpeechProviderError, Transcript, VoiceProviderConfig,
@@ -34,6 +35,7 @@ from app.schemas.enums import IntelligenceLevel
 SPEECH_MODE_ENV, TTS_MODE_ENV = "CAMPUSNEXUS_SPEECH_MODE", "CAMPUSNEXUS_TTS_MODE"
 CLOUD, LOCAL, AUTO = "cloud", "local", "auto"
 MODES = (CLOUD, LOCAL, AUTO)
+LOCAL_TTS_PROVIDERS = ("kokoro", "piper")
 TRANSPORT_CODES = frozenset({"PROVIDER_UNAVAILABLE", "PROVIDER_TIMEOUT"})
 
 
@@ -184,6 +186,18 @@ class SpeechRouter:
                 "local_ready": self._ready(self.local_stt) and self._ready(self.local_tts)}
 
 
+def local_tts_from_env() -> MeteredTTS:
+    """``CAMPUSNEXUS_LOCAL_TTS_PROVIDER``: kokoro or piper (unset = piper). Exactly one is built, so a configured but
+    unavailable provider reports unavailable instead of quietly using the other one."""
+    provider = (os.environ.get(LOCAL_TTS_PROVIDER_ENV) or "piper").strip().lower()
+    if provider not in LOCAL_TTS_PROVIDERS:
+        raise ValueError(f"LOCAL_TTS_PROVIDER_UNSUPPORTED: {LOCAL_TTS_PROVIDER_ENV} must be one of "
+                         f"{', '.join(LOCAL_TTS_PROVIDERS)}")
+    if provider == "kokoro":
+        return MeteredTTS(KokoroTTSProvider(KokoroConfig.from_env()), "kokoro", KokoroTTSProvider.model_name)
+    return MeteredTTS(PiperTTSProvider(PiperConfig.from_env()), "piper", "piper")
+
+
 def speech_router_from_env(connectivity: ConnectivityService) -> SpeechRouter:
     """Raises ``ValueError`` on an invalid mode/timeout. Unconfigured providers stay None / report unavailable."""
     stt_mode = _mode(SPEECH_MODE_ENV, CLOUD)
@@ -198,6 +212,6 @@ def speech_router_from_env(connectivity: ConnectivityService) -> SpeechRouter:
                 cloud_tts = MeteredTTS(GroqTextToSpeech(http, config.tts_model, config.tts_voice), "groq",
                                        config.tts_model)
     local_stt = MeteredSTT(LocalWhisperSTTProvider(WhisperConfig.from_env()), "whisper_cpp", "whisper.cpp")
-    local_tts = MeteredTTS(PiperTTSProvider(PiperConfig.from_env()), "piper", "piper")
+    local_tts = local_tts_from_env()
     return SpeechRouter(stt_mode=stt_mode, tts_mode=tts_mode, connectivity=connectivity, cloud_stt=cloud_stt,
                         local_stt=local_stt, cloud_tts=cloud_tts, local_tts=local_tts)
