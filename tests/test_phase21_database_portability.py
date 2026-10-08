@@ -49,6 +49,9 @@ from scripts.seed_database import reset_refusal
 
 REPO = Path(__file__).resolve().parents[1]
 PG_URL = "postgresql://db_user:S3cret-pw@db.example.supabase.co:5432/postgres?sslmode=require"
+# Engine-property checks use the pure-Python pg8000 driver: psycopg is installed on some hosts but cannot load
+# its native libpq there (blocked DLL), and pg8000 is the supported driver for exactly that environment.
+UNREACHABLE_PG8000 = "postgresql+pg8000://u:p@127.0.0.1:1/db"  # nothing listens there
 
 
 # --- Connection selection ------------------------------------------------------------------------------
@@ -97,9 +100,9 @@ def test_sqlite_engine_keeps_foreign_keys_and_thread_sharing(tmp_path) -> None:
 
 
 def test_postgres_engine_is_pooled_pre_pinged_and_never_connects_on_creation() -> None:
-    pytest.importorskip("psycopg")
-    engine = create_database_engine(normalize_database_url("postgresql://u:p@127.0.0.1:1/db"))  # nothing listens there
-    assert engine.dialect.name == "postgresql" and engine.dialect.driver == "psycopg"
+    pytest.importorskip("pg8000")
+    engine = create_database_engine(normalize_database_url(UNREACHABLE_PG8000))
+    assert engine.dialect.name == "postgresql" and engine.dialect.driver == "pg8000"
     assert engine.pool._pre_ping is True
     assert engine.pool.size() == 5 and engine.pool._max_overflow == 5 and engine.pool._recycle == 1800
     assert engine.pool.checkedout() == 0
@@ -107,8 +110,8 @@ def test_postgres_engine_is_pooled_pre_pinged_and_never_connects_on_creation() -
 
 
 def test_importing_the_api_never_connects_to_the_configured_database() -> None:
-    pytest.importorskip("psycopg")
-    env = {**os.environ, "CAMPUSNEXUS_DATABASE_URL": "postgresql://u:p@127.0.0.1:1/unreachable",
+    pytest.importorskip("pg8000")
+    env = {**os.environ, "CAMPUSNEXUS_DATABASE_URL": UNREACHABLE_PG8000,
            "CAMPUSNEXUS_EMBEDDING_PROVIDER": "deterministic"}
     result = subprocess.run([sys.executable, "-c", "import app.api.main"], cwd=REPO, env=env,
                             capture_output=True, text=True, timeout=180)

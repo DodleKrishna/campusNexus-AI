@@ -264,7 +264,8 @@ def test_audit_log_merges_mission_and_operations_sources_read_only(client, sessi
     ai = client.get("/admin/ai-operations", headers=admin).json()
     assert ai["failed_missions"] == 1 and ai["provider_errors"] == 1 and ai["rate_limit_incidents"] == 1
     assert ai["rag_ready"] and ai["database_ready"] and ai["provider"] == "mock" and ai["live"] is False
-    assert ai["token_usage"] == "Not recorded by CampusNexus."
+    # Token usage is reported per call only when the provider supplies it, and never estimated.
+    assert "never estimated" in ai["token_usage"] and "unavailable" in ai["token_usage"]
     assert client.get("/admin/dashboard", headers=admin).json()["system_errors_24h"] == 2  # the outage event + the failed mission
     failed = ask(client, admin, "enquiry", "Are there any failed agent workflows today?")["answer"]
     assert failed == "In the last 24 hours: 1 failed mission; audit events: 1 provider unavailable."
