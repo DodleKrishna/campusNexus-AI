@@ -296,7 +296,14 @@ class GroqAgentBrain(_MeteredBrain):
             error_kind = "PROVIDER_ERROR"
             raise BrainUnavailableError("provider error", code=error_kind) from None
         finally:
-            self._record(context, started, decision is not None, error_kind, take_usage() if take_usage else None)
+            self._record(context, started, decision is not None, error_kind, take_usage() if take_usage else None,
+                         model=getattr(self._provider, "last_model_used", None))
+
+
+class OpenRouterAgentBrain(GroqAgentBrain):
+    """The same strict-JSON decision step over OpenRouter's bounded model chain (``OpenRouterLLMProvider``)."""
+
+    provider_name = "openrouter"
 
 
 class MockAgentBrain(_MeteredBrain):
@@ -496,6 +503,19 @@ def build_agent_brain(name: Optional[str] = None, *, recorder: Any = None, provi
             except LLMProviderError:  # missing GROQ_API_KEY / httpx, or an incompatible model id
                 return UnavailableBrain("groq", "PROVIDER_NOT_CONFIGURED")
         return GroqAgentBrain(provider, recorder=recorder, max_history=history)
+    if key == "openrouter":  # CAMPUS AI: OpenRouter (OPENROUTER_API_KEY), same contract as groq
+        from app.agentos.connectivity import cloud_allowed
+
+        if not cloud_allowed():
+            return UnavailableBrain("openrouter", "CLOUD_DISABLED_OFFLINE")
+        if provider is None:
+            from app.llm.providers.openrouter import OpenRouterLLMProvider
+
+            try:
+                provider = OpenRouterLLMProvider(timeout=timeout, max_retries=MAX_RETRIES)
+            except LLMProviderError:  # missing OPENROUTER_API_KEY / httpx, or an invalid model id
+                return UnavailableBrain("openrouter", "PROVIDER_NOT_CONFIGURED")
+        return OpenRouterAgentBrain(provider, recorder=recorder, max_history=history)
     if key == "ollama":  # Phase 6: the local brain on its own (see app.agentos.brain_router for routing modes)
         from app.agentos.local_brain import build_local_brain
 

@@ -29,7 +29,7 @@ from app.agentos.schemas import AgentContext, AgentDecision
 MODE_ENV = "CAMPUSNEXUS_INTELLIGENCE_MODE"
 CLOUD, LOCAL, AUTO = "cloud", "local", "auto"
 MODES = (CLOUD, LOCAL, AUTO)
-CLOUD_BRAINS = frozenset({"groq"})
+CLOUD_BRAINS = frozenset({"groq", "openrouter"})
 # Cloud failures that mean "the cloud could not be reached", the only ones that may move a decision to the local brain.
 TRANSPORT_CODES = frozenset({"PROVIDER_UNAVAILABLE", "PROVIDER_TIMEOUT"})
 

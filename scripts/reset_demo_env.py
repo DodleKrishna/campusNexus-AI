@@ -32,15 +32,21 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from sqlalchemy import select
+
 from app.auth.accounts import DEV_ACCOUNTS, resolve_seed_password, seed_dev_accounts
+from app.db.models.organization import Organization
 from app.db.session import create_db_engine, create_session_factory, init_db
+from app.db.tenancy import DEFAULT_ORGANIZATION_SLUG
 from app.rag.config import get_rag_config
 from app.rag.embeddings import get_embedding_provider
 from app.rag.ingest import ingest_policy_directory
 from app.rag.vector_store import PolicyVectorStore
 from app.services.class_schedule import local
+from scripts.index_campus_knowledge import index as index_campus_knowledge
 from scripts.schedule_demo_class import schedule_extra_class, schedule_tomorrow_afternoon
 from scripts.seed_data import build_summary, run_seed
+from scripts.seed_demo_campus import run_demo_enrichment
 
 DEMO_DIR = REPO_ROOT / "data" / "demo"
 DEMO_DB_PATH = DEMO_DIR / "campusnexus_demo.db"
@@ -116,6 +122,10 @@ def main() -> None:
             f"{local(demo_class.scheduled_start):%H:%M}-{local(demo_class.scheduled_end):%H:%M} IST today"
             if demo_class else None
         )
+        organization_id = session.execute(select(Organization.id).where(
+            Organization.slug == DEFAULT_ORGANIZATION_SLUG)).scalar_one()
+    # CAMPUS AI: assignments, managed exams, class-session history, preferences (relative to now; SQLite only).
+    enrichment = run_demo_enrichment(engine)
     engine.dispose()
 
     config = get_rag_config(chroma_path=DEMO_CHROMA_PATH, embedding_provider=args.embedding)
@@ -125,11 +135,17 @@ def main() -> None:
     )
     ingest = ingest_policy_directory(config.policy_dir, vector_store=vector_store)
     chunk_count = vector_store.count()
+    knowledge = index_campus_knowledge(organization_id=organization_id, chroma_path=DEMO_CHROMA_PATH,
+                                       embedding=args.embedding)
 
     if summary.students == 0 or chunk_count == 0:
         raise SystemExit(f"Demo environment is incomplete: students={summary.students}, policy chunks={chunk_count}.")
 
     print(f"Demo database:     {DEMO_DB_PATH}  ({summary.students} students, {summary.events} events)")
+    print(f"CAMPUS AI data:    {enrichment.assignments} assignments, {enrichment.exams} managed exams, "
+          f"{enrichment.attendance_sessions} held class sessions, {enrichment.guardian_missions} Guardian missions")
+    print(f"CAMPUS AI knowledge: {knowledge.document_count} documents, {knowledge.chunk_count} chunks "
+          f"(organization {knowledge.organization_id})")
     print(f"Demo policy store: {DEMO_CHROMA_PATH}  ({ingest.document_count} documents, {chunk_count} chunks, "
           f"embedding={embedding_provider.name})")
     print("\nPoint the API at it (same terminal as uvicorn):")

@@ -33,6 +33,10 @@ class RetrievalQuery(BaseModel):
     visibility: Optional[str] = None
     document_id: Optional[str] = None
     top_k: int = Field(default=5, ge=1, le=50)
+    # Organization-scoped corpora (CAMPUS AI knowledge): only chunks indexed for this organization.
+    organization_id: Optional[int] = None
+    # Any of these document types (combined with ``document_type`` is not supported: this one wins).
+    document_types: Optional[List[str]] = None
 
 
 class RetrievalResult(BaseModel):
@@ -52,6 +56,8 @@ class RetrievalResult(BaseModel):
     source: NonBlankStr
     text: NonBlankStr
     score: float = Field(ge=0.0, le=1.0)
+    organization_id: Optional[int] = None
+    source_id: Optional[str] = None
 
 
 def _parse_optional_date(value: str) -> Optional[date]:
@@ -74,6 +80,8 @@ def _row_from_metadata(chunk_id: str, text: str, metadata: Dict[str, Any]) -> Di
         "visibility": metadata["visibility"],
         "source": metadata["source"],
         "chunk_index": metadata["chunk_index"],
+        "organization_id": metadata.get("organization_id"),
+        "source_id": metadata.get("source_id"),
     }
 
 
@@ -124,6 +132,8 @@ def _to_result(score: float, row: Dict[str, Any]) -> RetrievalResult:
         source=row["source"],
         text=row["text"],
         score=max(0.0, min(1.0, score)),
+        organization_id=row.get("organization_id"),
+        source_id=row.get("source_id"),
     )
 
 
@@ -159,6 +169,8 @@ class PolicyRetriever:
                 "audience": query.audience,
                 "visibility": query.visibility,
                 "document_id": query.document_id,
+                "organization_id": query.organization_id,
+                **({"document_type": {"$in": list(query.document_types)}} if query.document_types else {}),
             }
         )
 

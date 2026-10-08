@@ -43,6 +43,9 @@ from app.rag.vector_store import PolicyVectorStore
 from app.schemas.enums import AgentName
 from app.services.agent_chat import SpecialistGateway
 from app.services.knowledge import KnowledgeService
+from app.agentos.nexus import GroundedRoutingBrain
+from app.rag.campus_knowledge import CampusKnowledge, build_campus_knowledge, open_campus_store
+from app.services.grounded_answers import build_grounded_service, classify as grounded_classify
 from app.tools.build import build_default_tool_registry
 from app.tools.registry import ToolGateway
 
@@ -76,6 +79,7 @@ def create_app(
     agent_brain: AgentBrain | None = None,
     connectivity: ConnectivityService | None = None,
     speech_router: SpeechRouter | None = None,
+    campus_knowledge: CampusKnowledge | None = None,
 ) -> FastAPI:
     """Build a fully-wired FastAPI app.
 
@@ -127,10 +131,19 @@ def create_app(
     connectivity = connectivity or getattr(agent_brain, "connectivity", None) or connectivity_from_env()
     brain = agent_brain if agent_brain is not None else build_configured_brain(recorder=llm_provider.recorder,
                                                                                connectivity=connectivity)
+    # CAMPUS AI: grounded answers (SQL facts + organization-scoped knowledge + validated phrasing). Recognised
+    # campus-records questions are routed to them deterministically; everything else reaches the brain unchanged.
+    grounded = None
+    if campus_knowledge is not None:
+        grounded = build_grounded_service(campus_knowledge, llm_provider, clock=lambda: fastapi_app.state.clock(),
+                                          connectivity=connectivity)
+        brain = GroundedRoutingBrain(brain, grounded_classify)
+    fastapi_app.state.grounded_answers = grounded
     fastapi_app.state.connectivity = connectivity
     fastapi_app.state.agent_runtime = build_agent_runtime(brain, clock=lambda: fastapi_app.state.clock(),
                                                           connectivity=connectivity,
-                                                          specialists=fastapi_app.state.specialist_gateway)
+                                                          specialists=fastapi_app.state.specialist_gateway,
+                                                          grounded=grounded)
     # Phase 6: in-app Nexus voice (POST /agentos/assistant/voice). CAMPUSNEXUS_SPEECH_MODE / CAMPUSNEXUS_TTS_MODE.
     fastapi_app.state.speech_router, fastapi_app.state.speech_router_unavailable = speech_router, None
     if speech_router is None:
@@ -180,6 +193,9 @@ def _build_default_app() -> FastAPI:
     knowledge_service = KnowledgeService(retriever=retriever)
 
     llm_provider = build_routed_provider(None)  # CAMPUSNEXUS_LLM_PROVIDER, defaults to "mock"; Groq = 20B + 120B
+    # CAMPUS AI institutional knowledge: its own collection in the same Chroma store (scripts/index_campus_knowledge.py).
+    campus_knowledge = build_campus_knowledge(open_campus_store(chroma_path=config.chroma_path,
+                                                                embedding_provider=embedding_provider))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -201,7 +217,8 @@ def _build_default_app() -> FastAPI:
         yield
 
     return create_app(
-        session_factory=session_factory, knowledge_service=knowledge_service, llm_provider=llm_provider, lifespan=lifespan
+        session_factory=session_factory, knowledge_service=knowledge_service, llm_provider=llm_provider, lifespan=lifespan,
+        campus_knowledge=campus_knowledge,
     )
 
 

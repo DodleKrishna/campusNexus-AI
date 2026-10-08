@@ -645,6 +645,34 @@ the current demo:
 - `/auth` `home_route` is `/nexus` for student/faculty/HOD/admin (STAFF stays `/unsupported-role`); the legacy
   workspace is `classic_route`. Permissions are unchanged.
 
+## CAMPUS AI: Demo Data, Grounded Answers & OpenRouter
+
+- DATABASE = live facts, VECTOR DB = institutional knowledge, LLM = phrasing only. `app/services/grounded_answers.py`
+  classifies a question with deterministic keyword rules (`classify`; action requests such as "register me" are
+  never answered from records), builds the minimum caller-scoped facts (`app/services/grounded_facts.py`, reusing the
+  existing services and rule modules) and at most four knowledge chunks, renders a complete answer in code, and only
+  then lets a model rephrase it from a `GroundedPrompt` (target under 4K tokens; no rows, documents, full history or
+  mission history). `validate_synthesis` rejects unknown fact/source ids, numbers not in the context and missing
+  required names; any rejection or provider failure keeps the deterministic answer (`answered_by=deterministic`).
+  No record = `NOT_FOUND_ANSWER`. Never let a model compute or decide a fact.
+- Nexus reaches it through `answer_from_campus_records` (all Nexus roles, deployment-gated by `INTENT_PRODUCT`).
+  `GroundedRoutingBrain` routes recognised questions to that tool and replies with its answer without an AI decision;
+  everything else goes to the wrapped brain unchanged. It is enabled when `create_app(campus_knowledge=...)` is given.
+  Faculty/HOD facts start from their own `teaching_assignments` only.
+- Knowledge: `data/campus_ai_knowledge/*.md` (labelled demo institution documents) in the `campus_ai_knowledge`
+  collection of the same Chroma store, every chunk tagged with `organization_id`; every search filters by the caller's
+  organization (`app/rag/campus_knowledge.py`). The legacy `data/policies` corpus is unchanged.
+- Demo data: `scripts/seed_demo_campus.py` (called by `reset_demo_env.py`) enriches the base seed relative to now;
+  SQLite only (`require_local_sqlite`), idempotent, live assignments/exams through the real services (Guardian
+  missions), historical ones inserted closed. `scripts/index_campus_knowledge.py` indexes the documents.
+- OpenRouter (`app/llm/providers/openrouter.py`, `OPENROUTER_API_KEY`, `CAMPUSNEXUS_OPENROUTER_MODEL` /
+  `_FALLBACK_MODELS`): a subclass of the Groq provider; fallback is OpenRouter's own `models` list (at most 3) with
+  provider failover on, never an application retry loop. Structured calls use validated JSON objects (no forced tool
+  calls); a 200 carrying an error is refused. The answering model (`last_model_used`) is what telemetry records.
+  Synthesis follows `CAMPUSNEXUS_INTELLIGENCE_MODE` like the brain: only a transport failure in `auto` moves to the
+  local Ollama model; auth, rate-limit, budget and malformed output never switch models.
+- Tests: `tests/test_grounded_campus_ai.py`, `tests/test_openrouter_provider.py` (no live calls).
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so

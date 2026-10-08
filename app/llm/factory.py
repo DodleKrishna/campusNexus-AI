@@ -17,7 +17,7 @@ DEFAULT_PROVIDER = "mock"
 _PROVIDER_ALIASES = {"mock", "deterministic", "test"}
 
 # Providers that call a real model over the network.
-LIVE_PROVIDERS = {"anthropic", "groq"}
+LIVE_PROVIDERS = {"anthropic", "groq", "openrouter"}
 
 
 def get_llm_provider(provider: Optional[str] = None, **kwargs: object) -> LLMProvider:
@@ -42,5 +42,10 @@ def get_llm_provider(provider: Optional[str] = None, **kwargs: object) -> LLMPro
         from app.llm.providers.groq import GroqLLMProvider
 
         return GroqLLMProvider(**kwargs)  # type: ignore[arg-type]
+
+    if key == "openrouter":
+        from app.llm.providers.openrouter import OpenRouterLLMProvider
+
+        return OpenRouterLLMProvider(**kwargs)  # type: ignore[arg-type]
 
     raise ValueError(f"unknown LLM provider {provider!r}; expected one of {sorted(_PROVIDER_ALIASES | LIVE_PROVIDERS)}")

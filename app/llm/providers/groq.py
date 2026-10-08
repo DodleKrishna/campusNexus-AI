@@ -79,6 +79,7 @@ from app.schemas.career import CareerIntentResult, CareerResponseContext
 from app.schemas.enums import AgentName
 from app.schemas.events import EventsIntentResult, EventsResponseContext
 from app.schemas.faculty import FacultyQueryPlan
+from app.schemas.grounded import GroundedPrompt, GroundedSynthesis
 from app.schemas.department import HodQueryPlan
 from app.schemas.admin_console import AdminQueryPlan
 from app.schemas.mission import MissionPlan
@@ -175,6 +176,8 @@ class GroqLLMProvider(LLMProvider):
 
     name = "groq"
     is_live = True
+    _label = "Groq"  # in error messages (subclasses for other OpenAI-compatible APIs override these)
+    _key_env = "GROQ_API_KEY"
 
     def __init__(
         self,
@@ -206,6 +209,7 @@ class GroqLLMProvider(LLMProvider):
         self._slots = threading.BoundedSemaphore(self._max_concurrency)
         self._state_lock = threading.Lock()
         self._last_usage = threading.local()  # per-thread (input, output) tokens of the latest call
+        self._last_model = threading.local()  # per-thread model id the API reports for the latest call
         # A 429 tells us when the token window reopens; no request (from any
         # thread) is sent before then.
         self._cooldown_until = 0.0
@@ -299,7 +303,7 @@ class GroqLLMProvider(LLMProvider):
                         self._sleep(float(attempt))
                         continue
                     raise self._transient(
-                        f"Groq API request timed out ({type(exc).__name__}).", kind="timeout", retries=attempt
+                        f"{self._label} API request timed out ({type(exc).__name__}).", kind="timeout", retries=attempt
                     ) from exc
                 except self._httpx.HTTPError as exc:
                     if attempt < self._max_retries:
@@ -308,7 +312,7 @@ class GroqLLMProvider(LLMProvider):
                         self._sleep(float(attempt))
                         continue
                     raise self._transient(
-                        f"Groq API network error ({type(exc).__name__}): {exc}", kind="network", retries=attempt
+                        f"{self._label} API network error ({type(exc).__name__}): {exc}", kind="network", retries=attempt
                     ) from exc
 
                 if response.status_code in _RETRYABLE_STATUS and attempt < self._max_retries:
@@ -392,15 +396,15 @@ class GroqLLMProvider(LLMProvider):
         code = error.get("code") or error.get("type") or ""
         detail = error.get("message") or (response.text or "")[:300]
         if status in (401, 403):
-            raise self._fail(f"Groq authentication failed (HTTP {status}): check GROQ_API_KEY. {detail}")
+            raise self._fail(f"{self._label} authentication failed (HTTP {status}): check {self._key_env}. {detail}")
         if status == 429:
             raise self._transient(
-                f"Groq rate limit exceeded (HTTP 429) after {retries} retries: {detail}",
+                f"{self._label} rate limit exceeded (HTTP 429) after {retries} retries: {detail}",
                 LLMRateLimitError, status_code=429, retry_after_seconds=self._retry_after_seconds(response), retries=retries,
             )
         if status in _SERVER_ERROR_STATUS:
             raise self._transient(
-                f"Groq API call failed (HTTP {status}{', ' + code if code else ''}) after {retries} retries: {detail}",
+                f"{self._label} API call failed (HTTP {status}{', ' + code if code else ''}) after {retries} retries: {detail}",
                 kind="server_error", status_code=status, retries=retries,
             )
         if status == 404 or code == "model_not_found" or code == "model_decommissioned":
@@ -410,8 +414,8 @@ class GroqLLMProvider(LLMProvider):
             )
         if code in ("tool_use_failed", "json_validate_failed"):
             # The error body may echo the failed generation: keep it out of the message.
-            raise LLMMalformedOutputError(f"Groq model produced malformed structured output ({code}).")
-        raise self._fail(f"Groq API call failed (HTTP {status}{', ' + code if code else ''}): {detail}")
+            raise LLMMalformedOutputError(f"{self._label} model produced malformed structured output ({code}).")
+        raise self._fail(f"{self._label} API call failed (HTTP {status}{', ' + code if code else ''}): {detail}")
 
     def _create(
         self, *, max_tokens: int, system: str, content: str, tool: Optional[Dict[str, Any]] = None, operation: str = "response",
@@ -428,23 +432,41 @@ class GroqLLMProvider(LLMProvider):
             body["tool_choice"] = {"type": "function", "function": {"name": tool["name"]}}
         if response_format is not None:
             body["response_format"] = response_format
-        if self._model.startswith("openai/gpt-oss"):
-            # Reasoning tokens share max_completion_tokens; keep them small.
-            body["reasoning_effort"] = "low"
-            if response_format is not None:
-                body["include_reasoning"] = False  # AgentOS: the reasoning is never returned to us
+        self._decorate_body(body, response_format is not None)
 
         response, retries = self._post(body)
         self._raise_for_status(response, retries)
         try:
             payload = response.json()
+        except ValueError as exc:
+            raise LLMMalformedOutputError(f"{self._label} returned a response that is not JSON.") from exc
+        self._check_payload(payload)
+        try:
             choice = payload["choices"][0]
-        except (ValueError, KeyError, IndexError, TypeError) as exc:
-            raise self._fail("Groq returned a response without any choices.") from exc
+        except (KeyError, IndexError, TypeError) as exc:
+            raise self._fail(f"{self._label} returned a response without any choices.") from exc
         self._record_usage(operation, payload.get("usage"))
+        self._last_model.value = payload.get("model") if isinstance(payload.get("model"), str) else None
         if choice.get("finish_reason") == "length":
-            raise LLMMalformedOutputError(f"Groq response was truncated at max_completion_tokens={max_tokens}; output discarded.")
+            raise LLMMalformedOutputError(f"{self._label} response was truncated at max_completion_tokens={max_tokens}; output discarded.")
         return choice.get("message") or {}
+
+    def _decorate_body(self, body: Dict[str, Any], json_mode: bool) -> None:
+        if self._model.startswith("openai/gpt-oss"):
+            # Reasoning tokens share max_completion_tokens; keep them small.
+            body["reasoning_effort"] = "low"
+            if json_mode:
+                body["include_reasoning"] = False  # AgentOS: the reasoning is never returned to us
+
+    def _check_payload(self, payload: Any) -> None:
+        """Hook: refuse a 200 response that is not a completion (subclasses add API-specific checks)."""
+        if not isinstance(payload, dict):
+            raise LLMMalformedOutputError(f"{self._label} returned a response that is not a JSON object.")
+
+    @property
+    def last_model_used(self) -> Optional[str]:
+        """The model id the API reported for this thread's latest call (it may differ from the requested one)."""
+        return getattr(self._last_model, "value", None)
 
     def _record_usage(self, operation: str, usage: Any) -> None:
         """Largest completion (reasoning + output) seen per operation, so the
@@ -507,6 +529,20 @@ class GroqLLMProvider(LLMProvider):
         if not isinstance(parsed, dict):
             raise LLMMalformedOutputError("Groq output was not a JSON object.")
         return parsed
+
+    def synthesize_grounded_answer(self, prompt: GroundedPrompt) -> GroundedSynthesis:
+        """CAMPUS AI: rephrase a deterministic answer from the bounded ``prompt`` only. JSON object out, parsed and
+        Pydantic-validated here; the service validates faithfulness again before anything is shown."""
+        from app.services.grounded_answers import SYNTHESIS_SYSTEM_PROMPT, parse_synthesis
+
+        message = self._create(
+            max_tokens=_RESPONSE_MAX_TOKENS, system=SYNTHESIS_SYSTEM_PROMPT, operation="synthesize_grounded_answer",
+            content=json.dumps(prompt.payload(), separators=(",", ":"), default=str),
+            response_format={"type": "json_object"},
+        )
+        if message.get("tool_calls"):
+            raise LLMMalformedOutputError(f"{self._label} returned a tool call where a JSON answer was required.")
+        return parse_synthesis(message.get("content") or "")
 
     def _text(self, *, system: str, context: BaseModel) -> str:
         message = self._create(

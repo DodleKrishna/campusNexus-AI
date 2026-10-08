@@ -74,8 +74,10 @@ class PolicyVectorStore:
     def count(self) -> int:
         return self._collection.count()
 
-    def upsert_chunks(self, chunks: List[DocumentChunk]) -> int:
-        """Idempotently write ``chunks``; re-upserting the same chunk_id replaces it."""
+    def upsert_chunks(self, chunks: List[DocumentChunk], *, extra_metadata: Optional[Dict[str, Any]] = None) -> int:
+        """Idempotently write ``chunks``; re-upserting the same chunk_id replaces it.
+
+        ``extra_metadata`` (Chroma-safe scalars, e.g. ``organization_id``) is added to every chunk's metadata."""
         if not chunks:
             return 0
         texts = [c.text for c in chunks]
@@ -84,7 +86,7 @@ class PolicyVectorStore:
             ids=[c.chunk_id for c in chunks],
             embeddings=embeddings,
             documents=texts,
-            metadatas=[_chunk_metadata(c) for c in chunks],
+            metadatas=[{**_chunk_metadata(c), **(extra_metadata or {})} for c in chunks],
         )
         return len(chunks)
 

@@ -39,11 +39,12 @@ def build_agent_runtime(brain: Any, *, clock: Callable[[], datetime] = utc_now,
                         communication_policy: Optional[CommunicationPolicy] = None,
                         connectors: Optional[ConnectorRegistry] = None,
                         connectivity: Optional[ConnectivityService] = None,
-                        specialists: Any = None) -> AgentRuntime:
+                        specialists: Any = None, grounded: Any = None) -> AgentRuntime:
     """Phase 2: Nexus (read-only). Phase 3: the Assignment Guardian. Phase 4: the Exam and Attendance Guardians
     (autonomous; created only by exam scheduling / deterministic absence detection). Phase 5: the Communication Agent
     (autonomous; created only by the intake of a Guardian's follow-up request). Policies default to the env.
-    Phase 6.4: ``specialists`` (the API's ``SpecialistGateway``) gives Nexus its read-only specialist tool."""
+    Phase 6.4: ``specialists`` (the API's ``SpecialistGateway``) gives Nexus its read-only specialist tool.
+    CAMPUS AI: ``grounded`` (a ``GroundedAnswerService``) gives Nexus ``answer_from_campus_records``."""
     exam_policy = exam_policy or exam_policy_from_env()
     attendance_policy = attendance_policy or attendance_policy_from_env()
     communication_policy = communication_policy or communication_policy_from_env()
@@ -51,7 +52,7 @@ def build_agent_runtime(brain: Any, *, clock: Callable[[], datetime] = utc_now,
     connectors = connectors or ConnectorRegistry([ExotelVoiceConnector(ExotelConfig.from_env(), policy=communication_policy)])
     setup = CommunicationSetup(connectors, build_adapters(exam_policy, attendance_policy), communication_policy)
     agents, tools = AgentRegistry(), ToolRegistry()
-    register_nexus(agents, tools, specialists)
+    register_nexus(agents, tools, specialists, grounded)
     register_assignment_guardian(agents, tools, guardian_policy)
     register_exam_guardian(agents, tools, exam_policy)
     register_attendance_guardian(agents, tools, attendance_policy)

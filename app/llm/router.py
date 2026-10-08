@@ -60,6 +60,7 @@ OPERATION_LEVELS: Dict[str, tuple] = {
     "generate_events_response": (IntelligenceLevel.LIGHT, "explaining a deterministic result"),
     "generate_services_response": (IntelligenceLevel.LIGHT, "explaining a deterministic result"),
     "agent_brain_decide": (IntelligenceLevel.LIGHT, "AgentOS: one typed decision per kernel transition"),
+    "synthesize_grounded_answer": (IntelligenceLevel.LIGHT, "rephrasing a deterministic, grounded answer"),
 }
 
 
@@ -216,7 +217,8 @@ class RoutedLLMProvider(LLMProvider):
             if context is not None:
                 usage = take_usage() if take_usage else None
                 input_tokens, output_tokens = usage if usage else (None, None)
-                model = provider.model_name or decision.model
+                # The model that actually answered (an OpenRouter fallback may differ from the requested one).
+                model = getattr(provider, "last_model_used", None) or provider.model_name or decision.model
                 context.records.append(UsageRecord(
                     operation=operation, level=decision.level, model=model, provider=provider.name,
                     mission_id=context.mission_id, agent_key=context.agent_key, run_id=context.run_id, input_tokens=input_tokens, output_tokens=output_tokens,
@@ -268,6 +270,9 @@ class RoutedLLMProvider(LLMProvider):
 
     def generate_services_response(self, *a: Any, **k: Any) -> Any:
         return self._call("generate_services_response", *a, **k)
+
+    def synthesize_grounded_answer(self, *a: Any, **k: Any) -> Any:
+        return self._call("synthesize_grounded_answer", *a, **k)
 
 
 def routed(provider: LLMProvider, *, recorder: Any = None) -> RoutedLLMProvider:

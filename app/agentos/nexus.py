@@ -23,6 +23,7 @@ Guardians also refuse delegation (created only by exam scheduling / absence dete
 """
 from __future__ import annotations
 
+import threading
 from contextlib import nullcontext
 from datetime import datetime
 from typing import Any, ClassVar, Dict, FrozenSet, List, Literal, Optional, cast
@@ -35,7 +36,7 @@ from app.agentos.registry import (
     AgentRegistry, AgentSpec, AgentTool, ToolContext, ToolExecutionError, ToolRegistry, ToolResult,
 )
 from app.agentos.runtime import SUBJECT, AgentOSError, AgentRuntime, MissionActor
-from app.agentos.schemas import CreateAgentMission
+from app.agentos.schemas import USER_MESSAGE_MAX, AgentContext, AgentDecision, CreateAgentMission, DecisionKind
 from app.db.models.agent_kernel import TERMINAL_MISSION_STATUSES, AgentMission, AgentMissionStatus
 from app.db.models.academic import AttendanceRecord, Course, Enrollment, Exam
 from app.db.models.assignment import Assignment
@@ -360,6 +361,161 @@ class ConsultDomainSpecialist(AgentTool):
             "issues": [issue[:200] for issue in answer.issues[:5]]})
 
 
+# --- CAMPUS AI: grounded answers from campus records (SQL facts + organization-scoped knowledge) ----------------------
+
+GROUNDED_TOOL = "answer_from_campus_records"
+MAX_HISTORY_MISSIONS = 3
+
+
+class CampusRecordsInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=1000, description="The user's question, in their own words.")
+
+
+def fit_message(text: str, limit: int) -> str:
+    """Whole lines that fit in ``limit`` characters (a reply is never cut mid-fact); citations are always kept."""
+    if len(text) <= limit:
+        return text
+    body, marker, sources = text.partition("\n\nSources: ")
+    if marker and len(marker + sources) < limit // 2:
+        return fit_message(body, limit - len(marker + sources)) + marker + sources
+    kept: List[str] = []
+    for line in text.splitlines():
+        if len("\n".join([*kept, line])) > limit - 4:
+            break
+        kept.append(line)
+    return ("\n".join(kept) + "\n...") if kept else text[: limit - 3] + "..."
+
+
+class AnswerFromCampusRecords(AgentTool):
+    """Read-only, caller-scoped answers: the minimum SQL facts for the question, at most four knowledge chunks of
+    the caller's organization, deterministic rules, then (optionally) model phrasing that is validated against them.
+    Identity comes only from the tool context; the question can never name another person's records."""
+
+    name: ClassVar[str] = GROUNDED_TOOL
+    description: ClassVar[str] = ("Grounded answer from campus records: my timetable, attendance, exams, exam eligibility, "
+                                  "assignments, placements, events, cases, my classes' submissions, campus policies.")
+    input_model = CampusRecordsInput
+    required_roles = NEXUS_ROLES
+
+    def __init__(self, service: Any) -> None:
+        self._service = service
+
+    @staticmethod
+    def _history(context: ToolContext) -> List[Any]:
+        from app.schemas.grounded import ConversationTurn
+
+        missions = context.session.execute(select(AgentMission).where(
+            AgentMission.organization_id == context.organization_id, AgentMission.owner_account_id == context.account_id,
+            AgentMission.agent_key == NEXUS_AGENT_KEY, AgentMission.id != context.mission_id,
+            AgentMission.status == AgentMissionStatus.COMPLETED,
+        ).order_by(AgentMission.id.desc()).limit(MAX_HISTORY_MISSIONS)).scalars()
+        turns = [ConversationTurn(user=(m.goal or "")[:300],
+                                  assistant=str((m.context or {}).get("assistant_message") or "")[:300])
+                 for m in missions if m.goal and m.goal != UNSTORED_GOAL]
+        return list(reversed(turns))
+
+    def execute(self, context: ToolContext, args: BaseModel) -> ToolResult:
+        from app.services.grounded_facts import GroundedIdentity
+
+        from app.services.agent_deployments import DeploymentError, require_active
+        from app.services.grounded_answers import INTENT_PRODUCT, classify
+
+        question = cast(CampusRecordsInput, args).question
+        intent = classify(question, context.role)
+        if intent is None:
+            raise ToolExecutionError("NOT_A_RECORDS_QUESTION")
+        try:
+            require_active(context.session, INTENT_PRODUCT[intent.key], context.role.value)
+        except DeploymentError as exc:
+            raise ToolExecutionError(exc.code) from None
+        account = context.session.get(AuthAccount, context.account_id)
+        identity = GroundedIdentity(
+            organization_id=context.organization_id, account_id=context.account_id, role=context.role,
+            display_name=account.display_name if account is not None else None,
+            student_code=context.student_code, faculty_profile_id=context.faculty_profile_id)
+        answer = self._service.answer(context.session, identity, question, self._history(context))
+        if answer is None:
+            raise ToolExecutionError("NOT_A_RECORDS_QUESTION")
+        return ToolResult(ok=True, data={
+            "intent": answer.intent, "found": answer.found, "answer": fit_message(answer.answer, USER_MESSAGE_MAX),
+            "answered_by": answer.answered_by, "synthesis_status": answer.synthesis_status,
+            "sources": [c.model_dump() for c in answer.citations], "fact_count": answer.fact_count,
+            "context_tokens_estimate": answer.context_tokens_estimate})
+
+
+class GroundedRoutingBrain:
+    """Deterministic front door for Nexus: a recognised campus-records question goes straight to
+    ``answer_from_campus_records`` and its validated answer is the reply -- no AI decision is needed for either step.
+    Everything else (other agents, other questions, a tool error) is decided by the wrapped brain unchanged. The
+    decisions are ordinary ``AgentDecision`` objects that the kernel validates and executes as usual."""
+
+    ROUTE = "grounded_records"
+
+    def __init__(self, inner: Any, classify: Any) -> None:
+        self.inner, self._classify = inner, classify
+        self._thread = threading.local()
+
+    def __getattr__(self, item: str) -> Any:  # available/code/connectivity/... of the wrapped brain
+        inner = self.__dict__.get("inner")
+        if inner is None:
+            raise AttributeError(item)
+        return getattr(inner, item)
+
+    def _mine(self) -> bool:
+        return bool(getattr(self._thread, "deterministic", False))
+
+    @property
+    def provider_name(self) -> Optional[str]:
+        return "campus_records" if self._mine() else getattr(self.inner, "provider_name", None)
+
+    @property
+    def model_name(self) -> Optional[str]:
+        return None if self._mine() else getattr(self.inner, "model_name", None)
+
+    @property
+    def last_route(self) -> Optional[str]:
+        return self.ROUTE if self._mine() else getattr(self.inner, "last_route", None)
+
+    @property
+    def is_live(self) -> bool:
+        return bool(getattr(self.inner, "is_live", False))
+
+    @property
+    def audit_calls(self) -> bool:
+        return bool(getattr(self.inner, "audit_calls", False))
+
+    def decide(self, context: AgentContext) -> AgentDecision:
+        self._thread.deterministic = False
+        decision = self._route(context)
+        if decision is not None:
+            self._thread.deterministic = True
+            return decision
+        return self.inner.decide(context)
+
+    def _route(self, context: AgentContext) -> Optional[AgentDecision]:
+        if context.agent_key != NEXUS_AGENT_KEY or GROUNDED_TOOL not in {t.name for t in context.allowed_tools}:
+            return None
+        results = [o for o in context.observations if o.kind in ("tool_result", "tool_error")]
+        grounded = next((o for o in reversed(results) if o.source == GROUNDED_TOOL), None)
+        if grounded is None:
+            try:
+                role = UserRole(context.caller_role) if context.caller_role else None
+            except ValueError:
+                role = None
+            if results or role is None or self._classify(context.goal, role) is None:
+                return None
+            return AgentDecision(kind=DecisionKind.TOOL, tool_name=GROUNDED_TOOL,
+                                 tool_input={"question": context.goal[:1000]})
+        data = ((grounded.data or {}).get("data") or {}) if grounded.kind == "tool_result" else {}
+        answer = data.get("answer")
+        if not isinstance(answer, str) or not answer.strip():
+            return None
+        return AgentDecision(kind=DecisionKind.COMPLETE, user_message=answer[:USER_MESSAGE_MAX],
+                             outcome=f"Answered from campus records ({data.get('intent')}, {data.get('answered_by')}).")
+
+
 def nexus_spec(extra_tools: FrozenSet[str] = frozenset()) -> AgentSpec:
     return AgentSpec(
         NEXUS_AGENT_KEY, "Personal assistant and orchestrator for the signed-in user.",
@@ -368,16 +524,20 @@ def nexus_spec(extra_tools: FrozenSet[str] = frozenset()) -> AgentSpec:
     )
 
 
-def register_nexus(agents: AgentRegistry, tools: ToolRegistry, specialists: Any = None) -> None:
+def register_nexus(agents: AgentRegistry, tools: ToolRegistry, specialists: Any = None, grounded: Any = None) -> None:
     """``specialists``: the app's ``SpecialistGateway``. Without one (e.g. the worker script) Nexus has no specialist
-    tool and says the capability is unavailable -- never a placeholder."""
+    tool and says the capability is unavailable -- never a placeholder. ``grounded``: the CAMPUS AI
+    ``GroundedAnswerService`` (adds ``answer_from_campus_records`` for every Nexus role)."""
     for tool_class in NEXUS_TOOLS:
         tools.register(tool_class())
     extra: FrozenSet[str] = frozenset()
     if specialists is not None:
         tools.register(ConsultDomainSpecialist(specialists))
-        extra = frozenset({CONSULT_SPECIALIST_TOOL})
-    agents.register(nexus_spec(extra))
+        extra = extra | {CONSULT_SPECIALIST_TOOL}
+    if grounded is not None:
+        tools.register(AnswerFromCampusRecords(grounded))
+        extra = extra | {GROUNDED_TOOL}
+    agents.register(nexus_spec(frozenset(extra)))
 
 
 # --- The PersonalAssistant service ---------------------------------------------------------------------------------
