@@ -15,6 +15,8 @@ is ``NOT_FOUND_ANSWER``.
 Model routing follows ``CAMPUSNEXUS_INTELLIGENCE_MODE`` exactly like the AgentOS brain: unset/``cloud`` uses
 the configured cloud provider only; ``local`` uses the local Ollama model only; ``auto`` tries the cloud and moves
 to Ollama only when the cloud could not be reached (timeout, network, 5xx) or connectivity is ``local_only``.
+Local phrasing is opt-in (``CAMPUSNEXUS_LOCAL_SYNTHESIS=1``): without it, an offline deployment returns the
+deterministic records answer at once (``synthesis_status="skipped:offline"``) and never calls a model for it.
 """
 from __future__ import annotations
 
@@ -373,6 +375,9 @@ class GroundedAnswerService:
         has_model = (self.provider is not None and getattr(self.provider, "is_live", False)) or self.local is not None
         if not has_model:
             return GroundedAnswer(answer=draft, answered_by="deterministic", synthesis_status="not_attempted", **base)
+        if self.local is None and (self.mode == "local" or not self._cloud_allowed()):
+            # Offline (or local mode without opted-in local phrasing): the records answer is complete as it is.
+            return GroundedAnswer(answer=draft, answered_by="deterministic", synthesis_status="skipped:offline", **base)
         try:
             synthesis, provider_name, model = self._synthesize(prompt)
             text = validate_synthesis(synthesis, prompt, result.must_mention)
@@ -422,12 +427,24 @@ def _with_citations(text: str, citations: Sequence[Citation]) -> str:
     return f"{text}\n\nSources: " + "; ".join(refs)
 
 
+LOCAL_SYNTHESIS_ENV = "CAMPUSNEXUS_LOCAL_SYNTHESIS"
+
+
+def local_synthesis_enabled() -> bool:
+    """Local (Ollama) rephrasing of grounded answers is opt-in. A records answer is already complete and correct, so
+    by default an offline deployment answers it deterministically and keeps the local model for real reasoning."""
+    import os
+
+    return (os.environ.get(LOCAL_SYNTHESIS_ENV) or "").strip().lower() in ("1", "true", "yes")
+
+
 def build_grounded_service(knowledge: Optional[CampusKnowledge], provider: Any, *, clock: Callable[[], datetime],
                            connectivity: Any = None) -> GroundedAnswerService:
     """The service as configured by the environment: the app's (routed) provider for cloud synthesis, and the local
-    Ollama model only when ``CAMPUSNEXUS_INTELLIGENCE_MODE`` is ``local`` or ``auto``."""
+    Ollama model only when ``CAMPUSNEXUS_INTELLIGENCE_MODE`` is ``local`` or ``auto`` AND ``CAMPUSNEXUS_LOCAL_SYNTHESIS=1``
+    (offline, records answers are deterministic by default: no model is needed for them)."""
     from app.agentos.brain_router import intelligence_mode
 
     mode = intelligence_mode() or "cloud"
-    local = LocalSynthesizer.from_env() if mode in ("local", "auto") else None
+    local = LocalSynthesizer.from_env() if mode in ("local", "auto") and local_synthesis_enabled() else None
     return GroundedAnswerService(knowledge, provider, local=local, mode=mode, clock=clock, connectivity=connectivity)

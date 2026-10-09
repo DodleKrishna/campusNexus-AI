@@ -673,6 +673,40 @@ the current demo:
   local Ollama model; auth, rate-limit, budget and malformed output never switch models.
 - Tests: `tests/test_grounded_campus_ai.py`, `tests/test_openrouter_provider.py` (no live calls).
 
+## CAMPUS AI: End-to-End Reality (ingress, voice, calls, reminders, offline)
+
+- Every Nexus message (text and voice) goes through `app/agentos/ingress.py::classify_ingress` first (keyword rules,
+  no AI): GREETING is answered in code (no mission, no provider, works with every model down, audited as
+  `NEXUS_INGRESS_ANSWERED` without content); GROUNDED_CAMPUS_QUERY runs the deterministic `GroundedRoutingBrain`
+  path and does not require the brain to be available; UNSUPPORTED_ACTION goes to the brain (consult + approval
+  pointer) or, with no brain, a fixed workflow pointer; MISSION_REQUEST / GENERAL_CONVERSATION use the configured
+  brain. Never send greetings into the AgentOS loop, and never add a voice-only intelligence path.
+- `AssistantReply.mission_id`/`brain` are null for ingress answers; `route` is the ingress intent.
+- A voice transcript is scrubbed from every persisted step summary (`runtime._scrub` while a transient goal is
+  active), including when a decision forwards it as a tool input. Keep that scrub.
+- Offline, campus-record answers are deterministic (`synthesis_status="skipped:offline"`). Local (Ollama) phrasing is
+  opt-in (`CAMPUSNEXUS_LOCAL_SYNTHESIS=1`); qwen3:4b is for genuine reasoning only.
+- Exotel calls default to the Connect Voice AI API (`EXOTEL_CALL_MODE=stream`: `StreamUrl` wss at 16 kHz +
+  `StreamType=bidirectional`, `Record=false`, `TimeLimit`, `StatusCallbackEvents[]=answered,terminal`). Flow mode
+  remains. Exotel accepting the request is never a delivery; only the answered+completed status callback is.
+  `/health.communication` reports the transport (`unavailable` + reason when not configured). The worker signs and
+  the API verifies call tokens, so `CAMPUSNEXUS_VOICE_TOKEN_SECRET` must be shared (the launcher sets one).
+- Demo calls: only with `CAMPUSNEXUS_DEMO_MODE=1`, `ContactResolver` maps the one designated student
+  (`CAMPUSNEXUS_DEMO_CALL_STUDENT`, default STU-DEMO-001) to `CAMPUSNEXUS_TEST_PHONE` in memory. Never persist it and
+  never read it anywhere else (API routers must not import `app.communication.contacts`). Demo mode caps calls at 60 s
+  and is the only way to set an absence grace below 5 minutes.
+- A job on a non-in-app channel also delivers its in-app notice once (`worker._companion_in_app`, marked by a
+  `COMMUNICATION_IN_APP_COMPANION` audit row), even offline or in quiet hours. Guardian follow-ups still respect the
+  institution quiet hours (`CAMPUSNEXUS_FOLLOWUP_QUIET_HOURS`); do not bypass them for a demo in code.
+- The worker runs as `scripts/process_due_missions.py --loop --interval 15` (started by the launcher unless
+  `-NoWorker`): one bounded batch per tick, SIGINT/SIGTERM stop between batches, leases + unique follow-ups make
+  restarts safe. Never add an in-process FastAPI scheduler.
+- Demo scenarios (`scripts/demo_scenarios.py exam-reminder|absence|voice-preference`) only arm inputs through the
+  real services; production checkpoint timing is never changed for a demo. The UI polls (autonomous missions 8 s,
+  notifications and health 10 s) and shows `last_wake_at`/`last_wake_trigger`; offline it shows "Edge AI · Offline".
+- Tests: `tests/test_final_reality.py` (no network, fakes only). Manual checklists (physical mic, real call):
+  `docs/DEMO_GUIDE.md` §4b.
+
 ## Idempotency Requirement
 
 - Every tool the Action Agent can call must be safe to retry: use idempotency keys / natural dedup checks so

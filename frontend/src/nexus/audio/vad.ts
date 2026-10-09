@@ -84,3 +84,39 @@ export class VoiceActivityDetector {
     return "none";
   }
 }
+
+export interface BargeInConfig {
+  /** Absolute level the user's voice must exceed while Nexus is speaking (echo cancellation removes most playback). */
+  minLevel: number;
+  /** Continuous loud audio needed before Nexus is interrupted (filters clicks and residual echo). */
+  minMs: number;
+}
+
+export const DEFAULT_BARGE_IN: BargeInConfig = { minLevel: 0.05, minMs: 280 };
+
+/**
+ * Decides when the user is talking over Nexus's spoken reply. Fed one RMS level per mic chunk while the reply
+ * plays; returns true once the user has been loud for long enough. Pure state, unit-tested directly.
+ */
+export class BargeInDetector {
+  private loudMs = 0;
+  private readonly config: BargeInConfig;
+
+  constructor(config: Partial<BargeInConfig> = {}) {
+    this.config = { ...DEFAULT_BARGE_IN, ...config };
+  }
+
+  reset(): void {
+    this.loudMs = 0;
+  }
+
+  push(level: number, chunkMs: number): boolean {
+    if (level >= this.config.minLevel) this.loudMs += chunkMs;
+    else this.loudMs = Math.max(0, this.loudMs - chunkMs);
+    if (this.loudMs >= this.config.minMs) {
+      this.loudMs = 0;
+      return true;
+    }
+    return false;
+  }
+}

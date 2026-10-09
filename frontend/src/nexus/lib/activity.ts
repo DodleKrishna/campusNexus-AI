@@ -242,3 +242,51 @@ export function progressLabel(mission: AutonomousMission): string | null {
 export function resultLabel(code: string | null): string | null {
   return code ? humanize(code.toLowerCase()) : null;
 }
+
+export interface AutonomousStatus {
+  /** "Waiting", "Woke at checkpoint", "Reminder delivered", ... */
+  headline: string;
+  /** A time detail ("Next check 14:30", "at 14:03"), or null. */
+  detail: string | null;
+  tone: "amber" | "cyan" | "signal" | "rose" | "dim";
+}
+
+/** How long a wake-up is shown as "Woke at checkpoint" before the mission's own state takes over again. */
+export const RECENT_WAKE_MS = 3 * 60_000;
+
+const COMMUNICATION_HEADLINES: Record<string, { headline: string; tone: AutonomousStatus["tone"] }> = {
+  pending: { headline: "Choosing a channel", tone: "cyan" },
+  ready: { headline: "Ready to deliver", tone: "cyan" },
+  in_progress: { headline: "Delivering", tone: "cyan" },
+  deferred: { headline: "Delivery deferred", tone: "amber" },
+  delivered: { headline: "delivered", tone: "signal" },
+  acknowledged: { headline: "acknowledged", tone: "signal" },
+  failed: { headline: "Not delivered", tone: "rose" },
+  cancelled: { headline: "Cancelled — no longer needed", tone: "dim" },
+};
+
+/**
+ * One status line for an autonomous mission, from structured fields only (status, job state, wake time).
+ * Never invents an outcome: "delivered" appears only when the API reports the job delivered.
+ */
+export function autonomousStatus(mission: AutonomousMission, now: number = Date.now()): AutonomousStatus {
+  const at = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null);
+  if (mission.kind === "communication") {
+    const own = mission.progress?.own_status ?? "";
+    const known = COMMUNICATION_HEADLINES[own];
+    const noun = /reminder/i.test(mission.subject.title) ? "Reminder" : /absence|absent/i.test(mission.subject.title) ? "Absence notice" : "Message";
+    if (known && (own === "delivered" || own === "acknowledged")) return { headline: `${noun} ${known.headline}`, detail: at(mission.completed_at ?? mission.updated_at), tone: known.tone };
+    if (known) return { headline: known.headline, detail: null, tone: known.tone };
+    return { headline: MISSION_STATUS_LABELS[mission.status] ?? humanize(mission.status), detail: null, tone: "cyan" };
+  }
+  const woke = mission.last_wake_at ? new Date(mission.last_wake_at).getTime() : null;
+  const phase = missionPhase(mission.status);
+  if (woke !== null && now - woke < RECENT_WAKE_MS && phase !== "done" && phase !== "failed") {
+    const why = mission.last_wake_trigger === "checkpoint" ? "Woke at checkpoint" : "Woke on a new event";
+    return { headline: why, detail: at(mission.last_wake_at), tone: "cyan" };
+  }
+  if (phase === "waiting") return { headline: "Waiting", detail: mission.next_wake_at ? `Next check ${at(mission.next_wake_at)}` : null, tone: "amber" };
+  if (phase === "active") return { headline: "Working", detail: null, tone: "cyan" };
+  if (phase === "failed") return { headline: MISSION_STATUS_LABELS[mission.status] ?? "Stopped", detail: null, tone: "rose" };
+  return { headline: MISSION_STATUS_LABELS[mission.status] ?? "Completed", detail: at(mission.completed_at), tone: "signal" };
+}

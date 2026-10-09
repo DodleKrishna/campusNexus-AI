@@ -44,6 +44,7 @@ from app.db.base import utc_now
 from app.db.models.communication_delivery import (
     AttemptStatus, CommunicationAttempt, CommunicationJob, CommunicationJobStatus, VoiceSession, VoiceSessionStatus,
 )
+from app.db.models.workflow import OperationAuditEvent
 from app.db.models.organization import Organization
 from app.db.tenant_session import TenantSessionFactory
 from app.rules import communication_policy as policy_rules
@@ -223,10 +224,12 @@ def _attempt(session: Any, job: CommunicationJob, now: datetime, connectors: Con
         return "returned_to_agent", refusal
 
     not_before = max((t for t in (job.not_before, job.next_attempt_at) if t is not None), default=None)
+    consent = service.consent_for(session, job.recipient_student_id)
     check = policy_rules.check_delivery(
         now=now, source_open=True, authorization=job.authorization.value, channel=channel,
-        attempts_so_far=job.attempt_count, not_before=not_before,
-        consent=service.consent_for(session, job.recipient_student_id), policy=policy)
+        attempts_so_far=job.attempt_count, not_before=not_before, consent=consent, policy=policy)
+    if check.allowed or check.reason == policy_rules.DeliveryRefusal.QUIET_HOURS.value:
+        _companion_in_app(session, job, channel, consent, connectors, facts, now)
     if not check.allowed:
         if check.reason in (policy_rules.DeliveryRefusal.NOT_YET.value, policy_rules.DeliveryRefusal.QUIET_HOURS.value):
             job.status, job.next_attempt_at, job.updated_at = CommunicationJobStatus.DEFERRED, check.defer_until, now
@@ -283,6 +286,32 @@ def _attempt(session: Any, job: CommunicationJob, now: datetime, connectors: Con
         return "in_progress", None
     attempt.status, attempt.completed_at, attempt.error_code = AttemptStatus.FAILED, now, result.error_code
     return record_failed_attempt(session, job, result.error_code, now, adapters, policy)
+
+
+COMPANION_EVENT = "COMMUNICATION_IN_APP_COMPANION"
+
+
+def _companion_in_app(session: Any, job: CommunicationJob, channel: Optional[str], consent: policy_rules.Consent,
+                      connectors: ConnectorRegistry, facts: Any, now: datetime) -> None:
+    """A job on another channel (a voice call, an e-mail) also leaves the student its in-app notice at once -- in-app
+    is the guaranteed channel: it needs no internet, is exempt from quiet hours and is consented by default. Once per
+    job (an audit row marks it); the job's own channel, attempts and verification are unchanged."""
+    if channel in (None, policy_rules.IN_APP) or facts is None or not consent.allows(policy_rules.IN_APP)             or policy_rules.IN_APP not in policy_rules.purpose_channels(job.source_type, job.purpose):
+        return
+    sent = session.execute(select(OperationAuditEvent.id).where(
+        OperationAuditEvent.event_type == COMPANION_EVENT, OperationAuditEvent.subject_type == service.SUBJECT,
+        OperationAuditEvent.subject_id == str(job.id))).first()
+    if sent is not None:
+        return
+    connector = connectors.get(policy_rules.IN_APP)
+    request = DeliveryRequest(organization_id=job.organization_id, job_id=job.id, attempt_id=0, attempt_number=0,
+                              student_id=job.recipient_student_id, source_type=job.source_type, purpose=job.purpose,
+                              urgency=job.urgency, facts=facts, now=now)
+    result = connector.deliver(session, request)
+    if result.status == "delivered" and connector.verify(session, request, result):
+        service.audit(session, job, COMPANION_EVENT, f"Communication job {job.id}: in-app notice delivered alongside "
+                      f"{channel}.", now, channel=policy_rules.IN_APP, primary_channel=channel,
+                      reference=result.provider_reference)
 
 
 def expire_stale_calls(session: Any, organization_id: int, now: datetime, adapters: Dict[str, SourceAdapter],

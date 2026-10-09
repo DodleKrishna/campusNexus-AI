@@ -58,10 +58,11 @@ export function AssistantProvider({ children }: { children: ReactNode }) {
 
   const settle = useCallback(
     (turnId: string, reply: AssistantReply, note?: string) => {
-      setBrain(reply.brain);
+      if (reply.brain) setBrain(reply.brain);
       patch(turnId, {
-        pending: false, text: reply.assistant_message?.trim() || fallbackText(reply), missionId: reply.mission_id, status: reply.status, note,
+        pending: false, text: reply.assistant_message?.trim() || fallbackText(reply), missionId: reply.mission_id ?? undefined, status: reply.status, note,
       });
+      if (reply.mission_id == null) return; // answered by the ingress in code: no mission, no trail
       void queryClient.invalidateQueries({ queryKey: queryKeys.assistantMissions });
       void loadTrail(turnId, reply.mission_id);
     },

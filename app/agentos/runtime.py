@@ -474,11 +474,15 @@ class AgentRuntime:
                      outcome: _Outcome, now: datetime, *, rejected_summary: Optional[Dict[str, Any]] = None) -> AgentStep:
         mission.step_count += 1
         input_summary = rejected_summary if decision is None else _decision_summary(decision)
+        output = outcome.output
+        transient = self._transient_goals.get(mission.id)
+        if transient:  # a voice request is never persisted, even when a decision passes it on (e.g. as a tool input)
+            input_summary, output = _scrub(input_summary, transient), _scrub(output, transient)
         step = AgentStep(
             organization_id=actor.organization_id, mission_id=mission.id, step_number=mission.step_count,
             agent_key=mission.agent_key, action_type=(decision.kind.value if decision else str(input_summary.get("kind", "invalid"))),
             tool_name=outcome.tool_name, delegated_agent=outcome.delegated_agent, input_summary=bounded(input_summary),
-            output_summary=bounded(outcome.output), status=outcome.step_status, latency_ms=outcome.latency_ms, created_at=now,
+            output_summary=bounded(output), status=outcome.step_status, latency_ms=outcome.latency_ms, created_at=now,
         )
         session.add(step)
         self._audit(session, actor, mission, "AGENT_STEP_EXECUTED", f"Mission {mission.id} step {step.step_number}: "
@@ -598,6 +602,20 @@ class _ToolCrashed(Exception):
     def __init__(self, tool_name: str, error_type: str) -> None:
         super().__init__(tool_name)
         self.tool_name, self.error_type = tool_name, error_type
+
+
+TRANSIENT_PLACEHOLDER = "[voice request - not stored]"
+
+
+def _scrub(value: Any, secret: str) -> Any:
+    """``value`` with every occurrence of the transient request text replaced by a placeholder (recursively)."""
+    if isinstance(value, str):
+        return value.replace(secret, TRANSIENT_PLACEHOLDER) if secret in value else value
+    if isinstance(value, dict):
+        return {k: _scrub(v, secret) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub(v, secret) for v in value]
+    return value
 
 
 def _decision_summary(decision: AgentDecision) -> Dict[str, Any]:

@@ -82,6 +82,9 @@ class AutonomousMissionView(BaseModel):
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime]
+    # The latest autonomous wake-up: ``checkpoint`` (its timer came due) or the waking domain event's type code.
+    last_wake_at: Optional[datetime] = None
+    last_wake_trigger: Optional[str] = None
     result_code: Optional[str]  # the supervisor's terminal machine code (staff only)
     subject: MissionSubject
     progress: Optional[MissionProgress]
@@ -240,6 +243,21 @@ def _result_code(mission: AgentMission) -> Optional[str]:
     return code if isinstance(code, str) and _CODE.match(code) else None
 
 
+def _last_wake(mission: AgentMission) -> Tuple[Optional[datetime], Optional[str]]:
+    """When and why the mission last woke on its own (from its bounded observation memory; kinds and codes only)."""
+    for observation in reversed(list((mission.context or {}).get("observations") or [])):
+        if not isinstance(observation, dict) or observation.get("kind") not in ("wake", "event"):
+            continue
+        try:
+            at = datetime.fromisoformat(str(observation.get("at")))
+        except ValueError:
+            return None, None
+        source = str(observation.get("source") or "")
+        trigger = "checkpoint" if observation.get("kind") == "wake" else (source if _CODE.match(source) else "event")
+        return at, trigger
+    return None, None
+
+
 def _activity(session: Session, mission_id: int) -> List[MissionActivity]:
     steps = session.execute(select(AgentStep).where(AgentStep.mission_id == mission_id)
                             .order_by(AgentStep.step_number.desc()).limit(MAX_ACTIVITY)).scalars().all()
@@ -253,7 +271,9 @@ def _view(session: Session, mission: AgentMission, student_id: Optional[int]) ->
         return None
     subject, progress = resolved
     staff = student_id is None
+    woke_at, woke_by = _last_wake(mission)
     return AutonomousMissionView(
+        last_wake_at=woke_at, last_wake_trigger=woke_by,
         mission_id=mission.id, agent_key=mission.agent_key, agent_label=AGENT_LABELS[mission.agent_key],
         kind="communication" if mission.agent_key == COMMUNICATION_AGENT else "guardian", status=mission.status,
         waiting_for=mission.waiting_for, next_wake_at=mission.next_wake_at, step_count=mission.step_count,

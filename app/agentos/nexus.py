@@ -32,6 +32,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agentos.ingress import (
+    NO_BRAIN_INTENTS, UNSUPPORTED_ACTION_REPLY, IngressIntent, classify_ingress, greeting_reply,
+)
 from app.agentos.registry import (
     AgentRegistry, AgentSpec, AgentTool, ToolContext, ToolExecutionError, ToolRegistry, ToolResult,
 )
@@ -61,6 +64,7 @@ FUTURE_DELEGATES: FrozenSet[str] = frozenset({
 NEXUS_MAX_STEPS = 8
 MAX_ASSISTANT_TRANSITIONS = 5
 DEFAULT_ASSISTANT_TRANSITIONS = 4
+INGRESS_SUBJECT = "nexus_ingress"
 SUCCESS_CRITERIA = ["Reply to the user with a brief user_message based only on tool results, "
                     "or say that the capability is not available yet."]
 PROVIDER_UNAVAILABLE_STATUS = {"AI_BUDGET_EXCEEDED": 402}
@@ -550,13 +554,16 @@ class BrainInfo(BaseModel):
 
 
 class AssistantReply(BaseModel):
-    mission_id: int
+    # None when the ingress answered in code without a mission (a greeting, or a refused action with no brain).
+    mission_id: Optional[int]
     status: AgentMissionStatus
     assistant_message: Optional[str] = None
     waiting_for: Optional[str] = None
     steps_performed: int
     error_code: Optional[str] = None
-    brain: BrainInfo
+    # None when no brain was involved (the reply came from the deterministic ingress).
+    brain: Optional[BrainInfo]
+    route: Optional[str] = None  # the ingress intent (``app.agentos.ingress.IngressIntent``)
 
 
 class AssistantMissionSummary(BaseModel):
@@ -590,25 +597,54 @@ class PersonalAssistant:
             raise ValueError(f"max_transitions must be 1-{MAX_ASSISTANT_TRANSITIONS}")
         self.runtime, self.max_transitions = runtime, max_transitions
 
+    def _grounded_classifier(self) -> Any:
+        """The grounded-answer classifier when this deployment registered ``answer_from_campus_records``."""
+        if self.runtime.tools.get(GROUNDED_TOOL) is None:
+            return None
+        from app.services.grounded_answers import classify
+
+        return classify
+
+    def _answer_in_code(self, session: Session, actor: MissionActor, intent: IngressIntent, text: str,
+                        message: str, store_message: bool) -> AssistantReply:
+        """A reply decided by the ingress itself: no mission, no brain, no provider call. Audited without content."""
+        operations_audit.record(
+            session, event_type="NEXUS_INGRESS_ANSWERED", actor_account_id=actor.account_id,
+            actor_role=actor.role.value, subject_type=INGRESS_SUBJECT, subject_id=str(actor.account_id),
+            at=self.runtime.clock(), message=f"Nexus answered a {intent.value} message without a model.",
+            metadata={"intent": intent.value, "message_chars": len(message),
+                      "input": "text" if store_message else "voice"})
+        session.commit()
+        return AssistantReply(mission_id=None, status=AgentMissionStatus.COMPLETED, assistant_message=text,
+                              steps_performed=0, brain=None, route=intent.value)
+
     def handle_message(self, session: Session, actor: MissionActor, message: str, *, recorder: Any = None,
                        store_message: bool = True) -> AssistantReply:
-        """One message -> one persistent mission owned by ``actor`` -> at most ``max_transitions`` transitions.
+        """One message -> the deterministic ingress (``app.agentos.ingress``) -> a reply in code (greetings), or one
+        persistent mission owned by ``actor`` advanced by at most ``max_transitions`` transitions.
 
         ``store_message=False`` (Phase 6 voice): the mission's goal is a fixed placeholder and the text reaches the
         brain only from memory while these transitions run (``AgentRuntime.transient_goal``)."""
+        self.runtime._check_session(session, actor)
+        intent = classify_ingress(message, actor.role, self._grounded_classifier())
+        if intent == IngressIntent.GREETING:
+            return self._answer_in_code(session, actor, intent, greeting_reply(message, actor.role) or "", message,
+                                        store_message)
         brain = self.runtime.brain
-        if not getattr(brain, "available", True):
+        if intent not in NO_BRAIN_INTENTS and not getattr(brain, "available", True):
+            if intent == IngressIntent.UNSUPPORTED_ACTION:  # nothing could be executed anyway: say where it is done
+                return self._answer_in_code(session, actor, intent, UNSUPPORTED_ACTION_REPLY, message, store_message)
             raise AssistantUnavailable(getattr(brain, "code", "BRAIN_UNAVAILABLE"))  # refused before any mission exists
         mission = self.runtime.create_mission(session, actor, CreateAgentMission(
             agent_key=NEXUS_AGENT_KEY, goal=message if store_message else UNSTORED_GOAL,
             success_criteria=SUCCESS_CRITERIA, max_steps=NEXUS_MAX_STEPS,
-            context={"channel": "assistant" if store_message else "assistant_voice"}))
+            context={"channel": "assistant" if store_message else "assistant_voice", "ingress": intent.value}))
         operations_audit.record(
             session, event_type="NEXUS_REQUEST_RECEIVED", actor_account_id=actor.account_id, actor_role=actor.role.value,
             subject_type=SUBJECT, subject_id=str(mission.id), at=self.runtime.clock(),
             message=f"Nexus request received as mission {mission.id}.",
             metadata={"agent_key": NEXUS_AGENT_KEY, "message_chars": len(message), "brain": _brain_info(brain).provider,
-                      "input": "text" if store_message else "voice"},
+                      "input": "text" if store_message else "voice", "intent": intent.value},
         )
         session.commit()
         transient = nullcontext() if store_message else self.runtime.transient_goal(mission.id, message)
@@ -620,7 +656,7 @@ class PersonalAssistant:
         reply = AssistantReply(
             mission_id=mission.id, status=mission.status, assistant_message=(mission.context or {}).get("assistant_message"),
             waiting_for=mission.waiting_for, steps_performed=sum(1 for r in results if r.step_number is not None),
-            error_code=last.error_code if last else None, brain=_brain_info(brain),
+            error_code=last.error_code if last else None, brain=_brain_info(brain), route=intent.value,
         )
         if last is not None and not last.transitioned and last.error_code:
             raise AssistantUnavailable(last.error_code, reply)

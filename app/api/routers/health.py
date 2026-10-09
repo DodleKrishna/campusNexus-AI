@@ -47,11 +47,37 @@ def edge_status(state) -> dict:
         "unavailable": getattr(state, "speech_router_unavailable", None)}
     return {
         "intelligence": {"mode": mode or "single", "cloud_available": cloud_ok, "local_available": local_ok,
-                         "active_provider": getattr(brain, "provider_name", None)},
+                         "active_provider": _active_provider(brain, mode, cloud_ok, local_ok)},
         "speech": {k: speech_status.get(k) for k in ("stt_provider", "tts_provider", "local_ready", "unavailable")
                    if k in speech_status},
         "connectivity": connectivity.label() if connectivity is not None else "unknown",
+        "communication": communication_status(state),
     }
+
+
+def _active_provider(brain, mode, cloud_ok: bool, local_ok: bool):
+    """The brain that would decide the next transition: offline in auto mode that is the local one, not the cloud."""
+    inner = getattr(brain, "inner", brain)  # GroundedRoutingBrain wraps the router
+    if mode == "auto" and not cloud_ok:  # offline: the local brain, or none at all (never the unreachable cloud)
+        return getattr(inner.local, "provider_name", None) if local_ok and getattr(inner, "local", None) else None
+    return getattr(brain, "provider_name", None)
+
+
+def communication_status(state) -> dict:
+    """Whether real phone calls can be placed: the Exotel connector and the call's live voice pipeline must both be
+    ready. Codes only (never a number, a URL or a credential). An unavailable transport is never faked."""
+    setup = getattr(state.agent_runtime, "communication", None)
+    connector = setup.connectors.get("voice") if setup is not None else None
+    reason = (connector.unavailable_reason() if connector is not None and hasattr(connector, "unavailable_reason")
+              else (None if connector is not None and connector.available() else "VOICE_CONNECTOR_MISSING"))
+    pipeline_reason = None if getattr(state, "voice_pipeline", None) is not None else (
+        getattr(state, "voice_pipeline_unavailable", None) or "VOICE_PIPELINE_UNAVAILABLE")
+    # Presence only: the number itself is read solely by ``ContactResolver`` at delivery time (no router imports it).
+    demo_call = (os.environ.get("CAMPUSNEXUS_DEMO_MODE") or "").strip() == "1"         and bool((os.environ.get("CAMPUSNEXUS_TEST_PHONE") or "").strip())
+    return {"in_app": "available",
+            "voice_call": "available" if reason is None and pipeline_reason is None else "unavailable",
+            "voice_call_reason": reason or pipeline_reason,
+            "demo_call_enabled": demo_call}
 
 
 @router.get("/health")

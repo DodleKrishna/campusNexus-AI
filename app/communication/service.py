@@ -46,6 +46,8 @@ INTAKE_BATCH = 50
 ENV_MAX_ATTEMPTS = "CAMPUSNEXUS_COMMUNICATION_MAX_ATTEMPTS"  # 3
 ENV_BACKOFF_MINUTES = "CAMPUSNEXUS_COMMUNICATION_BACKOFF_MINUTES"  # 30
 ENV_FALLBACK = "CAMPUSNEXUS_COMMUNICATION_ALLOW_FALLBACK"  # "1" allows a channel switch after a failure
+ENV_VOICE_TIME_LIMIT = "CAMPUSNEXUS_VOICE_TIME_LIMIT_SECONDS"  # 180 (30-600)
+DEMO_VOICE_TIME_LIMIT = 60  # CAMPUSNEXUS_DEMO_MODE=1 caps every call at one minute
 
 _events = EventService()
 
@@ -54,7 +56,11 @@ def policy_from_env() -> policy_rules.CommunicationPolicy:
     """Defaults: 3 attempts per job, 30 min backoff (doubling, capped at 6 h), no channel fallback, the institution's
     follow-up quiet hours in campus time. An invalid value raises ``ValueError`` at startup."""
     quiet_start, quiet_end = policy_env.quiet_hours()
+    voice_limit = int(policy_env.number(ENV_VOICE_TIME_LIMIT, 180))
+    if (os.environ.get("CAMPUSNEXUS_DEMO_MODE") or "").strip() == "1":
+        voice_limit = min(voice_limit, DEMO_VOICE_TIME_LIMIT)
     return policy_rules.CommunicationPolicy(
+        voice_time_limit_seconds=voice_limit,
         max_attempts=int(policy_env.number(ENV_MAX_ATTEMPTS, 3)),
         backoff=timedelta(minutes=policy_env.number(ENV_BACKOFF_MINUTES, 30)),
         allow_channel_fallback=(os.environ.get(ENV_FALLBACK) or "").strip() == "1",

@@ -1,12 +1,12 @@
-import { Activity, BellRing, CalendarClock, Inbox, Radio, Target } from "lucide-react";
+import { Activity, BellRing, Bot, CalendarClock, Inbox, Radio, Target } from "lucide-react";
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/auth/useAuth";
 import { useHealth } from "@/hooks/useStudentData";
 import { ActivityTrail } from "@/nexus/components/ActivityTrail";
 import { GlowSkeleton, Pill, QuietEmpty, SectionLabel, StatusDot } from "@/nexus/components/primitives";
-import { useActiveMissions, useAlerts, useFollowUps } from "@/nexus/hooks/useNexusData";
-import { MISSION_STATUS_LABELS, missionPhase } from "@/nexus/lib/activity";
+import { useActiveMissions, useAlerts, useAutonomousMissions, useFollowUps } from "@/nexus/hooks/useNexusData";
+import { MISSION_STATUS_LABELS, autonomousStatus, missionPhase } from "@/nexus/lib/activity";
 import { useAssistant } from "@/nexus/state/useAssistant";
 import { cn } from "@/utils/cn";
 import { formatDateTime, relativeTime } from "@/utils/format";
@@ -37,10 +37,22 @@ function Loading() {
   );
 }
 
-/** Whether replies come from a live model; mock mode is never presented as live. */
+/**
+ * Whether replies come from a live model; mock mode is never presented as live. When the deployment reports it is
+ * offline (edge mode), that wins: campus answers then come from local records and the local model.
+ */
 export function AiModeBadge() {
   const { brain } = useAssistant();
   const health = useHealth();
+  if (health.data?.connectivity === "offline") {
+    return (
+      <span title="No internet: answers come from local campus records and the on-device model.">
+        <Pill tone="violet">
+          <StatusDot tone="violet" live /> Edge AI · Offline
+        </Pill>
+      </span>
+    );
+  }
   const live = brain ? brain.live : health.data?.llm.live;
   if (live === undefined) return null;
   return live ? (
@@ -76,6 +88,35 @@ function ActiveMissions() {
           </Link>
         </li>
       ))}
+    </ul>
+  );
+}
+
+/** The Guardians and the Communication Agent working on their own, refreshed every few seconds. */
+function AutonomousAgents() {
+  const { data, isLoading, isError } = useAutonomousMissions();
+  if (isLoading) return <Loading />;
+  if (isError) return <QuietEmpty title="Autonomous agents are unavailable right now." />;
+  const items = (data?.items ?? []).slice(0, 5);
+  if (items.length === 0) return <QuietEmpty icon={<Bot />} title="No guardians yet" hint="Guardians start when exams, assignments or absences need watching." />;
+  return (
+    <ul className="space-y-2" aria-live="polite">
+      {items.map((m) => {
+        const status = autonomousStatus(m);
+        return (
+          <li key={m.mission_id} className="rounded-xl border border-line bg-white/[0.02] px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] text-violet">{m.agent_label}</span>
+              <Pill tone={status.tone}>
+                <StatusDot tone={status.tone} live={status.tone === "cyan" || status.tone === "amber"} />
+                {status.headline}
+              </Pill>
+            </div>
+            <p className="mt-1.5 line-clamp-1 text-[13px] text-mist">{m.subject.title}</p>
+            {status.detail && <p className="mt-0.5 text-[11px] text-haze">{status.detail}</p>}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -144,6 +185,9 @@ export function ActivityRail({ className }: { className?: string }) {
       </div>
       <Section title="Active missions" icon={<Target />} delay={60} action={<Link to="/nexus/missions" className="text-[11px] text-haze hover:text-cyan">All</Link>}>
         <ActiveMissions />
+      </Section>
+      <Section title="Autonomous agents" icon={<Bot />} delay={90}>
+        <AutonomousAgents />
       </Section>
       <Section title="Agent activity" icon={<Activity />} delay={120}>
         <AgentActivity />

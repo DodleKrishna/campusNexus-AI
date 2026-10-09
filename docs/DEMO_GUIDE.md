@@ -178,6 +178,60 @@ Log out, then sign in as **admin@**.
 | 8 | AI Operations | admin@ → `/admin/ai-operations` |
 | 9 | Audit Log | admin@ → `/admin/audit`, after Demos 3 to 5 so it has content |
 
+## 4b. CAMPUS AI reality scenarios (autonomy, calls, offline)
+
+The launcher also starts the worker (`scripts/process_due_missions.py --loop --interval 15`); Guardians wake on
+their own and the right-hand **Live context → Autonomous agents** list refreshes every 8 s, notifications every 10 s.
+The scenario helpers only arm real inputs through the normal services; every outcome is produced by the worker.
+
+**Quiet hours.** Guardian follow-ups respect the institution's quiet hours (default 21:00–07:00 IST). A reminder
+due at night is deferred to 07:00 — that is the policy working. For a night-time rehearsal set
+`$env:CAMPUSNEXUS_FOLLOWUP_QUIET_HOURS = "off"` before launching (say so if asked).
+
+**Scenario A — absent student (Attendance Guardian → Communication Agent → call).**
+
+1. Before launching: `$env:CAMPUSNEXUS_DEMO_MODE = "1"; $env:CAMPUSNEXUS_ATTENDANCE_ABSENCE_GRACE_MINUTES = "1"`
+   (a grace below 5 minutes is refused without demo mode).
+2. Optional real call: also set the `EXOTEL_*` variables, `CAMPUSNEXUS_PUBLIC_BASE_URL` (an https tunnel to port
+   8000), `GROQ_API_KEY` (the call's speech pipeline) and `CAMPUSNEXUS_TEST_PHONE` (your own phone). Then
+   `python scripts/demo_scenarios.py voice-preference` (Aditi prefers calls). `/health` → `communication.voice_call`
+   must say `available`; otherwise no call is attempted and the absence notice is in-app only.
+3. Faculty starts the class and marks Aditi absent in the UI — or `python scripts/demo_scenarios.py absence --start-and-mark`.
+4. After ~1–1.5 min: *Attendance Guardian* appears for the faculty; Aditi gets *Absence recorded* in-app; with Exotel
+   configured your phone rings (60 s limit, no recording). The call result updates the job via Exotel's status
+   callback — the job is delivered only after an answered, completed call, never on "request accepted".
+
+**Scenario B — exam reminder that wakes up by itself.**
+`python scripts/demo_scenarios.py exam-reminder --in-minutes 3` schedules a real exam whose first production
+checkpoint (start − 24 h) falls 3 minutes from now. Watch the student's rail: *Exam Guardian · Waiting* →
+*Woke at checkpoint* → *Communication Agent · Reminder delivered*, and the notification appears with no click.
+
+**Scenario C — offline.** Start online and ask "When is my next exam?". Then stop and relaunch with
+`$env:CAMPUSNEXUS_OFFLINE_MODE = "1"; $env:CAMPUSNEXUS_INTELLIGENCE_MODE = "auto"` (or pull the network cable with
+`auto` mode): the badge shows **Edge AI · Offline**. "hi", "When is my next exam?" and "What is the hostel complaint
+policy?" answer at once from SQLite + local Chroma (no model). Only open-ended requests use the local qwen3:4b
+(slow on a laptop CPU: minutes; set `CAMPUSNEXUS_OLLAMA_TIMEOUT_SECONDS=180`). Phone/e-mail jobs wait as
+`WAITING_CONNECTIVITY`; in-app notices continue; on reconnect they are released in staggered batches.
+
+### Manual qualification checklist — browser voice (needs a physical microphone)
+
+- [ ] Click the orb: the browser asks for the microphone; the orb moves with your voice (not on its own).
+- [ ] Say "When is my next exam?" and stop: the turn ends on silence (~1 s), the state goes Listening → Thinking →
+      Speaking, and the reply is spoken. The transcript panel shows "Voice message · X.X s", never your words.
+- [ ] Tap the orb mid-sentence: it sends at once. Say "hi": the greeting is spoken with no AI provider configured.
+- [ ] While Nexus speaks, talk over it: playback stops and it listens (barge-in). Tapping the orb also interrupts.
+- [ ] Mute: the pill shows Muted and nothing is captured. Type: the text box sends through the same Nexus.
+- [ ] End: the browser's microphone indicator disappears immediately (no track left open).
+- [ ] Block the microphone permission: the overlay explains how to allow it and offers *Type instead*.
+
+### Manual qualification checklist — real Exotel call (needs credentials and your phone)
+
+- [ ] `/health` shows `communication.voice_call: available` and `demo_call_enabled: true`.
+- [ ] Run Scenario A: the phone rings from the ExoPhone within ~30 s of detection.
+- [ ] Answer: you hear the absence notice (Kokoro/Groq voice), can reply, and the call ends by 60 s.
+- [ ] Afterwards the job shows delivered (Admin → audit, or the faculty rail) and the Guardian woke.
+- [ ] `data/demo/campusnexus_demo.db` contains no part of your phone number (`findstr <last 6 digits>` finds nothing).
+
 ## 5. Known limitations (say them if asked)
 
 - **One topic per question for faculty, HOD and admin Enquiry.** Their query plan has a single intent, so

@@ -12,8 +12,9 @@ export const useAssistantMissions = () =>
   useQuery({ queryKey: queryKeys.assistantMissions, queryFn: () => api.assistantMissions(30), staleTime: 15_000, refetchInterval: 30_000 });
 
 /** Guardian / Communication missions the caller may see (tenant, role and subject scoped by the API). */
+// Guardians wake on their own (worker): poll every 8 s so the rail shows wake-ups and deliveries live.
 export const useAutonomousMissions = () =>
-  useQuery({ queryKey: queryKeys.autonomousMissions, queryFn: () => api.autonomousMissions(30), staleTime: 15_000, refetchInterval: 30_000 });
+  useQuery({ queryKey: queryKeys.autonomousMissions, queryFn: () => api.autonomousMissions(30), staleTime: 4_000, refetchInterval: 8_000 });
 
 export const useMissionSteps = (missionId: number | null) =>
   useQuery({

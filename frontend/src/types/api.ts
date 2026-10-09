@@ -122,6 +122,11 @@ export interface DashboardSummary {
 export interface Health {
   ready: boolean;
   llm: { provider: string; live: boolean; model: string | null };
+  /** "online" | "offline" (edge mode) | "unknown" (never probed). */
+  connectivity?: "online" | "offline" | "unknown";
+  intelligence?: { mode: string; cloud_available: boolean; local_available: boolean; active_provider: string | null };
+  /** Real phone calls need the Exotel transport and the live call pipeline; never faked. */
+  communication?: { in_app: "available"; voice_call: "available" | "unavailable"; voice_call_reason: string | null; demo_call_enabled: boolean };
 }
 
 // ---------------------------------------------------------------------------
@@ -845,14 +850,20 @@ export interface BrainInfo {
   live: boolean;
 }
 
+/** Nexus ingress intents: greetings are answered in code; campus questions from records; the rest by AgentOS. */
+export type IngressRoute = "greeting" | "grounded_campus_query" | "mission_request" | "general_conversation" | "unsupported_action";
+
 export interface AssistantReply {
-  mission_id: number;
+  /** null when the ingress answered in code without a mission (e.g. a greeting). */
+  mission_id: number | null;
   status: AgentMissionStatus;
   assistant_message: string | null;
   waiting_for: string | null;
   steps_performed: number;
   error_code: string | null;
-  brain: BrainInfo;
+  /** null when no model was involved. */
+  brain: BrainInfo | null;
+  route?: IngressRoute | null;
 }
 
 export interface VoiceAssistantReply extends AssistantReply {
@@ -888,6 +899,9 @@ export interface AutonomousMission {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  /** The latest autonomous wake-up: "checkpoint" (timer) or the waking event's type code. */
+  last_wake_at?: string | null;
+  last_wake_trigger?: string | null;
   /** The supervisor's terminal machine code (staff only). */
   result_code: string | null;
   subject: { type: "assignment" | "exam" | "attendance" | "communication"; title: string; course_code: string | null; due_at: string | null };

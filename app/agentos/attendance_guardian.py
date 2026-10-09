@@ -18,6 +18,8 @@ observe -> validate absence -> request communication if policy allows -> WAIT fo
 """
 from __future__ import annotations
 
+import os
+
 from datetime import datetime, timedelta
 from typing import Any, ClassVar, List, Literal, Optional, Tuple, cast
 
@@ -49,6 +51,7 @@ WAIT_EVENTS = frozenset({DomainEventType.ATTENDANCE_CORRECTED, DomainEventType.A
                          DomainEventType.LEAVE_APPROVED})
 
 ENV_GRACE = "CAMPUSNEXUS_ATTENDANCE_ABSENCE_GRACE_MINUTES"  # 15
+MIN_PRODUCTION_GRACE_MINUTES = 5  # a shorter grace period is a demo-only configuration (CAMPUSNEXUS_DEMO_MODE=1)
 ENV_COOLDOWN = "CAMPUSNEXUS_ATTENDANCE_FOLLOWUP_COOLDOWN_MINUTES"  # 360
 ENV_MAX_ATTEMPTS = "CAMPUSNEXUS_ATTENDANCE_FOLLOWUP_MAX_ATTEMPTS"  # 3
 ENV_WINDOW_HOURS = "CAMPUSNEXUS_ATTENDANCE_RESOLUTION_HOURS"  # 72
@@ -59,7 +62,10 @@ def policy_from_env() -> rules.AttendancePolicy:
     contact = FollowupPolicy(cooldown=timedelta(minutes=policy_env.number(ENV_COOLDOWN, 360)),
                              max_attempts=int(policy_env.number(ENV_MAX_ATTEMPTS, 3)), quiet_start=quiet_start,
                              quiet_end=quiet_end, timezone=CAMPUS_TZ)
-    return rules.AttendancePolicy(contact=contact, grace=timedelta(minutes=policy_env.number(ENV_GRACE, 15)),
+    grace = policy_env.number(ENV_GRACE, 15)
+    if grace < MIN_PRODUCTION_GRACE_MINUTES and (os.environ.get("CAMPUSNEXUS_DEMO_MODE") or "").strip() != "1":
+        raise ValueError(f"{ENV_GRACE} below {MIN_PRODUCTION_GRACE_MINUTES} needs CAMPUSNEXUS_DEMO_MODE=1")
+    return rules.AttendancePolicy(contact=contact, grace=timedelta(minutes=grace),
                                   resolution_window=timedelta(hours=policy_env.number(ENV_WINDOW_HOURS, 72)))
 
 

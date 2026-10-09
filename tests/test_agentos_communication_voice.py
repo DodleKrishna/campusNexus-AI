@@ -47,7 +47,7 @@ from tests.test_agentos_communication import (
 from tests.test_phase22b_tenant_isolation import app, client, orgs  # noqa: F401
 
 CONFIG = ExotelConfig(account_sid="acct-test", api_key="key-test", api_token="token-test", caller_id="08000000000",
-                      flow_app_id="4242", public_base_url="https://campusnexus.example")
+                      flow_app_id="4242", public_base_url="https://campusnexus.example", call_mode="flow")
 VOICE_POLICY = CommunicationPolicy(max_attempts=2, backoff=timedelta(minutes=30), contact=FollowupPolicy(**NO_QUIET),
                                    voice_max_turns=3)
 SPOKEN = "yes I will submit it tonight, call me on 99887 76655"
@@ -254,15 +254,61 @@ def test_live_exotel_client_requests_no_recording(monkeypatch) -> None:
 
     sent = {}
 
-    def fake_post(url, data, auth, timeout):
-        sent.update(data=data, timeout=timeout)
+    def fake_post(url, data, auth, timeout, headers):
+        sent.update(url=url, data=data, timeout=timeout, auth=auth)
         return FakeResponse(200, {"Call": {"Sid": "CA1", "Status": "queued"}})
 
     monkeypatch.setattr(httpx, "post", fake_post)
     call = HttpExotelClient(CONFIG).place_call(to=PHONE, caller_id="x", flow_url="f", status_callback="s",
                                                custom_field="c", time_limit_seconds=180)
     assert call.reference == "CA1" and sent["data"]["Record"] == "false" and sent["data"]["TimeLimit"] == "180"
-    assert sent["timeout"] == 10.0
+    assert sent["timeout"] == 10.0 and sent["url"].endswith("/Calls/connect.json") and sent["data"]["Url"] == "f"
+
+
+def test_voice_ai_connect_streams_bidirectionally_without_recording(monkeypatch) -> None:
+    import httpx
+
+    sent = {}
+
+    def fake_post(url, data, auth, timeout, headers):
+        sent.update(url=url, data=data, auth=auth)
+        return FakeResponse(200, {"Call": {"Sid": "CA9", "Status": "in-progress"}})
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    config = ExotelConfig(**{**CONFIG.__dict__, "call_mode": "stream", "flow_app_id": ""})
+    assert config.configured() and ExotelConfig().subdomain == "api.in.exotel.com"
+    stream = config.stream_url("tok.en")
+    call = HttpExotelClient(config).place_call(to=PHONE, caller_id="0800", stream_url=stream, status_callback="cb",
+                                               time_limit_seconds=60)
+    data = sent["data"]
+    assert call.reference == "CA9" and sent["url"] == "https://api.in.exotel.com/v1/Accounts/acct-test/Calls/connect"
+    assert (data["StreamUrl"], data["StreamType"], data["Record"], data["TimeLimit"]) == (stream, "bidirectional",
+                                                                                          "false", "60")
+    assert data["StatusCallbackEvents[]"] == ["answered", "terminal"] and "Url" not in data
+    assert sent["auth"] == ("key-test", "token-test") and stream.startswith("wss://") and "sample-rate=16000" in stream
+
+
+def test_exotel_unavailable_reasons_name_what_is_missing() -> None:
+    assert ExotelConfig().unavailable_reason() == "EXOTEL_NOT_CONFIGURED"
+    no_wss = ExotelConfig(**{**CONFIG.__dict__, "call_mode": "stream", "public_base_url": ""})
+    assert no_wss.unavailable_reason() == "PUBLIC_WSS_NOT_CONFIGURED"
+    assert ExotelConfig(**{**CONFIG.__dict__, "flow_app_id": ""}).unavailable_reason() == "EXOTEL_FLOW_NOT_CONFIGURED"
+    assert ExotelConfig(**{**CONFIG.__dict__, "call_mode": "sip"}).unavailable_reason() == "EXOTEL_CALL_MODE_INVALID"
+
+
+def test_an_xml_call_response_is_parsed() -> None:
+    from app.communication.voice.exotel import parse_call_response
+
+    class Xml:
+        text = "<TwilioResponse><Call><Sid>abc123</Sid><Status>queued</Status></Call></TwilioResponse>"
+
+        def json(self):
+            raise ValueError
+
+    assert parse_call_response(Xml()) == ProviderCall(reference="abc123", status="queued")
+    Xml.text = "<html>oops</html>"
+    with pytest.raises(ExotelError, match="PROVIDER_BAD_RESPONSE"):
+        parse_call_response(Xml())
 
 
 def test_stream_url_endpoint_needs_a_stream_token(client, small_class, app, clock, session_factory, orgs) -> None:

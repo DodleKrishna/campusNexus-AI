@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { VoiceActivityDetector } from "@/nexus/audio/vad";
+import { BargeInDetector, VoiceActivityDetector } from "@/nexus/audio/vad";
 import { base64ToArrayBuffer, rms, toUploadWav } from "@/nexus/audio/wav";
 import type { VoiceTurnResult } from "@/nexus/state/AssistantContext";
 
 export type VoiceState = "idle" | "connecting" | "listening" | "thinking" | "speaking" | "error";
+/** What the UI shows: the session state, or "muted" while listening with the microphone muted. */
+export type VoiceDisplayState = VoiceState | "muted";
 
 /** Audio kept from just before speech is detected, so the first syllable is not clipped. */
 const PREROLL_CHUNKS = 4;
@@ -33,8 +35,11 @@ function microphoneError(error: unknown): string {
  * idle → connecting (microphone permission) → listening → [pause detected] →
  * thinking (one bounded WAV upload) → speaking (the reply audio) → listening …
  *
- * Capture is ignored while thinking or speaking, so Nexus never hears itself.
- * ``analyser`` always points at the audio the orb should visualise.
+ * Capture is ignored while thinking, so Nexus never hears itself. While Nexus is speaking, the microphone is
+ * only watched for a barge-in: if the user talks over the reply (sustained loud input, after echo cancellation),
+ * playback stops and the user's words become the next turn. ``analyser`` always points at the audio the orb
+ * should visualise. Muting disables the microphone track itself; ``end`` stops every track, the playback and the
+ * audio context, so no microphone stays open after the session.
  */
 export function useVoiceSession({ onUtterance, speakReplies }: {
   onUtterance: (wav: Blob, durationSec: number, signal: AbortSignal) => Promise<VoiceTurnResult>;
@@ -52,6 +57,8 @@ export function useVoiceSession({ onUtterance, speakReplies }: {
   const chunks = useRef<Float32Array[]>([]);
   const preroll = useRef<Float32Array[]>([]);
   const vad = useRef(new VoiceActivityDetector());
+  const bargeIn = useRef(new BargeInDetector());
+  const interruptRef = useRef<() => void>(() => undefined);
   const inflight = useRef<AbortController | null>(null);
   const session = useRef(0);
   const onUtteranceRef = useRef(onUtterance);
@@ -119,6 +126,7 @@ export function useVoiceSession({ onUtterance, speakReplies }: {
           e.playback = null;
           listen();
         };
+        bargeIn.current.reset();
         setState("speaking");
         source.start();
       } catch {
@@ -205,7 +213,13 @@ export function useVoiceSession({ onUtterance, speakReplies }: {
     processor.connect(sink);
     sink.connect(ctx.destination);
     processor.onaudioprocess = (event) => {
-      if (stateRef.current !== "listening" || mutedRef.current) return;
+      if (mutedRef.current) return;
+      if (stateRef.current === "speaking") {
+        const level = rms(event.inputBuffer.getChannelData(0));
+        if (bargeIn.current.push(level, (event.inputBuffer.length / ctx.sampleRate) * 1000)) interruptRef.current();
+        return;
+      }
+      if (stateRef.current !== "listening") return;
       const data = new Float32Array(event.inputBuffer.getChannelData(0));
       const verdict = vad.current.push(rms(data), (data.length / ctx.sampleRate) * 1000);
       if (verdict === "speech_start") {
@@ -256,6 +270,7 @@ export function useVoiceSession({ onUtterance, speakReplies }: {
     if (stateRef.current !== "speaking" || !e?.playback) return;
     const playing = e.playback;
     e.playback = null;
+    bargeIn.current.reset();
     try {
       playing.stop();
     } catch {
@@ -263,10 +278,14 @@ export function useVoiceSession({ onUtterance, speakReplies }: {
     }
     listen();
   }, [listen]);
+  useEffect(() => {
+    interruptRef.current = interrupt;
+  }, [interrupt]);
 
   useEffect(() => teardown, [teardown]);
 
-  return { state, muted, error, capturing, analyser, start, end, toggleMute, sendNow, interrupt, retry: start };
+  const displayState: VoiceDisplayState = muted && state === "listening" ? "muted" : state;
+  return { state, displayState, muted, error, capturing, analyser, start, end, toggleMute, sendNow, interrupt, retry: start };
 }
 
 export type VoiceSession = ReturnType<typeof useVoiceSession>;

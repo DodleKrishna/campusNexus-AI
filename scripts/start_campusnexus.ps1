@@ -49,6 +49,12 @@
 .PARAMETER NoBrowser
     Do not open the browser.
 
+.PARAMETER NoWorker
+    Do not start the autonomous-mission worker. By default the launcher also runs
+    scripts/process_due_missions.py --loop --interval 15 (Guardian wake-ups, absence detection and
+    communication delivery; one bounded batch every 15 s, safe to stop at any time: work is claimed with
+    leases). Logs: data/demo/logs/worker*.log.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\start_campusnexus.ps1 -Reset
 .EXAMPLE
@@ -62,7 +68,8 @@ param(
     [string]$Model = "",
     [ValidateSet("", "onnx_minilm", "deterministic")][string]$Embedding = "",
     [switch]$LiveCheck,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    [switch]$NoWorker
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,6 +106,12 @@ Write-Host "Database: $DatabaseLabel"
 $env:CAMPUSNEXUS_VECTOR_STORE_PATH = $DemoChroma
 $env:CAMPUSNEXUS_EMBEDDING_PROVIDER = $Embedding
 $env:CAMPUSNEXUS_API_URL = "http://127.0.0.1:$ApiPort"
+# The worker signs call tokens and the API verifies them: both must share one secret (never printed).
+if (-not $env:CAMPUSNEXUS_VOICE_TOKEN_SECRET) {
+    $secretBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($secretBytes)
+    $env:CAMPUSNEXUS_VOICE_TOKEN_SECRET = [Convert]::ToBase64String($secretBytes)
+}
 
 # --- 1-2. Python environment -------------------------------------------------------------------------
 Step "Checking the Python environment (.venv)"
@@ -161,6 +174,7 @@ New-Item -ItemType Directory -Force $LogDir | Out-Null
 $failed = $false
 $api = $null
 $web = $null
+$worker = $null
 
 function Stop-Tree($proc, [string]$name) {
     if ($null -ne $proc -and -not $proc.HasExited) {
@@ -182,6 +196,13 @@ try {
     }
     if ($null -eq $health) { throw "The API did not answer /health within 90 s. See data/demo/logs/api.err.log." }
     if (-not $health.ready) { throw "The API started but reports ready=false. Check /health and re-run with -Reset." }
+
+    if (-not $NoWorker) {
+        Step "Starting the autonomous-mission worker (one bounded batch every 15 s)"
+        $worker = Start-Process -FilePath $Python -PassThru -WindowStyle Hidden -WorkingDirectory $RepoRoot `
+            -ArgumentList @("scripts/process_due_missions.py", "--loop", "--interval", "15") `
+            -RedirectStandardOutput (Join-Path $LogDir "worker.log") -RedirectStandardError (Join-Path $LogDir "worker.err.log")
+    }
 
     Step "Starting React/Vite on http://127.0.0.1:$WebPort"
     $web = Start-Process -FilePath "cmd.exe" -PassThru -WindowStyle Hidden -WorkingDirectory (Join-Path $RepoRoot "frontend") `
@@ -205,15 +226,18 @@ try {
     Write-Host "  Database:  $DatabaseLabel"
     Write-Host "  Sign in:   student@ / faculty@ / hod@ / admin@campusnexus.local"
     Write-Host "             password: data/demo/dev_credentials.txt (or `$env:CAMPUSNEXUS_DEMO_PASSWORD set before -Reset)"
+    Write-Host "  Worker:    $(if ($NoWorker) { 'not started (-NoWorker)' } else { 'running (Guardians wake on their own)' })"
+    Write-Host "  Calls:     $($health.communication.voice_call)$(if ($health.communication.voice_call_reason) { ' (' + $health.communication.voice_call_reason + ')' })"
     Write-Host "  Logs:      data/demo/logs/"
     Write-Host ""
-    Write-Host "Press Ctrl+C to stop both processes." -ForegroundColor Yellow
+    Write-Host "Press Ctrl+C to stop everything." -ForegroundColor Yellow
     if (-not $NoBrowser) { Start-Process "http://127.0.0.1:$WebPort" }
 
     # --- 10. Wait; stop both if either exits -------------------------------------------------------------
     while ($true) {
         if ($api.HasExited) { Write-Host "The API stopped (see data/demo/logs/api.err.log)." -ForegroundColor Red; $failed = $true; break }
         if ($web.HasExited) { Write-Host "The frontend stopped (see data/demo/logs/web.err.log)." -ForegroundColor Red; $failed = $true; break }
+        if ($null -ne $worker -and $worker.HasExited) { Write-Host "The worker stopped (see data/demo/logs/worker.err.log)." -ForegroundColor Red; $failed = $true; break }
         Start-Sleep -Seconds 1
     }
 }
@@ -224,6 +248,7 @@ catch {
 finally {
     Write-Host "Shutting down CampusNexus..." -ForegroundColor Cyan
     Stop-Tree $web "frontend"
+    Stop-Tree $worker "worker"
     Stop-Tree $api "API"
 }
 if ($failed) { exit 1 }
